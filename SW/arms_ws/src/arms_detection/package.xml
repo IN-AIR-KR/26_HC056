@@ -2,17 +2,16 @@
 <package format="3">
   <name>arms_detection</name>
   <version>0.1.0</version>
-  <description>
-    YOLO detection — runs entirely inside a Docker container.
-    The container subscribes to /arms/image_raw and publishes /arms/detections.
-    Start with: cd docker &amp;&amp; docker compose up
-  </description>
+  <description>A.R.M.S. detection nodes (fusion detector, YOLO docker)</description>
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>arms_msgs</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <export>
-    <build_type>ament_cmake</build_type>
+    <build_type>ament_python</build_type>
   </export>
 </package>
