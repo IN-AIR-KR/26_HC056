@@ -403,14 +403,15 @@ class ArmsDetectionNode(Node):
         # 매 프레임 전체 검출 → KF 평활 + 이상치 게이트로 단일 표적 발행.
         cfg = self._filter_cfg()
         det = self._detect_acquire(bgr)
-        # 필터 전 원시 측정값 발행(구독자 있을 때만). _filter.update 가 det 를 평활값으로
-        #   in-place 수정하므로 반드시 그 '전'에 발행해야 진짜 raw 가 남는다.
-        if self.pub_det_raw.get_subscription_count() > 0:
-            raw = DetectionArray()
-            raw.header = header
-            if det is not None:
-                raw.detections.append(det)
-            self.pub_det_raw.publish(raw)
+        # 필터 전 원시 측정값 발행. _filter.update 가 det 를 평활값으로 in-place 수정하므로
+        #   반드시 그 '전'에 발행해야 진짜 raw 가 남는다. 구독자 게이트를 두지 않는다 —
+        #   메시지가 작고(bbox 뿐), 게이트를 두면 컨테이너→호스트 구독 discovery 가 늦어
+        #   비행 로그(rosbag)에 raw 가 통째로 비는 문제가 생긴다(detections 와 동일하게 상시 발행).
+        raw = DetectionArray()
+        raw.header = header
+        if det is not None:
+            raw.detections.append(det)
+        self.pub_det_raw.publish(raw)
         filter_started = time.perf_counter()
         target = self._filter.update(det, cfg)
         self._diag["filter_ms"] = (time.perf_counter() - filter_started) * 1000.0

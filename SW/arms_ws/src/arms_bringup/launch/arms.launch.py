@@ -80,7 +80,7 @@ def generate_launch_description():
         DeclareLaunchArgument("auto_save", default_value="false",
                               description="비행 로그 녹화. true 면 자동모드 SEARCH 진입~ARM 스위치 "
                                           "OFF 까지 영상(UI)+검출 raw+CRSF 송·수신+상태를 "
-                                          "~/arms_flight_log/<일시>/ 에 bag(mcap)으로 저장(kill 되어도 유지)."),
+                                          "~/arms_flight_log/<일시>/ 에 bag(sqlite3)으로 저장(kill 되어도 유지)."),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
@@ -151,7 +151,7 @@ def generate_launch_description():
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). 자동모드 SEARCH 진입~ARM 스위치 OFF 까지
-        #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_log/<일시>/ 에 bag(mcap) 저장(kill 무관).
+        #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_log/<일시>/ 에 bag(sqlite3) 저장(kill 무관).
         Node(
             package="arms_ui",
             executable="flight_recorder",

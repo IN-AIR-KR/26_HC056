@@ -170,7 +170,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
 | `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |
 | `cv_debug`        | `false`                           | 검출 진단 패널(HSV+그래프) (A-4)          |
-| `auto_save`      | `false` — **`arms.launch.py`(실기체) 전용** | 비행 로그 자동 녹화(영상+검출 raw+CRSF 송·수신+상태). 자동모드 SEARCH 진입~ARM 스위치 OFF 를 `~/arms_flight_log/<일시>/` 에 bag(mcap) 저장 (kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
+| `auto_save`      | `false` — **`arms.launch.py`(실기체) 전용** | 비행 로그 자동 녹화(영상+검출 raw+CRSF 송·수신+상태). 자동모드 SEARCH 진입~ARM 스위치 OFF 를 `~/arms_flight_log/<일시>/` 에 bag(sqlite3) 저장 (kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
@@ -470,14 +470,15 @@ storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
 - **종료**: 조종기 **ARM(=자동모드 search) 스위치를 내릴 때**(`/arms/command` buttons[1]→0).
   - **kill 이 걸려도 계속 녹화**한다(kill 은 buttons[0], ARM 스위치와 무관). ARM 스위치를
     내려야만 종료.
-- **저장 위치**: `~/arms_flight_log/<YYYYmmdd_HHMMSS>/` (비행 시작 일시 폴더에 bag).
+- **저장 위치**: `~/arms_flight_log/<YYYYmmdd_HHMMSS>/` (비행 시작 일시 폴더). 이 폴더 안에
+  `bag/`(rosbag) 과 `record.log`(녹화 프로세스 로그)가 함께 담긴다.
 
 ```bash
 ros2 launch arms_bringup arms.launch.py auto_save:=true
 ```
 
-기본값은 `false`(녹화 안 함). 저장된 bag(mcap)의 영상은 위 3) 방법으로 mp4 변환하거나
-재생하면 된다. 녹화 토픽은 영상 `/arms/ui_image/compressed` 외에 `/arms/detections_raw`
+기본값은 `false`(녹화 안 함). 저장된 bag(sqlite3, `<일시>/bag`)의 영상은 위 3) 방법으로
+mp4 변환하거나 재생하면 된다(스크립트엔 `<일시>/bag` 경로를 넘긴다). 녹화 토픽은 영상 `/arms/ui_image/compressed` 외에 `/arms/detections_raw`
 (칼만 전 원시 검출 — 추후 KF 튜닝용), `/arms/detections`, `/arms/detector_status`,
 `/arms/crsf_tx`(송신 채널), `/arms/crsf_rx`(수신 텔레메트리: 배터리/링크/자세),
 `/arms/mission_state`, `/arms/command` 이며, 목록은 `flight_recorder` 의 `record_topics`
