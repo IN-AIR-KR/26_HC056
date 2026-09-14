@@ -1,7 +1,7 @@
-# A.R.M.S. - Anti drone Reusable Modular System
+# A.R.M.S.
 
-![architecture](SW/docs/architecture.png)
+![main](images/main.png)
 
-## 유의사항
+<p align="center"><em>Anti-drone Reusable Modular System</em></p>
 
-- 작업 전 반드시 `git pull`을 통해 변경사항이 없는지 확인해야 합니다.
+현대 방공망을 위협하는 소형 무인기와 FPV 드론에 대응하기 위해, 본 프로젝트는 기존의 고가 지대공 미사일을 대체할 수 있는 초저가형 비전 기반 자율 추적 및 재사용 가능한 분리형 대드론 방어 시스템을 개발을 목적으로 한다.
