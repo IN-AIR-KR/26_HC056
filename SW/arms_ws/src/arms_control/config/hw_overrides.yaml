@@ -19,7 +19,7 @@ arms_control_node:
     # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
     #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
     servo:
-      enabled: true
+      enabled: false
 
     mission:
       # 실기체는 자동 발진 금지. LOCK 이 걸려도 스스로 TRACK 으로 넘어가지 않고,
