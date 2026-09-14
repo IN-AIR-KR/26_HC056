@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 
-from _common import detect_storage, open_reader
+from _common import open_reader, resolve_bag
 
 
 def bag_to_mp4(bag: str, topic: str = "/arms/ui_image/compressed",
@@ -29,8 +29,9 @@ def bag_to_mp4(bag: str, topic: str = "/arms/ui_image/compressed",
         print("[mp4] ffmpeg 가 없습니다. sudo apt install ffmpeg")
         return ""
 
-    storage = storage or detect_storage(bag)
     out_path = out or (bag.rstrip("/") + ".mp4")
+    bag, sid = resolve_bag(bag)
+    storage = storage or sid
 
     # --- pass 1: 프레임 수 & 타임스탬프 범위로 fps 계산 ---
     reader = open_reader(bag, storage)

@@ -20,7 +20,7 @@ from pathlib import Path
 # 같은 폴더의 모듈을 import (cwd 와 무관하게).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _common import detect_storage  # noqa: E402
+from _common import resolve_bag  # noqa: E402
 
 
 def main() -> int:
@@ -41,11 +41,16 @@ def main() -> int:
     if not Path(bag).exists():
         print(f"[master] bag 이 없음: {bag}")
         return 1
-    storage = args.storage or detect_storage(bag)
+    try:
+        uri, sid = resolve_bag(bag)          # 비행 폴더를 줘도 안쪽 bag/ 을 찾아준다
+    except FileNotFoundError as e:
+        print(f"[master] {e}")
+        return 1
+    storage = args.storage or sid
     outdir = Path(args.outdir or (bag + "_viz"))
     csv_dir = outdir / "csv"
     outdir.mkdir(parents=True, exist_ok=True)
-    print(f"[master] bag={bag}  storage={storage}  out={outdir}")
+    print(f"[master] bag={uri}  storage={storage}  out={outdir}")
 
     results = {}
 
@@ -53,7 +58,7 @@ def main() -> int:
     if not args.no_csv:
         try:
             from bag_to_csv import bag_to_csv
-            results["csv"] = bag_to_csv(bag, storage, str(csv_dir))
+            results["csv"] = bag_to_csv(uri, storage, str(csv_dir))
         except Exception as e:
             print(f"[master] CSV 변환 실패: {e}")
 
@@ -72,7 +77,7 @@ def main() -> int:
         try:
             from bag_to_mp4 import bag_to_mp4
             out_mp4 = str(outdir / (Path(bag).name + ".mp4"))
-            results["video"] = bag_to_mp4(bag, args.video_topic, out_mp4,
+            results["video"] = bag_to_mp4(uri, args.video_topic, out_mp4,
                                           args.fps, storage)
         except Exception as e:
             print(f"[master] 영상 변환 실패: {e}")

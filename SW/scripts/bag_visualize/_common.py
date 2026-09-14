@@ -7,20 +7,52 @@ ROS 없이도 돈다). ROS2(rosbag2 python)가 있는 환경에서만 이 모듈
 from pathlib import Path
 
 
+_EXT_STORAGE = {".db3": "sqlite3", ".mcap": "mcap"}
+
+
 def detect_storage(bag: str) -> str:
-    """bag 의 metadata.yaml 에서 storage_identifier(mcap/sqlite3)를 읽는다. 실패 시 'mcap'."""
-    meta = Path(bag) / "metadata.yaml"
+    """bag 의 storage_identifier(mcap/sqlite3). metadata.yaml 없으면 파일 확장자로 추정."""
+    return resolve_bag(bag)[1]
+
+
+def _storage_from_meta(d: Path) -> str:
+    """<dir>/metadata.yaml 에서 storage_identifier 를 읽는다. 없으면 ""."""
     try:
         import yaml
-        with open(meta) as f:
+        with open(d / "metadata.yaml") as f:
             data = yaml.safe_load(f)
         sid = (data.get("rosbag2_bagfile_information", {})
                    .get("storage_identifier"))
-        if sid:
-            return str(sid)
+        return str(sid) if sid else ""
     except Exception:
-        pass
-    return "mcap"
+        return ""
+
+
+def resolve_bag(bag: str) -> tuple:
+    """사용자가 준 경로 → (열 수 있는 uri, storage_id).
+
+    - 비행 폴더(<일시>/)를 줘도 안쪽 bag/ 을 알아서 찾아 들어간다.
+    - metadata.yaml 이 있으면 폴더째 열고 거기 적힌 storage 를 쓴다.
+    - 녹화가 강제 종료돼 metadata.yaml 이 없으면 bag_0.db3 / *.mcap 파일을
+      직접 연다(rosbag2 는 metadata 없는 폴더를 못 연다).
+    """
+    p = Path(bag).expanduser()
+    if p.is_file():
+        return str(p), _EXT_STORAGE.get(p.suffix, "sqlite3")
+    if p.is_dir():
+        sid = _storage_from_meta(p)
+        if sid:
+            return str(p), sid
+        files = sorted(f for f in p.iterdir()
+                       if f.is_file() and f.suffix in _EXT_STORAGE)
+        if files:
+            return str(files[0]), _EXT_STORAGE[files[0].suffix]
+        for sub in sorted(d for d in p.iterdir() if d.is_dir()):   # <일시>/bag/ 등
+            try:
+                return resolve_bag(str(sub))
+            except FileNotFoundError:
+                continue
+    raise FileNotFoundError(f"bag 을 찾을 수 없음: {bag}")
 
 
 def open_reader(uri: str, storage: str):

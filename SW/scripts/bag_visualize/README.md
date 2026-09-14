@@ -28,7 +28,7 @@ python3 SW/scripts/bag_visualize/bag_visualize.py ~/arms_flight_log/20260907_153
 
 ```bash
 --outdir DIR        # 결과 폴더 (기본 <bag>_viz)
---storage mcap|sqlite3   # 기본: bag/metadata.yaml 에서 자동감지
+--storage mcap|sqlite3   # 기본: 자동감지(metadata.yaml, 없으면 파일 확장자)
 --video-topic /arms/ui_image/compressed
 --fps N             # 영상 fps (0=자동)
 --aspect 16:9       # target_plane 화면비

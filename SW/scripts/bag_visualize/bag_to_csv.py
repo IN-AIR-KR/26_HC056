@@ -13,8 +13,8 @@ import csv
 import sys
 from pathlib import Path
 
-from _common import (detect_storage, flatten_msg, load_message_class,
-                     open_reader, sanitize_topic, topic_types)
+from _common import (flatten_msg, load_message_class, open_reader,
+                     resolve_bag, sanitize_topic, topic_types)
 
 # CSV 로 만들지 않을 타입(영상). bag_to_mp4.py 가 따로 처리한다.
 _SKIP_TYPES = {"sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image"}
@@ -24,8 +24,9 @@ def bag_to_csv(bag: str, storage: str = "", out_dir: str = "") -> dict:
     """bag 의 데이터 토픽을 CSV 로 변환. {토픽: csv경로} 반환."""
     from rclpy.serialization import deserialize_message
 
-    storage = storage or detect_storage(bag)
     out = Path(out_dir or (bag.rstrip("/") + "_viz/csv"))
+    bag, sid = resolve_bag(bag)
+    storage = storage or sid
     out.mkdir(parents=True, exist_ok=True)
 
     types = topic_types(bag, storage)
