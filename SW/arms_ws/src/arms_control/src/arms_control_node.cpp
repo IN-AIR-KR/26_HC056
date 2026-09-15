@@ -450,6 +450,29 @@ class ArmsControlNode : public rclcpp::Node {
           }
         });
 
+    // SITL 패널 RESET: PX4가 다시 붙는 동안 이전 에피소드의 TRACK/RTL 상태나
+    // arm 스위치가 새 기체로 이어지지 않도록 제어 상태를 안전한 IDLE로 비운다.
+    sub_reset_ = create_subscription<std_msgs::msg::Empty>(
+        "/arms/reset", 10, [this](std_msgs::msg::Empty::SharedPtr) {
+          sm_->disarm();
+          pid_roll_->reset();
+          pid_pitch_->reset();
+          filt_err_x_ = filt_err_y_ = 0.0;
+          prev_err_x_ = prev_err_y_ = 0.0;
+          err_dot_x_ = err_dot_y_ = 0.0;
+          loom_s_ema_ = loom_rate_ema_ = 0.0;
+          loom_init_ = false;
+          pn_init_ = false;
+          align_locked_ = false;
+          auto_armed_ = manual_armed_ = false;
+          lock_timer_started_ = auto_launched_ = false;
+          fire_sent_ = rtl_sent_ = false;
+          joy_kill_ = false;
+          joy_arm_ = false;
+          require_arm_reset_ = true;
+          RCLCPP_INFO(get_logger(), "실험 RESET: 제어 상태 IDLE, ARM 재토글 필요");
+        });
+
 
     // ----------------------------------------------------------------
     // Control loop timer
@@ -1156,6 +1179,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;

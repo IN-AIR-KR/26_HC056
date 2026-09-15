@@ -30,6 +30,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess, LogInfo,
                             OpaqueFunction, RegisterEventHandler, TimerAction)
 from launch.event_handlers import OnShutdown
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
+from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 # 자동 disarm / 페일세이프 끄기 (GCS/RC 없는 SITL 자율비행 셋업).
@@ -147,6 +148,17 @@ def _setup(context, *args, **kwargs):
             ]))
         else:
             actions.append(LogInfo(msg=f"!! {shell_py} 없음 → PX4 파라미터 세팅 생략"))
+
+    # 첫 부팅은 위 PX4가 Gazebo와 기체를 생성한다. 이후 패널 RESET은 이 관리
+    # 노드가 Gazebo를 유지한 채 world reset 후 PX4만 standalone으로 재기동한다.
+    actions.append(Node(
+        package="arms_sim", executable="sitl_reset_manager", name="arms_sitl_reset_manager",
+        output="screen",
+        parameters=[{
+            "px4_dir": str(px4_dir), "world": world, "model": model,
+            "drone_model": "arms_drone",
+        }],
+    ))
 
     return actions
 

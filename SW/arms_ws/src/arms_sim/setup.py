@@ -38,6 +38,7 @@ setup(
         "console_scripts": [
             "referee = arms_sim.referee:main",
             "panel = arms_sim.panel:main",
+            "sitl_reset_manager = arms_sim.sitl_reset_manager:main",
         ],
     },
 )

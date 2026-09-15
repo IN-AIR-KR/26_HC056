@@ -31,6 +31,7 @@ os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
 
 WORLD = "arms_sitl"
@@ -153,6 +154,7 @@ class BalloonReferee(Node):
         # 이제 둘은 독립이고, 어긋나는 것 자체가 정보다.
         # /arms/hit 은 통지용 — arms_control 은 이걸 로그로만 쓴다.
         self._hit_pub = self.create_publisher(Empty, "/arms/hit", 10)
+        self.create_subscription(Empty, "/arms/reset", self._on_reset, 10)
         self._last_dist_log = 0.0     # 접근거리 로그 스로틀
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
         self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)
@@ -160,6 +162,19 @@ class BalloonReferee(Node):
         self.get_logger().info(
             f"balloon_referee ready. 기본 대기(숨김) 상태. [공 발사] 누르면 "
             f"먼 곳({SPAN/2:.0f}m)에서 대각선으로 광역 비행 시작.")
+
+    def _on_reset(self, _msg):
+        """표적 진행도를 포함해 다음 발사를 위한 초기 대기 상태로 복귀한다."""
+        self.set_parameters([Parameter("enabled", value=False)])
+        self._new_pass()
+        self.pause_until = 0.0
+        self._ball_pos = (0.0, 0.0, HIDE_Z)
+        self._prev_enabled = True
+        self._launched_once = False
+        self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
+        set_pose(MODEL_BALLOON, 0.0, 0.0, HIDE_Z)
+        set_pose(MODEL_DRONE, 0.0, 0.0, HIDE_Z)
+        self.get_logger().info("실험 RESET: 표적 초기 대기 상태")
 
     def _new_pass(self):
         """대각선: 진행도 t 리셋 (오른쪽아래->왼쪽위). 판정도 패스 단위로 리셋."""

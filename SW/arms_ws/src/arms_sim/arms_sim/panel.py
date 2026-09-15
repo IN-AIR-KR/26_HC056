@@ -8,7 +8,7 @@ arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비�
   - 검출 모드(YOLO/HSV proposal) 토글 → arms_detection_node 파라미터
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
-  - RESET(추후 디벨롭) → gz 서비스 + /arms/reset_cmd
+  - RESET → Gazebo world reset + PX4 SITL 재시작 (Gazebo 프로세스는 유지)
 
 실행: ros2 run arms_sim panel
 """
@@ -22,6 +22,7 @@ import tkinter as tk
 import rclpy
 from rclpy.node import Node
 from arms_msgs.msg import MissionState
+from std_srvs.srv import Trigger
 
 CTRL_NODE    = "/arms_control_node"
 FUSION_NODE  = "/arms_detection_node"
@@ -100,6 +101,7 @@ class PanelNode(Node):
         super().__init__("arms_panel_node")
         self.q = q
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
+        self.reset_client = self.create_client(Trigger, "/arms/sitl/reset")
 
     def _cb_state(self, msg):
         self.q.put(msg)
@@ -119,6 +121,7 @@ class PanelGUI:
         # (노드, 파라미터, 반영함수) — _pull_from_nodes 가 시작할 때 읽어 채운다.
         self._pullables = []
         self._applyq = queue.Queue()      # 워커 → 메인 루프 (_poll 이 비운다)
+        self._reset_in_progress = False
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
@@ -139,6 +142,11 @@ class PanelGUI:
         self.info_lbl = tk.Label(top, text="error: -, -\nlock: 0.0s",
                                  fg="#dddddd", bg="#1e1e1e", font=("Consolas", 10))
         self.info_lbl.pack()
+        self.reset_btn = tk.Button(
+            top, text="실험 RESET (PX4 + 월드)", width=24,
+            font=("Arial", 10, "bold"), bg="#b71c1c", fg="white",
+            activebackground="#e53935", command=self.reset_episode)
+        self.reset_btn.pack(pady=(7, 0))
         # LAUNCH/arm/kill/mode 는 가상 조종기(arms_command)로 이동 — /arms/command 발행자는
         # 조종기 하나뿐이어야 한다(두 노드가 동시에 쏘면 레이스). 여긴 튜닝/심판만.
 
@@ -473,6 +481,32 @@ class PanelGUI:
             self.ball_state_lbl.config(text="타겟 상태: ? (버튼을 눌러 설정)", bg="#555555")
             self.ball_fly_btn.config(bg="#9c27b0", fg="white", relief="raised")
             self.ball_stop_btn.config(bg="#333333", fg="#cccccc", relief="raised")
+
+    def reset_episode(self):
+        """Gazebo 월드와 PX4 상태를 함께 새 실험 상태로 되돌린다."""
+        if self._reset_in_progress:
+            return
+        if not self.node.reset_client.wait_for_service(timeout_sec=0.2):
+            self.info_lbl.config(text="RESET 실패: sitl_reset_manager 미기동")
+            return
+        self._reset_in_progress = True
+        self.reset_btn.config(state="disabled", text="RESET 중…")
+        future = self.node.reset_client.call_async(Trigger.Request())
+
+        def done(f):
+            try:
+                response = f.result()
+                text = ("RESET 완료: PX4 연결 대기" if response.success
+                        else f"RESET 실패: {response.message}")
+            except Exception as exc:
+                text = f"RESET 실패: {exc}"
+            self._applyq.put((self._finish_reset, text))
+        future.add_done_callback(done)
+
+    def _finish_reset(self, text):
+        self._reset_in_progress = False
+        self.reset_btn.config(state="normal", text="실험 RESET (PX4 + 월드)")
+        self.info_lbl.config(text=text)
 
     def _poll(self):
         # 노드에서 읽어온 파라미터를 메인 스레드에서 위젯에 반영
