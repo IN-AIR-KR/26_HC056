@@ -1,6 +1,12 @@
 """
 arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
-이거 하나로 다음을 전부 띄운다 (PX4 SITL 제외, 그건 무거워서 따로):
+
+    ros2 launch arms_bringup arms_sitl.launch.py              # PX4+Gazebo 포함 전부
+    ros2 launch arms_bringup arms_sitl.launch.py px4:=false   # PX4 가 이미 떠 있을 때 스택만
+
+이거 하나로 다음을 전부 띄운다:
+  - PX4 SITL + Gazebo       (arms_sim/px4_sitl.launch.py include, px4:=false 로 생략)  [arms_sim]
+  - socat 가상 CRSF 시리얼   (/tmp/crsf_tx ↔ /tmp/crsf_rx)
   - gz 카메라 브리지        (/arms/image_raw)
   - arms_detection_node     (융합검출: HSV + absdiff, YOLO 선택)
   - arms_control_node       (상태머신 + PID + CRSF 출력)
@@ -9,12 +15,47 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - panel                   (튜닝/심판 콘솔)                          [arms_sim]
   - referee                 (표적 풍선/드론 비행 + 명중 판정)          [arms_sim]
   - arms_ui_node            (OpenCV 영상 오버레이)
+  - plotjuggler             (5초 뒤)
+
+스택 노드들은 PX4 부팅을 기다리지 않는다 — sitl_bridge 는 heartbeat 올 때까지 재접속,
+referee 는 gz 준비 전 실패를 무시, 카메라 브리지는 gz 토픽이 생기면 붙는다.
+Ctrl+C 한 번이면 PX4/Gazebo 까지 전부 내려간다 (px4_sitl.launch.py 의 OnShutdown).
 """
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,
+                            OpaqueFunction, TimerAction)
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+
+CRSF_TX = "/tmp/crsf_tx"   # arms_control 이 쓰는 쪽
+CRSF_RX = "/tmp/crsf_rx"   # sitl_bridge 가 읽는 쪽
+
+
+def _socat(context, *args, **kwargs):
+    """CRSF 가상 시리얼 쌍 (socat PTY pair).
+    arms_control → /tmp/crsf_tx → [socat] → /tmp/crsf_rx → arms_sitl_bridge"""
+    if shutil.which("socat") is None:
+        raise RuntimeError("socat 없음: sudo apt install socat")
+    # 이전 인스턴스 정리 (socat 은 link= 대상이 이미 있으면 못 만든다)
+    subprocess.run(["pkill", "-9", "-f", "socat.*crsf"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for p in (CRSF_TX, CRSF_RX):
+        try:
+            os.unlink(p)
+        except FileNotFoundError:
+            pass
+    return [ExecuteProcess(
+        cmd=["socat", f"PTY,raw,echo=0,link={CRSF_TX}", f"PTY,raw,echo=0,link={CRSF_RX}"],
+        name="socat_crsf", output="screen",
+    )]
 
 
 def generate_launch_description():
@@ -25,8 +66,23 @@ def generate_launch_description():
     pj_cmd = ["ros2", "run", "plotjuggler", "plotjuggler", "--buffer_size", "60"]
     if pj_layout.exists():
         pj_cmd += ["--layout", str(pj_layout)]
+    px4_launch = Path(get_package_share_directory("arms_sim")) / "launch" / "px4_sitl.launch.py"
 
     actions = [
+        DeclareLaunchArgument("px4", default_value="true",
+                              description="PX4 SITL + Gazebo 도 같이 띄울지 (이미 떠 있으면 false)"),
+        DeclareLaunchArgument("px4_dir", default_value=os.environ.get("PX4_DIR", "~/PX4-Autopilot"),
+                              description="PX4-Autopilot 경로 (px4:=true 일 때)"),
+
+        # PX4 SITL + Gazebo — 시뮬레이터 쪽은 전부 arms_sim 담당
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(px4_launch)),
+            condition=IfCondition(LaunchConfiguration("px4")),
+            launch_arguments={"px4_dir": LaunchConfiguration("px4_dir")}.items(),
+        ),
+        # CRSF 가상 시리얼
+        OpaqueFunction(function=_socat),
+
         # 카메라 브리지 — 상방 카메라 → /arms/image_raw
         Node(
             package="ros_gz_bridge", executable="parameter_bridge",
@@ -45,14 +101,14 @@ def generate_launch_description():
             package="arms_control", executable="arms_control_node",
             name="arms_control_node", output="screen",
             parameters=[str(control_config),
-                        {"crsf.port": "/tmp/crsf_tx"}],
+                        {"crsf.port": CRSF_TX}],
         ),
         # SITL 브리지 (CRSF → MAVLink RC_CHANNELS_OVERRIDE → PX4)
         Node(
             package="arms_control", executable="sitl_bridge_node",
             name="arms_sitl_bridge_node", output="screen",
             parameters=[{"connection":   "udpin:0.0.0.0:14540",
-                         "crsf_port":    "/tmp/crsf_rx",
+                         "crsf_port":    CRSF_RX,
                          "send_rate_hz": 50.0}],
         ),
         # 가상 조종기 (스틱+버튼 → /arms/command). 실기체 물리 조종기의 SITL 쌍둥이.

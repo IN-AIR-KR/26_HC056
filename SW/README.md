@@ -23,12 +23,18 @@ cd SW
 
 # 2) 실행 — 매번 이것만
 source arms_ws/install/setup.bash    # 새 터미널이면 한 번
-./run_arms.sh
+ros2 launch arms_bringup arms_sitl.launch.py
 ```
 
-`setup_sim.sh` 가 드론 모델(arms_drone, 커스텀 x500_base 형태/무게)을 PX4 모델 폴더에
-자동 심볼릭 링크하고, airframe `4021_gz_arms_drone` 등록 + PX4/ROS 빌드까지 처리한다.
-이후 `run_arms.sh` 하나로 PX4 SITL + Gazebo + 전체 ROS 스택 + 패널 GUI 가 다 뜬다.
+`setup_sim.sh` 가 드론 모델(arms_drone, 커스텀 x500_base 형태/무게)·월드를 PX4 트리에
+자동 심볼릭 링크하고, airframe `4022_gz_arms_drone` 등록 + PX4/ROS 빌드까지 처리한다.
+이후 `ros2 launch arms_bringup arms_sitl.launch.py` 하나로 PX4 SITL + Gazebo + socat + 전체
+ROS 스택 + 패널 GUI 가 다 뜨고, Ctrl+C 한 번에 전부 내려간다.
+
+- ROS 코드만 고쳐서 스택만 재시작하고 싶으면 (PX4/Gazebo 는 살려둔 채):
+  `ros2 launch arms_bringup arms_sitl.launch.py px4:=false`
+- PX4 위치가 다르면 `px4_dir:=<경로>` 또는 `PX4_DIR` env.
+- 런치가 비정상 종료돼 뭔가 남았으면 `./kill_all.sh`.
 
 ### 미션 흐름
 
@@ -51,7 +57,9 @@ IDLE → (auto-arm) → SEARCH(지상 대기) → 풍선 인식 → LOCK
 - SEARCH 에서 안 넘어감 → 검출 안 됨. 카메라 창에 풍선 보이는지, 검출 모드(YOLO ON/ABSDIFF/BOTH) 바꿔보기
 - 드론이 풍선 반대로 감 → Roll/Pitch sign 뒤집기
 - 추적 느림 → 최대 P ↑ / P 증가 시간 ↓ ; 근접 발작 → 최대 P ↓ / 증가 시간 ↑
-- `arms_drone` 모델 못 찾음 → `setup_sim.sh` 다시 실행(링크 갱신) 또는 `run_arms.sh` 의 `GZ_SIM_RESOURCE_PATH` 확인
+- `arms_drone` 모델 못 찾음 → `colcon build` 다시 (arms_sim share 에 models 가 설치돼야 함) 또는 `setup_sim.sh` 재실행
+- `PX4 SITL 바이너리 없음` → `setup_sim.sh` 로 PX4 빌드, 경로 다르면 `px4_dir:=`
+- airframe(`arms_sim/assets/px4/airframes`) 수정 → PX4 ROMFS 재빌드 필요, `setup_sim.sh` 재실행
 
 ## 문서
 
@@ -74,13 +82,17 @@ SW/
 │       ├── arms_detection/     # YOLO 객체 인식 (Docker)
 │       ├── arms_control/       # 상태 머신 + PID + CRSF 출력
 │       ├── arms_command/       # 조종 입력 (실기체 C++ HW / SITL 가상 조종기)
-│       ├── arms_sim/           # SITL 전용: 표적 심판(referee) + 튜닝 콘솔(panel)
+│       ├── arms_sim/           # SITL 전용: PX4 SITL 런치 + Gazebo 자산 + 표적 심판(referee) + 튜닝 콘솔(panel)
+│       │   ├── launch/         #   px4_sitl.launch.py (PX4+Gazebo 기동/정리/파라미터)
+│       │   └── assets/         #   시뮬 자산
+│       │       ├── models/     #     Gazebo 모델 (arms_drone)
+│       │       ├── worlds/     #     Gazebo 월드 (arms_sitl.sdf)
+│       │       └── px4/airframes/  # PX4 airframe (4022_gz_arms_drone)
 │       ├── arms_ui/            # 오퍼레이터 UI
 │       └── arms_msgs/          # 커스텀 메시지
-├── simulation/         # Gazebo 월드, 모델(arms_drone), airframes(4022)
 ├── scripts/            # 하드웨어 테스트 스크립트 (crsf / joy / servo / detection_analysis)
 ├── setup_sim.sh        # 최초 셋업 (한 번)
-├── run_arms.sh         # 실행 (매번)
+├── kill_all.sh         # 비상용 전체 종료
 ├── YOLO_balloon/       # YOLOv11 학습
 └── gpio_ws/            # GPIO 테스트 워크스페이스
 ```

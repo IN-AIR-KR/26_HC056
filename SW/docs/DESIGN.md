@@ -746,8 +746,12 @@ throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로
 ```
 # arms_bringup/launch/arms_sitl.launch.py  (메인 SITL 런치)
 
-전제: run_arms.sh 실행 시 socat PTY 쌍 자동 생성
-  socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx
+include:
+  - arms_sim/launch/px4_sitl.launch.py   PX4 SITL + Gazebo (px4:=false 로 생략 가능)
+      기동 전 px4/gz 잔여 프로세스 kill + 월드/모델 링크 갱신 → PX4 바이너리 -d 실행
+      → 15s 후 mavlink_shell.py 로 param set → OnShutdown 시 px4/gz sim 정리
+processes:
+  - socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx   (CRSF 가상 시리얼)
 
 nodes:
   - arms_detection_node     (arms_detection) 호스트 실행(HSV 후보만; 검출 발행엔 YOLO 필요)
@@ -757,7 +761,6 @@ nodes:
   - arms_command_node       (arms_command)   tkinter GUI → /arms/command 발행
 
 별도 실행:
-  PX4 SITL: cd PX4-Autopilot && make px4_sitl gz_arms_drone
   YOLO 포함 검출(선택): docker compose -f docker-compose.laptop.yml up
     (컨테이너의 arms_detection_node 가 YOLO 포함 → 호스트 노드와 중복 실행 금지)
 

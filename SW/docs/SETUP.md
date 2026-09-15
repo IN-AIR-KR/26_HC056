@@ -311,11 +311,11 @@ cd SW
 ```bash
 # 월드 파일 링크
 cd ~/PX4-Autopilot/Tools/simulation/gz/worlds/
-ln -s /path/to/SW/simulation/worlds/arms_sitl.sdf .
+ln -s /path/to/SW/arms_ws/src/arms_sim/assets/worlds/arms_sitl.sdf .
 
 # 모델 폴더 링크
 cd ~/PX4-Autopilot/Tools/simulation/gz/models/
-ln -s /path/to/SW/simulation/models/arms_drone .
+ln -s /path/to/SW/arms_ws/src/arms_sim/assets/models/arms_drone .
 ```
 
 </details>
@@ -325,15 +325,27 @@ ln -s /path/to/SW/simulation/models/arms_drone .
 ```bash
 cd SW
 source arms_ws/install/setup.bash     # 새 터미널이면 한 번
-./run_arms.sh
+ros2 launch arms_bringup arms_sitl.launch.py
 ```
 
-`run_arms.sh` 하나로 socat 가상 시리얼 생성 + PX4 SITL(arms_drone) + Gazebo + 전체 ROS 스택 + 패널 GUI 가 다 뜹니다.
+런치 하나로 PX4 SITL(arms_drone) + Gazebo + socat 가상 시리얼 + 전체 ROS 스택 + 패널 GUI 가 다 뜨고,
+Ctrl+C 한 번에 PX4/Gazebo 까지 전부 내려갑니다. PX4 쪽은 `arms_sim/launch/px4_sitl.launch.py` 가 담당하며
+기동 때마다 월드/모델 링크 갱신 → PX4 바이너리 직접 실행(`-d` 데몬 모드) → 부팅 후 파라미터 세팅(페일세이프 해제 등)을 합니다.
+
+| 인자 | 기본 | 설명 |
+| --- | --- | --- |
+| `px4:=false` | true | PX4/Gazebo 는 띄우지 않음. 이미 떠 있는 상태에서 ROS 스택만 재시작할 때 |
+| `px4_dir:=<경로>` | `$PX4_DIR` 또는 `~/PX4-Autopilot` | PX4-Autopilot 위치 |
+
 YOLO 검출을 쓰려면 Detection 컨테이너를 따로 실행합니다(B-2′ Terminal 3).
+런치가 비정상 종료돼 프로세스가 남았으면 `SW/kill_all.sh`.
+
+> PX4 는 `make` 를 거치지 않고 빌드된 바이너리를 바로 실행하므로, airframe(`arms_sim/assets/px4/airframes`) 을
+> 고쳤으면 `setup_sim.sh` 로 PX4 를 다시 빌드해야 반영됩니다.
 
 ### B-2′. 실행 — 수동 (터미널 3개)
 
-원클릭을 안 쓰고 단계별로 실행하려면:
+원클릭을 안 쓰고 단계별로 실행하려면 (Terminal 2 는 `px4:=false` 필수):
 
 **Terminal 1 — PX4 SITL + Gazebo**
 
@@ -351,10 +363,11 @@ source /opt/ros/humble/setup.bash
 source /path/to/SW/arms_ws/install/setup.bash
 source ~/ros_gz_harmonic_ws/install/setup.bash
 
-ros2 launch arms_bringup arms_sitl.launch.py
+ros2 launch arms_bringup arms_sitl.launch.py px4:=false
 ```
 
-`arms_sitl.launch.py` 가 gz 카메라 브리지 + arms_control_node + sitl_bridge_node + arms_ui_node + arms_detection_node + 패널 GUI 를 한 번에 기동합니다.
+`arms_sitl.launch.py` 가 socat + gz 카메라 브리지 + arms_control_node + sitl_bridge_node + arms_ui_node + arms_detection_node + 패널 GUI 를 한 번에 기동합니다.
+이 경우 PX4 파라미터(페일세이프 해제 등)는 세팅되지 않으니 필요하면 `Tools/mavlink_shell.py` 로 직접 넣으세요.
 
 **Terminal 3 — YOLO Detection 컨테이너 (선택)**
 
