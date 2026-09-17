@@ -2,7 +2,7 @@
 Full real-hardware launch: arms_video + arms_command + arms_detection + arms_control + arms_ui
 - arms_command (ESP32 UART) → /arms/command → arms_control
 - arms_control → CRSF serial (crsf.port 파라미터) → ELRS TX → [RF] → ELRS RX → FC
-- Detection(YOLO+HSV+absdiff)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
+- Detection(HSV 후보 → ROI YOLO 검증)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
   로드할 가중치는 model:= 로 고른다 (기본 balloon_nano_v8.engine):

@@ -64,6 +64,14 @@ ALT = 42.0          # 기본 비행 고도 [m] (드론 도달가능·추락방�
 # 화각 제약 scale 을 제거하고 SPAN 을 기존(28) 대비 ~2.5배로 키움.
 SPAN = 100.0         # 대각선 가로지르는 총 거리 [m] (먼곳→먼곳). x/y 각각 ±SPAN/2 이동
 SPEED = 3.6        # 진행 속도 [m/s] (3.6m/s 명중 검증값, 패널 슬라이더로 실시간 조절)
+# 발사 전 대기 지점을 '진행도 t' 로 지정한다. 화면(상방 카메라)에 보여야 한다:
+#   카메라 horizontal_fov=2.0rad(반각 57.3°), 720x480 → 세로 반각 46.1°.
+#   고도 42m 기준 프레임에 들어오는 최대 횡거리는 가로 65.1m / 세로 43.4m 인데,
+#   대각선 경로라 |x|=|y| 이므로 좁은 쪽 43.4m 가 한계다.
+#     t=0.00 → |x|=|y|=50.0m  화면 밖 (원래 설계가 '화각 밖에서 시작')
+#     t=0.30 → |x|=|y|=20.0m  두 축 모두 여유 통과, 연직각 34°
+#   t=0.5(머리 바로 위)는 안 쓴다 — 이륙하면서 표적에 그대로 박는다.
+PARK_T = 0.30
 RATE_HZ = 60.0      # 위치 갱신 주기
 PAUSE_SEC = 1.5     # 한 번 지나간 뒤 재등장까지 대기 [s]
 HIDE_Z = -100.0     # 숨길 때 보내는 지하 z [m] (화면에서 안 보임)
@@ -104,8 +112,8 @@ def set_pose(model, x, y, z):
 class BalloonReferee(Node):
     def __init__(self):
         super().__init__("balloon_referee")
-        # enabled=false(기본) 면 풍선을 숨긴 채 대기. 패널 [공 발사] 버튼을 눌러야
-        # 그제서야 먼 곳에서 등장해 비행 시작. (버튼 누르기 전엔 화면에 안 보임)
+        # enabled=false(기본) 면 표적을 '패스 시작점에 세워둔 채' 대기한다. 패널
+        # [비행 시작] 버튼은 등장이 아니라 '움직임 시작'만 담당한다.
         self.declare_parameter("enabled", False)
         # alt = 비행 고도 [m] (패널 슬라이더로 실시간 조절)
         self.declare_parameter("alt", ALT)
@@ -143,7 +151,7 @@ class BalloonReferee(Node):
             self.get_logger().error(
                 "gz 바인딩 없음 — 접촉 판정 불가, 명중이 영원히 안 뜬다. "
                 f"원인: {_GZ_IMPORT_ERR or '알 수 없음'}")
-        # _prev_enabled=True 로 시작 → 첫 tick(비활성)에서 공을 1회 숨겨 초기 스폰 위치를 치움.
+        # _prev_enabled=True 로 시작 → 첫 tick(비활성)에서 표적을 1회 대기 위치로 옮긴다.
         self._prev_enabled = True
         # 한 번이라도 발사됐는지. 발사 전(초기 대기)엔 숨기고, 발사 후 정지는 제자리 멈춤.
         self._launched_once = False
@@ -159,22 +167,54 @@ class BalloonReferee(Node):
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
         self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)
         self.timer = self.create_timer(1.0 / RATE_HZ, self.tick)
+        px, py, _ = self._pose_at(PARK_T, ALT)
         self.get_logger().info(
-            f"balloon_referee ready. 기본 대기(숨김) 상태. [공 발사] 누르면 "
-            f"먼 곳({SPAN/2:.0f}m)에서 대각선으로 광역 비행 시작.")
+            f"balloon_referee ready. 표적을 시야 안({px:+.0f}, {py:+.0f}, 고도 "
+            f"{ALT:.0f}m)에 세워둔 채 대기. [비행 시작] 을 누르면 그 자리에서 "
+            f"대각선으로 움직이기 시작.")
 
     def _on_reset(self, _msg):
         """표적 진행도를 포함해 다음 발사를 위한 초기 대기 상태로 복귀한다."""
         self.set_parameters([Parameter("enabled", value=False)])
         self._new_pass()
         self.pause_until = 0.0
+        # _park_at_start 는 '이미 그 자리면 no-op' 이다. 리셋만큼은 무조건 다시
+        # 보내고 싶으므로(월드가 리셋됐을 수도 있다) 위치를 일부러 어긋나게 둔다.
         self._ball_pos = (0.0, 0.0, HIDE_Z)
         self._prev_enabled = True
         self._launched_once = False
         self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
-        set_pose(MODEL_BALLOON, 0.0, 0.0, HIDE_Z)
-        set_pose(MODEL_DRONE, 0.0, 0.0, HIDE_Z)
-        self.get_logger().info("실험 RESET: 표적 초기 대기 상태")
+        self._park_at_start()
+        self.get_logger().info("실험 RESET: 표적을 패스 시작점에 대기")
+
+    @staticmethod
+    def _pose_at(t, alt):
+        """진행도 t(0→1) 에서의 표적 위치. tick 과 대기 위치가 같은 식을 쓰게 한다."""
+        f = 1.0 - 2.0 * t
+        return ((SPAN / 2.0) * f, -(SPAN / 2.0) * f, alt)
+
+    def _park_at_start(self):
+        """발사 전 대기: 선택된 표적을 '화면에 보이는' 지점(PARK_T)에 세워둔다.
+
+        예전엔 지하(HIDE_Z)로 숨겨서, [비행 시작] 을 눌러야 비로소 나타났다. 매번
+        버튼을 눌러야 표적이 보이니 시작할 때마다 번거로웠다. 미리 세워두면 띄우자마자
+        표적이 시야에 있고, 버튼은 '움직임 시작' 만 담당한다.
+
+        진행도 t 도 같이 옮겨둔다 — tick 은 정지했던 t 에서 이어서 재개하므로,
+        이렇게 해야 [비행 시작] 순간에 순간이동이 없다.
+
+        멱등이다 — 이미 그 자리면 아무것도 보내지 않는다. 그래서 대기 중 매 tick
+        불러도 gz 로 나가는 트래픽이 0 이고, 패널에서 고도 슬라이더를 움직이면
+        세워둔 표적도 따라 올라간다.
+        """
+        pose = self._pose_at(PARK_T, float(self.get_parameter("alt").value))
+        if self._ball_pos == pose and self.t == PARK_T:
+            return
+        set_pose(self.target_model, *pose)
+        other = MODEL_DRONE if self.target_model == MODEL_BALLOON else MODEL_BALLOON
+        set_pose(other, 0.0, 0.0, HIDE_Z)   # 안 쓰는 표적만 숨김
+        self._ball_pos = pose
+        self.t = PARK_T
 
     def _new_pass(self):
         """대각선: 진행도 t 리셋 (오른쪽아래->왼쪽위). 판정도 패스 단위로 리셋."""
@@ -213,10 +253,9 @@ class BalloonReferee(Node):
     def _on_contact(self, msg, model):
         """Gazebo 접촉 센서 콜백 — 우리 드론과 닿았을 때만 명중으로 친다.
 
-        상대를 반드시 확인해야 한다. 비활성 표적은 둘 다 HIDE_Z(0,0,-100)
-        에 주차되는데 반경 1.0 구가 서로 겹쳐서 **접촉이 상시 발생**한다
-        (실측 확인). 지면(ground_plane)도 마찬가지로 접촉 상대가 될 수 있다.
-        상대를 안 보면 발사 전부터 "명중" 이 뜬다.
+        상대를 반드시 확인해야 한다. 안 쓰는 표적은 HIDE_Z(0,0,-100) 에 주차되는데
+        거기서 지면/서로와 접촉이 상시 발생하고(실측 확인), 지면(ground_plane)도
+        접촉 상대가 될 수 있다. 상대를 안 보면 발사 전부터 "명중" 이 뜬다.
         """
         if model != self.target_model or self.hit:
             return          # 숨겨둔 표적의 센서이거나 이미 이번 패스에서 보고함
@@ -268,13 +307,12 @@ class BalloonReferee(Node):
                 f"표적 전환 → {'드론' if want == MODEL_DRONE else '풍선'} ({want})")
 
         # ---- 비활성 상태 처리 ----
-        #   · 초기 대기(발사 전): 두 표적 모두 지하로 숨겨 화면에 안 보이게.
+        #   · 초기 대기(발사 전): 선택된 표적을 패스 시작점에 세워둔다(안 쓰는 표적만 숨김).
         #   · 발사 후 정지: 현재 위치에 그대로 멈춤(일시정지). set_pose 를 안 보내면
         #     Gazebo 가 마지막 위치를 유지하므로 사라지지 않고 제자리에 정지.
         if not enabled:
-            if self._prev_enabled and not self._launched_once:
-                set_pose(MODEL_BALLOON, 0.0, 0.0, HIDE_Z)   # 발사 전 초기 스폰: 둘 다 숨김
-                set_pose(MODEL_DRONE, 0.0, 0.0, HIDE_Z)
+            if not self._launched_once:
+                self._park_at_start()   # 멱등 — 이미 제자리면 no-op
             self._prev_enabled = False
             return
 
@@ -311,10 +349,7 @@ class BalloonReferee(Node):
         dt = max(0.0, min(dt, 3.0 / RATE_HZ))   # 정지→재개 등 큰 점프 방지
         span = SPAN
         self.t += (speed / max(span, 0.1)) * dt
-        f = 1.0 - 2.0 * self.t
-        x = (span / 2.0) * f
-        y = -(span / 2.0) * f
-        z = alt
+        x, y, z = self._pose_at(self.t, alt)
         set_pose(self.target_model, x, y, z)
         self._ball_pos = (x, y, z)
 

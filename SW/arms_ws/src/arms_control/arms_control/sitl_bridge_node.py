@@ -39,6 +39,9 @@ SWITCH_THRESH = 1500  # > threshold → switch is ON
 
 MAV_MODE_FLAG_SAFETY_ARMED = 128
 ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed state
+# 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
+# PX4 는 1Hz 로 heartbeat 을 보내므로 3s 면 오탐 없이 충분히 빠르다.
+HB_TIMEOUT_SEC = 3.0
 
 
 def _crc8_dvb_s2(data: bytes) -> int:
@@ -137,6 +140,11 @@ class ArmsSITLCommNode(Node):
         self._mav       = None
         self._connected = False
         self._lock      = threading.Lock()
+        # PX4 재기동(패널 RESET) 감지용. heartbeat 이 끊겼다 돌아오면 그건 '새 PX4'이고,
+        # 갓 부팅한 PX4 는 ACRO 가 아니다 — 모드를 다시 넣어주지 않으면 위 주석의
+        # '조용히 기울기 명령으로 오해석' 상태로 계속 난다.
+        self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
+        self._reiniting = False        # _initial_setup 재실행 중복 방지
 
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
@@ -181,11 +189,30 @@ class ArmsSITLCommNode(Node):
         self._connected = True
         self.get_logger().info(f"SITL: {mode_name} set. Waiting for arm signal (CH5).")
 
+    def _restore_mode(self):
+        """PX4 가 재기동된 뒤 비행 모드를 다시 넣는다 (rx 루프를 막지 않게 별 스레드).
+
+        _initial_setup 은 EKF 수렴을 기다리느라 몇 초 잔다. rx 루프에서 직접 부르면
+        그동안 heartbeat 을 못 읽어 또 '끊김'으로 오판한다.
+        """
+        if self._reiniting:
+            return
+        self._reiniting = True
+
+        def worker():
+            try:
+                self.get_logger().info("PX4 재기동 감지 — 비행 모드 재설정")
+                self._initial_setup()
+            finally:
+                self._reiniting = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     # ------------------------------------------------------------------
     # MAVLink RX (armed-state tracking via HEARTBEAT)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """HEARTBEAT(armed 상태) 수신."""
+        """HEARTBEAT(armed 상태) 수신 + PX4 재기동 감지 후 모드 재설정."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
@@ -193,10 +220,26 @@ class ArmsSITLCommNode(Node):
             try:
                 msg = self._mav.recv_match(type=['HEARTBEAT'],
                                            blocking=True, timeout=1.0)
+                now = time.monotonic()
                 if msg is None:
+                    # heartbeat 끊김 = PX4 가 내려갔다 (패널 RESET 이거나 죽음).
+                    if self._connected and now - self._last_hb > HB_TIMEOUT_SEC:
+                        self._connected = False
+                        self.get_logger().warn(
+                            "PX4 heartbeat 끊김 — 재기동 대기 (RESET?)")
                     continue
                 t = msg.get_type()
                 if t == 'HEARTBEAT':
+                    # 공백을 두고 돌아온 heartbeat = 갓 부팅한 새 PX4. 기본 모드는
+                    # ACRO 가 아니므로 다시 넣어준다. 안 넣으면 자동 출력이 각속도가
+                    # 아니라 기울기 명령으로 해석돼 '느리게 나는' 상태가 된다.
+                    #   판정 기준을 _connected 가 아니라 '공백'으로 잡는 이유: 최초 연결
+                    #   직후엔 _initial_setup 이 EKF 를 기다리며 자느라 _connected 가
+                    #   아직 False 다. 그걸 재기동으로 오해하면 기동할 때마다 모드를
+                    #   두 번 넣는다.
+                    if self._last_hb > 0.0 and (now - self._last_hb) > HB_TIMEOUT_SEC:
+                        self._restore_mode()
+                    self._last_hb = now
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)

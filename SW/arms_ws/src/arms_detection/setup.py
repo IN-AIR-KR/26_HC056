@@ -11,6 +11,9 @@ setup(
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.py")),
+        # 도커는 config/ 를 볼륨으로 직접 마운트하지만, 호스트에서 노드를 띄울 땐
+        # (SITL detection:=host) share 에서 --params-file 로 읽어야 한다.
+        (f"share/{package_name}/config", glob("config/*.yaml")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

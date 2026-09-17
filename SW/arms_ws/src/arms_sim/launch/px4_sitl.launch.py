@@ -156,7 +156,8 @@ def _setup(context, *args, **kwargs):
         output="screen",
         parameters=[{
             "px4_dir": str(px4_dir), "world": world, "model": model,
-            "drone_model": "arms_drone",
+            # PX4 가 spawn 하는 인스턴스 이름 (모델명 + _<instance>) — reset 후 재생성 확인용
+            "drone_model": "arms_drone_0",
         }],
     ))
 

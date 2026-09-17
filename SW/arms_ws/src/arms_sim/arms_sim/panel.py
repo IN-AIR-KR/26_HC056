@@ -5,7 +5,6 @@ panel.py — A.R.M.S. SITL 튜닝/심판 콘솔 (tkinter GUI)  [arms_sim]
 SITL 전용 개발 콘솔. /arms/command 는 발행하지 않는다 (그건 가상 조종기 =
 arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/FIRE/RTL) — 읽기전용 구독
-  - 검출 모드(YOLO/HSV proposal) 토글 → arms_detection_node 파라미터
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET → Gazebo world reset + PX4 SITL 재시작 (Gazebo 프로세스는 유지)
@@ -25,7 +24,6 @@ from arms_msgs.msg import MissionState
 from std_srvs.srv import Trigger
 
 CTRL_NODE    = "/arms_control_node"
-FUSION_NODE  = "/arms_detection_node"
 REFEREE_NODE = "/balloon_referee"
 
 WORLD = "arms_sitl"
@@ -50,9 +48,9 @@ def group(parent, title):
 
     패널이 커지면서 슬라이더가 한 줄로 주욱 늘어서 어느 게 어느 계통인지
     읽히지 않았다. 여기서 묶는 기준은 '무엇을 튜닝하느냐'가 아니라
-    '어느 노드의 파라미터냐'다 — 제어기(arms_control), 검출기
-    (arms_detection), 심판/표적(referee). 잘못된 노드에 값을 쏘면 조용히
-    아무 일도 안 일어나므로, 그 경계가 눈에 보이는 편이 낫다.
+    '어느 노드의 파라미터냐'다 — 제어기(arms_control), 심판/표적(referee).
+    잘못된 노드에 값을 쏘면 조용히 아무 일도 안 일어나므로, 그 경계가 눈에
+    보이는 편이 낫다.
     """
     f = tk.LabelFrame(parent, text=title, fg="#9fc3e8", bg="#1e1e1e",
                       font=("Arial", 10, "bold"), bd=1, relief="groove",
@@ -125,10 +123,11 @@ class PanelGUI:
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        # 내용 자연 크기에 맞춘다(reqwidth/reqheight = 610x762). 760x880 이던
-        # 시절에는 오른쪽 150px·아래 118px 가 빈 채였다. 위젯을 더 넣으면
-        # 여기도 같이 키울 것 — 안 키우면 아래쪽이 잘린다.
-        root.geometry("612x766")
+        # 크기를 지정하지 않는다 = tkinter 가 내용 자연 크기로 맞춘다.
+        # 예전엔 geometry("612x766") 로 박아뒀는데, 자연 크기는 폰트/DPI 에 따라
+        # 달라져서 개발 머신이 바뀌면 그대로 어긋난다(실제로 이 머신에선 805 가
+        # 필요해 아래 39px 가 잘리고 있었다). 위젯을 늘리든 줄이든 여기는
+        # 손댈 필요가 없다.
 
         # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
         top = tk.Frame(root, bg="#1e1e1e")
@@ -162,29 +161,9 @@ class PanelGUI:
         right = tk.Frame(cols, bg="#1e1e1e")
         right.grid(row=0, column=1, sticky="nw")
 
-        # ── [검출] arms_detection_node ──────────────────────────────────────
-        g_det = group(left, "검출  ·  arms_detection")
-        mfrm = tk.Frame(g_det, bg="#1e1e1e")
-        mfrm.pack()
-        # 노드 쪽 declare_parameter 기본값과 일치시킨다. 예전엔 여기서만
-        # yolo=False 라 패널은 OFF 로 그려놓고 노드는 켜져 있었고, YOLO 버튼을 처음
-        # 누르면 켜지는 게 아니라 꺼졌다. _push_defaults 가 시작할 때 실제로 밀어준다.
-        self.det_on = {"hsv": True, "yolo": True}
-        self.det_btns = {}
-        for key, label, col in [("hsv", "HSV 후보", "#2e7d32"),
-                                 ("yolo", "YOLO", "#6a1b9a")]:
-            b = tk.Button(mfrm, text=label, width=9, font=("Arial", 9, "bold"),
-                          command=lambda k=key: self.toggle_det(k))
-            b.grid(row=0, column=len(self.det_btns), padx=2)
-            self.det_btns[key] = (b, col)
-        self._refresh_det_btns()
-        for key in self.det_on:
-            self._track(FUSION_NODE, f"use_{key}",
-                        lambda v, k=key: (self.det_on.__setitem__(
-                            k, str(v).strip().lower() == "true"),
-                            self._refresh_det_btns()))
-        tk.Label(g_det, text="HSV 후보를 YOLO가 확인해야 검출됩니다.",
-                 fg="#777777", bg="#1e1e1e", font=("Arial", 8)).pack()
+        # 검출(arms_detection) 그룹은 없다. 그 노드는 도커 컨테이너로 돌고
+        # YOLO on/off 는 ROS 파라미터가 아니라 기동 시 ARMS_MODEL 환경변수로
+        # 정해진다 — 패널에서 누를 수 있는 값이 애초에 없다.
 
         # ── [제어] 축 부호 + PID ────────────────────────────────────────────
         g_pid = group(left, "제어 PID  ·  arms_control")
@@ -343,21 +322,9 @@ class PanelGUI:
         self.pn_center.bind("<ButtonRelease-1>",
                             lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
 
-        # ── [충돌 판정] 발사 조건 + 심판 ────────────────────────────────────
-        g_fire = group(right, "충돌 판정")
-        # 발사 τ = 충돌까지 시간 임계(비전 looming). 작을수록 접촉 직전에 발사.
-        self.tau_fire = tk.Scale(g_fire, from_=0.1, to=1.0, resolution=0.05, orient="horizontal",
-                                 length=180, bg="#1e1e1e", fg="white", label="발사 τ [s] (충돌까지)",
-                                 highlightthickness=0, troughcolor="#444")
-        self.tau_fire.set(0.3)
-        self.tau_fire.pack()
-        self._track(CTRL_NODE, "mission.tau_fire_sec",
-                    lambda v: self.tau_fire.set(float(v)))
-        self.tau_fire.bind("<ButtonRelease-1>",
-                           lambda e: ros_param_set("mission.tau_fire_sec", float(self.tau_fire.get())))
-        # 명중 판정 슬라이더는 없다. Gazebo 접촉 센서가 실제 충돌 형상으로
-        # 판정하므로 조절할 값 자체가 없다 — 예전 hit_radius 는 "빗나가도 명중"
-        # 을 만들 수 있는 노브였다. 판정은 이제 설정값이 아니라 물리다.
+        # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
+        # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수
+        # 있는 노브였다), 발사 τ 는 control_params.yaml 에서 잡는다.
 
         self._pull_from_nodes()
         self._poll()
@@ -406,18 +373,6 @@ class PanelGUI:
             apply_fn(raw)
         except (ValueError, TypeError) as e:
             print(f"[panel] 파라미터 반영 실패: {raw!r} ({e})")
-
-    def toggle_det(self, key):
-        self.det_on[key] = not self.det_on[key]
-        ros_param_set_node(FUSION_NODE, f"use_{key}", str(self.det_on[key]).lower())
-        self._refresh_det_btns()
-
-    def _refresh_det_btns(self):
-        for key, (b, col) in self.det_btns.items():
-            if self.det_on[key]:
-                b.config(bg=col, fg="white", relief="sunken")
-            else:
-                b.config(bg="#333333", fg="#cccccc", relief="raised")
 
     def flip_roll(self):
         self.roll_sign *= -1.0

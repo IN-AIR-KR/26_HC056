@@ -754,7 +754,7 @@ processes:
   - socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx   (CRSF 가상 시리얼)
 
 nodes:
-  - arms_detection_node     (arms_detection) 호스트 실행(HSV 후보만; 검출 발행엔 YOLO 필요)
+  - arms_detection_node     (arms_detection) detection:= host(기본, ARMS_MODEL in-process) | docker
   - arms_control_node       (arms_control)   상태머신 + PID + CRSF → /tmp/crsf_tx
   - sitl_bridge_node        (arms_control)   /tmp/crsf_rx → MAVLink UDP → PX4
   - arms_ui_node            (arms_ui)

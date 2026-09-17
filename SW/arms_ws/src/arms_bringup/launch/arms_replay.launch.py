@@ -9,11 +9,11 @@
   ros2 launch arms_bringup arms_replay.launch.py video_path:=/경로/sample2.mov
   ros2 launch arms_bringup arms_replay.launch.py controller:=real   # 실기체 ESP32 조종기
 
-- Detection(YOLO+HSV+absdiff): arms.launch.py 와 동일하게 GPU 도커 컨테이너로
+- Detection(HSV 후보 → ROI YOLO 검증): arms.launch.py 와 동일하게 GPU 도커 컨테이너로
   동작한다. 이 런치가 'docker compose up -d' 로 자동 기동한다(멱등). start_detection:=false
-  로 끌 수 있고, 로드할 가중치는 model:= 로 고른다(기본 balloon_camera.pt).
-    ros2 launch arms_bringup arms_replay.launch.py                              # 카메라모델(기본)
-    ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon_nano_v8.engine
+  로 끌 수 있고, 로드할 가중치는 model:= 로 고른다(기본 balloon_nano_v8.engine).
+    ros2 launch arms_bringup arms_replay.launch.py                              # 기본 가중치
+    ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon_small_v4.pt
 """
 
 import os

@@ -369,19 +369,52 @@ ros2 launch arms_bringup arms_sitl.launch.py px4:=false
 `arms_sitl.launch.py` 가 socat + gz 카메라 브리지 + arms_control_node + sitl_bridge_node + arms_ui_node + arms_detection_node + 패널 GUI 를 한 번에 기동합니다.
 이 경우 PX4 파라미터(페일세이프 해제 등)는 세팅되지 않으니 필요하면 `Tools/mavlink_shell.py` 로 직접 넣으세요.
 
-**Terminal 3 — YOLO Detection 컨테이너 (선택)**
+#### 3D 시각화 — `rviz:=true`
 
 ```bash
-cd /path/to/SW/arms_ws/src/arms_detection/docker
-
-# 노트북
-docker compose -f docker-compose.laptop.yml up
-
-# 젯슨
-docker compose -f docker-compose.jetson.yml up
+ros2 launch arms_bringup arms_sitl.launch.py rviz:=true
 ```
 
-> YOLO 컨테이너 없이도 HSV/ABSDIFF 검출만으로 독립 동작합니다.
+`arms_sim/sitl_viz` 와 `rviz2`(설정: `arms_bringup/config/sitl.rviz`)가 같이 뜹니다. 화면에는
+기체(메쉬)·표적·양쪽 비행 궤적이 그려집니다. 기본값은 `false` 입니다.
+
+- 데이터는 **Gazebo 진실값**(`dynamic_pose/info`)입니다. 검출·추정을 거치지 않으므로
+  "제어가 실제로 어디를 날았나"를 보는 용도이며, 실기체에는 없는 정보입니다.
+- 궤적은 `/arms/reset`(패널 RESET)에서 비워집니다. 에피소드 경계가 선으로 남지 않습니다.
+- 발행 토픽: `/arms/viz/drone_path`, `/arms/viz/target_path`, `/arms/viz/markers`, `/tf`.
+  Fixed Frame 은 `map` 입니다.
+- 이 스택은 `use_sim_time` 을 쓰지 않으므로(전부 벽시계) `/clock` 브리지나 별도 시간 설정이
+  필요 없습니다.
+
+#### 검출 실행 위치 — `detection:=`
+
+| 값 | 동작 |
+| --- | --- |
+| `host` (기본) | 호스트에서 검출 노드를 직접 실행. `det_model:=` 가중치를 in-process 로 로드하며 호스트 GPU 를 그대로 씁니다. 컨테이너 경계가 없어 SITL 에선 이쪽이 가장 단순합니다. |
+| `docker` | 실기체와 같은 검출 컨테이너를 `docker compose up -d` 로 기동하고, 호스트 노드는 띄우지 않습니다. |
+
+```bash
+ros2 launch arms_bringup arms_sitl.launch.py                                       # host (기본)
+ros2 launch arms_bringup arms_sitl.launch.py det_model:=/models/balloon_small_v4.pt
+ros2 launch arms_bringup arms_sitl.launch.py detection:=docker
+```
+
+- ⚠️ **`host` 와 `docker` 를 동시에 쓰면 안 됩니다.** 둘 다 `/arms_detection_node` 라는 같은
+  이름으로 `/arms/detections` 를 발행해서 서로를 덮어씁니다.
+- **가중치 인자는 `det_model:=` 입니다** — 다른 런치처럼 `model:=` 이 아닙니다. 이 런치는
+  `px4_sitl.launch.py` 를 include 하는데 거기서 `model:=` 은 **PX4 airframe 이름**
+  (`gz_arms_drone`)이고, 부모 런치 인자는 include 된 런치로 그대로 새어 들어가기 때문입니다.
+  (`model:=` 에 가중치 경로를 주면 PX4 가 그걸 `PX4_SIM_MODEL` 로 받아 즉시 죽고 Gazebo 도
+  안 뜹니다.)
+- `det_model:=` 은 다른 런치의 `model:=` 과 같은 **컨테이너 내부 경로**(`/models/<파일>`)
+  표기입니다. `host` 모드에선 호스트의 `docker/models/<파일>` 로 자동 치환됩니다. 기본값
+  `/models/balloon_nano_v8.pt` (랩탑/호스트는 PyTorch 라 `.pt`, 젯슨은 `.engine`).
+- **가중치는 git-lfs 로 관리됩니다.** `git lfs install && git lfs pull` 을 하지 않으면 파일이
+  200바이트짜리 포인터 텍스트라 로드에 실패합니다 — 런치가 기동 전에 미리 경고합니다.
+- **YOLO 없이는 검출이 아예 안 나옵니다.** HSV 는 후보 제안일 뿐 발행 권한이 없어
+  (`use_hsv` 는 그 후보 단계만 끕니다), 모델이 없으면 `/arms/detections` 가 계속 빕니다.
+- `detection:=docker` 는 SITL gz 카메라가 raw 만 내보내므로 `ARMS_INPUT_COMPRESSED=0` 을
+  자동으로 넣어 줍니다 (compose 기본은 압축 입력 `1`).
 
 ## 동작 확인
 

@@ -20,7 +20,8 @@ services:
       # and host because FastDDS SHM requires FD passing via Unix socket, which
       # does not work across the container boundary even with ipc: host.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
-      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_camera.pt}
+      # 랩탑 이미지는 PyTorch 라 .pt 를 그대로 쓴다(.engine 은 Jetson 전용).
+      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_nano_v8.pt}
       - ARMS_CONF=${ARMS_CONF:-0.32}
       - ARMS_IOU=${ARMS_IOU:-0.45}
       - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-512}
@@ -32,7 +33,7 @@ services:
       # 검출 파라미터 override 파일명. 비어있으면 기본(detection.yaml)만 로드.
       - ARMS_DET_CONFIG=${ARMS_DET_CONFIG:-}
     volumes:
-      - ./models:/models:ro    # place .pt model file here
+      - ./models:/models:ro    # .pt 가중치 위치 (git-lfs — 없으면 git lfs pull)
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
       # 노드 소스를 바인드 마운트 → 코드 수정 시 이미지 재빌드 없이 컨테이너
       # 재시작(docker compose restart arms_detection)만으로 반영. Dockerfile 이
