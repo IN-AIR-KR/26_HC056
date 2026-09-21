@@ -12,14 +12,18 @@ px4_sitl.launch.py — PX4 SITL + Gazebo(arms_drone) 를 ros2 launch 안에서 �
   - 종료(Ctrl+C) 시 PX4 가 백그라운드로 띄운 gz sim 까지 같이 정리
 
 인자:
-  px4_dir     PX4-Autopilot 경로   (기본: $PX4_DIR, 없으면 ~/PX4-Autopilot)
-  world       Gazebo 월드 이름     (기본: arms_sitl)
-  model       PX4 SITL 모델 이름   (기본: gz_arms_drone → airframe 4022)
-  set_params  부팅 후 param set 실행 여부 (기본: true)
+  px4_dir          PX4-Autopilot 경로   (기본: $PX4_DIR, 없으면 ~/PX4-Autopilot)
+  world            Gazebo 월드 이름     (기본: arms_sitl)
+  model            PX4 SITL 모델 이름   (기본: gz_arms_drone → airframe 4022)
+  set_params       부팅 후 param set 실행 여부 (기본: true)
+  launch_pitch_deg 견착발사 초기 피치각[°, 지면기준, 90=수직] (기본: 65). PX4_GZ_MODEL_POSE 로
+                   스폰 자세를 지정 — 예전 run_arms.sh 의 LAUNCH_PITCH_RAD 를 대체.
+                   sitl_reset_manager 의 RESET 도 이 각도로 되돌아간다(동일 값 전달).
 
 주의: airframe(assets/px4/airframes/4022_gz_arms_drone) 수정은 PX4 ROMFS 재빌드가 필요
       → setup_sim.sh 다시 실행.
 """
+import math
 import os
 import shutil
 import subprocess
@@ -76,6 +80,11 @@ def _setup(context, *args, **kwargs):
     world = LaunchConfiguration("world").perform(context)
     model = LaunchConfiguration("model").perform(context)
     set_params = LaunchConfiguration("set_params").perform(context).lower() in ("true", "1")
+    launch_pitch_deg = float(LaunchConfiguration("launch_pitch_deg").perform(context))
+    # 90°=수직(pitch=0), 각도가 작아질수록 기운다. ★ 부호는 좌표계 컨벤션에 따라
+    # 다를 수 있음 — 기동 후 Gazebo 3D 뷰에서 노즈가 "앞으로" 기우는지 확인하고
+    # 반대면 부호를 뒤집을 것 (run_arms.sh 시절과 동일한 미검증 포인트).
+    launch_pitch_rad = -math.radians(90.0 - launch_pitch_deg)
 
     share = Path(get_package_share_directory("arms_sim"))
     assets = share / "assets"
@@ -121,6 +130,9 @@ def _setup(context, *args, **kwargs):
         # Wayland 세션에서 gz sim 3D 뷰 마우스 입력(휠 줌/드래그 회전)이 막히는 문제
         # → Qt 를 X11(xcb)로 강제.
         "QT_QPA_PLATFORM": "xcb",
+        # 견착발사 초기자세: 실기체는 어깨에 견착해 발사 → 발사각이 지면 기준 수직(90°)이
+        # 아니라 60~70°. launch_pitch_deg(기본 65°) 기준 스폰 자세를 지정.
+        "PX4_GZ_MODEL_POSE": f"0,0,0.24,0,{launch_pitch_rad:.6f},0",
     })
 
     actions = [
@@ -158,6 +170,8 @@ def _setup(context, *args, **kwargs):
             "px4_dir": str(px4_dir), "world": world, "model": model,
             # PX4 가 spawn 하는 인스턴스 이름 (모델명 + _<instance>) — reset 후 재생성 확인용
             "drone_model": "arms_drone_0",
+            # RESET 도 최초 스폰과 같은 견착 피치각으로 되돌아가야 한다.
+            "launch_pitch_deg": launch_pitch_deg,
         }],
     ))
 
@@ -178,6 +192,10 @@ def generate_launch_description():
         DeclareLaunchArgument("model", default_value="gz_arms_drone", description="PX4 SITL 모델"),
         DeclareLaunchArgument("set_params", default_value="true",
                               description="부팅 후 PX4 param set 실행"),
+        DeclareLaunchArgument(
+            "launch_pitch_deg", default_value="65",
+            description="견착발사 초기 피치각[°, 지면기준, 90=수직]. "
+                        "스폰 자세(PX4_GZ_MODEL_POSE)와 RESET 복귀 자세 둘 다에 적용."),
         OpaqueFunction(function=_setup),
         RegisterEventHandler(OnShutdown(on_shutdown=_on_shutdown)),
     ])

@@ -12,11 +12,18 @@ arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비�
 실행: ros2 run arms_sim panel
 """
 
+import math
+import os
 import queue
 import subprocess
 import threading
 import time
 import tkinter as tk
+
+# gz.msgs10 의 _pb2 파일이 protobuf 3세대 protoc 로 생성돼서, 이 시스템 protobuf(7.x)
+# 기본(upb) 구현으로는 import 자체가 깨진다. referee.py 와 동일한 이유로 동일한 우회.
+#   ★ google.protobuf 최초 import 전에 설정돼야 하므로 파일 최상단, 다른 import 보다 위.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import rclpy
 from rclpy.node import Node
@@ -29,6 +36,76 @@ REFEREE_NODE = "/balloon_referee"
 WORLD = "arms_sitl"
 DRONE = "arms_drone_0"
 BALL  = "target_ball"
+
+# 스폰 위치(model.sdf <pose> / run_arms.sh 의 PX4_GZ_MODEL_POSE 와 동일하게 유지)
+DRONE_SPAWN_XYZ = (0.0, 0.0, 0.24)
+
+# 발사각 홀드 전용 높이 — 견착 자세 시뮬용.
+#   ★ 0.24(지면 근처)에서 기울이면 동체 모서리가 땅에 걸려 넘어진다(실기체엔 이
+#     각도를 붙잡아주는 발사관이 있지만 시뮬엔 없음). 지면에서 띄우면 접지 문제가
+#     아예 없어짐 — 어깨높이(~1.5m)로 맞춰서 견착발사 상황과도 얼추 맞다.
+LAUNCH_TELEPORT_Z = 1.5
+
+# 홀드 루프 주기 — 이 주기보다 느리면 중력으로 눈에 보이게 처짐. referee.py 가
+#   풍선을 60Hz 로 미는 것과 같은 이유로 여기도 in-process 바인딩 + 고주파 필요.
+HOLD_HZ = 30.0
+
+# gz in-process transport (referee.py 와 동일 패턴). 매 프레임 subprocess(CLI)를
+#   새로 띄우면 ≈0.3~0.4s/회밖에 못 보내서 그 사이에 중력으로 떨어진다 — 그래서
+#   "자세 적용하자마자 바닥으로 떨어짐" 현상이 났었다. in-process 로 호출하면
+#   수십 Hz 로 보낼 수 있어 실질적으로 "붙잡고 있는" 것처럼 보인다.
+_GZ_IMPORT_ERR = ""
+try:
+    from gz.transport13 import Node as _GzNode
+    from gz.msgs10.pose_pb2 import Pose as _GzPose
+    from gz.msgs10.boolean_pb2 import Boolean as _GzBool
+    _gz_node = _GzNode()
+    _GZ_OK = True
+except Exception as _e:
+    _GZ_IMPORT_ERR = f"{type(_e).__name__}: {_e}"
+    _gz_node = None
+    _GzPose = _GzBool = None
+    _GZ_OK = False
+
+
+def _rpy_to_quat(roll, pitch, yaw):
+    """Roll/Pitch/Yaw[rad] → 쿼터니언(x,y,z,w). SDF/Gazebo 컨벤션(R=Rz*Ry*Rx)과 동일."""
+    cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+    cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    return qx, qy, qz, qw
+
+
+def gz_set_pose_fast(model, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
+    """드론/표적 모델을 텔레포트. in-process 바인딩(빠름) → 없으면 CLI 폴백(느림).
+
+    물리는 pause 하지 않는다 — 계속 흐르게 두고 이 함수를 고주파(HOLD_HZ)로 반복
+    호출해서 "그 자세를 계속 다시 강제"하는 식으로 사실상 붙잡아둔다. 그래서
+    카메라·검출 파이프라인도 끊김 없이 계속 돈다.
+    """
+    qx, qy, qz, qw = _rpy_to_quat(roll, pitch, yaw)
+    if _GZ_OK:
+        req = _GzPose()
+        req.name = model
+        req.position.x, req.position.y, req.position.z = float(x), float(y), float(z)
+        req.orientation.x, req.orientation.y = qx, qy
+        req.orientation.z, req.orientation.w = qz, qw
+        try:
+            _gz_node.request(f"/world/{WORLD}/set_pose", req, _GzPose, _GzBool, 100)
+        except Exception:
+            pass
+        return
+    req = (f'name: "{model}", position: {{x: {x}, y: {y}, z: {z}}}, '
+           f'orientation: {{x: {qx}, y: {qy}, z: {qz}, w: {qw}}}')
+    subprocess.run(
+        ["gz", "service", "-s", f"/world/{WORLD}/set_pose",
+         "--reqtype", "gz.msgs.Pose", "--reptype", "gz.msgs.Boolean",
+         "--timeout", "300", "--req", req],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 STATE_COLOR = {
     "IDLE":   "#888888",
@@ -234,6 +311,42 @@ class PanelGUI:
                       "control.track_throttle", float(self.thr_entry.get()))
                   ).grid(row=0, column=1)
 
+        # ── [발사각] 견착 초기자세 → gz set_pose 실시간 홀드 ──────────────────
+        #   run_arms.sh 의 PX4_GZ_MODEL_POSE 는 "부팅 시 스폰 각도"의 기본값이고,
+        #   이 슬라이더는 스택을 재시작 안 하고 실시간으로 각도를 바꿔보는 보조 기능.
+        #   물리는 절대 pause 하지 않는다(카메라·검출 파이프라인이 계속 돌아야 하므로) —
+        #   대신 "홀드 ON" 상태에서 HOLD_HZ(30Hz)로 슬라이더의 현재 각도를 계속
+        #   재텔레포트해서, 중력이 작용할 틈(1/30s)을 거의 없애는 방식으로 붙잡아둔다
+        #   (referee.py 가 풍선을 고주파로 미는 것과 동일한 원리). 슬라이더를 드래그하면
+        #   다음 홀드 프레임부터 바로 새 각도가 반영된다 — 실시간.
+        #   ★ ARM 전(IDLE)에서 사용할 것 — 비행 중 텔레포트는 EKF 자세추정과
+        #     물리엔진 실제자세가 어긋나 발산할 수 있다.
+        g_launch = group(left, "발사각(견착)  ·  실시간 홀드")
+        tk.Label(g_launch, text="⚠ ARM 전(IDLE)에서만 사용 권장", fg="#ff8a65",
+                 bg="#1e1e1e", font=("Arial", 8, "bold")).pack(anchor="w")
+        self.launch_angle = tk.Scale(g_launch, from_=0, to=180, resolution=1,
+                                     orient="horizontal", length=180, bg="#1e1e1e",
+                                     fg="white", label="발사각 [° , 지면기준, 90=수직]",
+                                     highlightthickness=0, troughcolor="#444")
+        self.launch_angle.set(65)
+        self.launch_angle.pack(pady=(2, 2))
+        launch_row = tk.Frame(g_launch, bg="#1e1e1e")
+        launch_row.pack(pady=(0, 2))
+        # 홀드 토글 — 누르면 즉시 텔레포트해서 자세를 잡고, 이후 슬라이더를 움직이는
+        #   대로 실시간 반영. 다시 누르면 홀드 해제(그 자리에서 물리에 맡김 → 낙하/비행).
+        self._hold_active = False
+        self.hold_btn = tk.Button(launch_row, text="자세 홀드 ON", bg="#455a64", fg="white",
+                                  activebackground="#607d8b", relief="flat",
+                                  command=self.toggle_launch_hold)
+        self.hold_btn.grid(row=0, column=0)
+        self.launch_status_lbl = tk.Label(g_launch, text="홀드 꺼짐 — 물리 정상 진행 중",
+                                          fg="#777777", bg="#1e1e1e", font=("Arial", 8))
+        self.launch_status_lbl.pack(anchor="w")
+        if not _GZ_OK:
+            tk.Label(g_launch, text=f"⚠ gz 바인딩 로드 실패 → CLI 폴백(느림): {_GZ_IMPORT_ERR}",
+                     fg="#ff5252", bg="#1e1e1e", font=("Arial", 7), wraplength=280,
+                     justify="left").pack(anchor="w")
+
         # ── [표적] referee ──────────────────────────────────────────────────
         g_tgt = group(right, "표적  ·  referee")
 
@@ -383,6 +496,51 @@ class PanelGUI:
         self.pitch_sign *= -1.0
         ros_param_set("control.pitch_sign", self.pitch_sign)
         self.pitch_btn.config(text=f"Pitch sign: {'+' if self.pitch_sign > 0 else '-'}")
+
+    def toggle_launch_hold(self):
+        """발사각 홀드 ON/OFF.
+
+        ON: 물리는 계속 흐르게 둔 채(pause 안 함), 백그라운드 스레드가 HOLD_HZ로
+            "슬라이더의 현재 각도"를 반복 텔레포트해서 드론을 그 자세에 붙잡아둔다.
+            슬라이더를 드래그하면 다음 루프에서 바로 새 각도가 반영되므로 실시간.
+            카메라/검출은 물리 시간이 계속 흐르므로 끊김 없이 계속 동작한다.
+        OFF: 루프를 멈추고 그 자리에서 물리(중력/추력)에 그대로 맡긴다 — 이게
+            사실상 "발사" 시점. ARM은 여전히 가상조종기(arms_command)에서 별도로.
+        """
+        self._hold_active = not self._hold_active
+        if self._hold_active:
+            self.hold_btn.config(text="자세 홀드 OFF", bg="#c62828", activebackground="#e53935")
+            _bg(self._hold_loop)
+        else:
+            self.hold_btn.config(text="자세 홀드 ON", bg="#455a64", activebackground="#607d8b")
+            self._applyq.put((lambda v: self.launch_status_lbl.config(text=v, fg="#f5a623"),
+                              "홀드 해제 — 물리 정상 진행(낙하/비행 시작)"))
+
+    def _hold_loop(self):
+        """백그라운드 워커: 홀드가 켜져 있는 동안 HOLD_HZ 로 재텔레포트.
+
+        90°=수직(pitch=0), 각도가 작아질수록 노즈가 기운다. 부호(+/-)는 좌표계
+        컨벤션에 따라 반대일 수 있음 — 3D 뷰에서 노즈가 "앞으로" 기우는지 보고
+        반대면 pitch_rad 부호를 뒤집을 것.
+        """
+        period = 1.0 / HOLD_HZ
+        x, y, _z = DRONE_SPAWN_XYZ
+        last_reported = None
+        while self._hold_active:
+            angle_deg = float(self.launch_angle.get())
+            pitch_rad = -math.radians(90.0 - angle_deg)
+            gz_set_pose_fast(DRONE, x, y, LAUNCH_TELEPORT_Z,
+                              roll=0.0, pitch=pitch_rad, yaw=0.0)
+            if angle_deg != last_reported:
+                last_reported = angle_deg
+                state = self.state_lbl.cget("text")
+                if state not in ("IDLE", "—"):
+                    msg = (f"홀드 중: {angle_deg:.0f}° (상태={state}, 주의!)", "#ff5252")
+                else:
+                    msg = (f"홀드 중: {angle_deg:.0f}° — 실시간 반영됨", "#8bc34a")
+                self._applyq.put((lambda v: self.launch_status_lbl.config(text=v[0], fg=v[1]),
+                                  msg))
+            time.sleep(period)
 
     # ---- 표적 종류 전환 (풍선 ↔ 드론) → referee 'target' 파라미터 ----
     def toggle_target(self):

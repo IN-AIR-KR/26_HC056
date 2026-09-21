@@ -152,6 +152,10 @@ def generate_launch_description():
                               description="PX4 SITL + Gazebo 도 같이 띄울지 (이미 떠 있으면 false)"),
         DeclareLaunchArgument("px4_dir", default_value=os.environ.get("PX4_DIR", "~/PX4-Autopilot"),
                               description="PX4-Autopilot 경로 (px4:=true 일 때)"),
+        DeclareLaunchArgument(
+            "launch_pitch_deg", default_value="65",
+            description="견착발사 초기 피치각[°, 지면기준, 90=수직] (px4:=true 일 때). "
+                        "px4_sitl.launch.py 로 그대로 전달됨."),
         DeclareLaunchArgument("rviz", default_value="false",
                               description="rviz 3D 시각화(기체·표적·궤적) 기동 여부. "
                                           "sitl_viz(진실값 발행) + rviz2 가 같이 뜬다."),
@@ -173,7 +177,10 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(px4_launch)),
             condition=IfCondition(LaunchConfiguration("px4")),
-            launch_arguments={"px4_dir": LaunchConfiguration("px4_dir")}.items(),
+            launch_arguments={
+                "px4_dir": LaunchConfiguration("px4_dir"),
+                "launch_pitch_deg": LaunchConfiguration("launch_pitch_deg"),
+            }.items(),
         ),
         # CRSF 가상 시리얼
         OpaqueFunction(function=_socat),

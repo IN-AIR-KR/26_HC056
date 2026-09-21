@@ -21,6 +21,7 @@ PX4 는 원래 의도대로 PX4_GZ_STANDALONE + PX4_GZ_MODEL_NAME 으로 기존 
 월드를 건드릴 이유가 없다.
 """
 
+import math
 import os
 import subprocess
 import threading
@@ -43,9 +44,13 @@ class SitlResetManager(Node):
         self.declare_parameter("model", "gz_arms_drone")
         # PX4 가 spawn 하는 '인스턴스' 이름 (모델명 + _<px4_instance>). attach 대상.
         self.declare_parameter("drone_model", "arms_drone_0")
-        # 되돌릴 출발 위치. PX4 는 PX4_GZ_MODEL_POSE 없이 spawn 하므로 model.sdf 의
-        # 자기 pose(0 0 0.24)가 곧 출발점이다. 지면에 닿으며 0.19 근처로 가라앉는다.
+        # 되돌릴 출발 위치. px4_sitl.launch.py 가 PX4_GZ_MODEL_POSE="0,0,0.24,..."로
+        # spawn 하므로 위치는 model.sdf 원본 pose(0 0 0.24)와 동일. 지면에 닿으며
+        # 0.19 근처로 가라앉는다.
         self.declare_parameter("spawn_pose", [0.0, 0.0, 0.24])
+        # 견착발사 초기 피치각[°, 지면기준, 90=수직]. 최초 스폰(PX4_GZ_MODEL_POSE)과
+        # 같은 값을 넘겨받아야 RESET 후에도 같은 기울어진 자세로 되돌아간다.
+        self.declare_parameter("launch_pitch_deg", 65.0)
         self._busy = threading.Lock()
         self._reset_pub = self.create_publisher(Empty, "/arms/reset", 10)
         self.create_service(Trigger, "/arms/sitl/reset", self._reset)
@@ -113,9 +118,13 @@ class SitlResetManager(Node):
         world = self.get_parameter("world").value
         drone = self.get_parameter("drone_model").value
         x, y, z = (list(self.get_parameter("spawn_pose").value) + [0.0, 0.0, 0.0])[:3]
-        # orientation 을 명시하지 않으면 뒤집힌 채로 리셋될 수 있다(추락해 구른 경우).
+        launch_pitch_deg = float(self.get_parameter("launch_pitch_deg").value)
+        # 견착발사 피치(pitch-only)로 되돌린다 — 명시하지 않으면 뒤집힌 채로 리셋될 수
+        # 있다(추락해 구른 경우). 90°=수직(pitch=0) 컨벤션은 최초 스폰과 동일.
+        pitch_rad = -math.radians(90.0 - launch_pitch_deg)
+        qy, qw = math.sin(pitch_rad * 0.5), math.cos(pitch_rad * 0.5)
         req = (f'name: "{drone}", position: {{x: {x}, y: {y}, z: {z}}}, '
-               f'orientation: {{x: 0, y: 0, z: 0, w: 1}}')
+               f'orientation: {{x: 0, y: {qy}, z: 0, w: {qw}}}')
         result = subprocess.run([
             "gz", "service", "-s", f"/world/{world}/set_pose",
             "--reqtype", "gz.msgs.Pose", "--reptype", "gz.msgs.Boolean",

@@ -285,7 +285,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>  <!-- 2026-09-21 도연: 모터당 1.5kgf @풀스로틀(5045) → 총 6kgf. 계산: 1.5*9.81/1000^2 -->
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>0</motorNumber>
@@ -301,7 +301,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>  <!-- 2026-09-21 도연: 모터당 1.5kgf @풀스로틀(5045) → 총 6kgf. 계산: 1.5*9.81/1000^2 -->
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>1</motorNumber>
@@ -317,7 +317,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>  <!-- 2026-09-21 도연: 모터당 1.5kgf @풀스로틀(5045) → 총 6kgf. 계산: 1.5*9.81/1000^2 -->
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>2</motorNumber>
@@ -333,7 +333,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>  <!-- 2026-09-21 도연: 모터당 1.5kgf @풀스로틀(5045) → 총 6kgf. 계산: 1.5*9.81/1000^2 -->
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>3</motorNumber>
