@@ -37,6 +37,15 @@ def resolve_bag(bag: str) -> tuple:
       직접 연다(rosbag2 는 metadata 없는 폴더를 못 연다).
     """
     p = Path(bag).expanduser()
+    if not p.exists():
+        hint = ""
+        if p.parent.is_dir():
+            nearby = sorted(
+                (d for d in p.parent.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime, reverse=True)[:5]
+            if nearby:
+                hint = "\n최근 폴더:\n  " + "\n  ".join(str(d) for d in nearby)
+        raise FileNotFoundError(f"bag 경로가 존재하지 않음: {p}{hint}")
     if p.is_file():
         return str(p), _EXT_STORAGE.get(p.suffix, "sqlite3")
     if p.is_dir():
@@ -47,12 +56,21 @@ def resolve_bag(bag: str) -> tuple:
                        if f.is_file() and f.suffix in _EXT_STORAGE)
         if files:
             return str(files[0]), _EXT_STORAGE[files[0].suffix]
-        for sub in sorted(d for d in p.iterdir() if d.is_dir()):   # <일시>/bag/ 등
+        # 로그 루트(~/arms_flight_log)를 넘긴 경우에도 최신 비행부터 찾는다.
+        subdirs = sorted(
+            (d for d in p.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime, reverse=True)
+        for sub in subdirs:   # <일시>/bag/ 또는 로그 루트/<일시>/bag/
             try:
                 return resolve_bag(str(sub))
             except FileNotFoundError:
                 continue
-    raise FileNotFoundError(f"bag 을 찾을 수 없음: {bag}")
+        contents = sorted(x.name for x in p.iterdir())
+        shown = ", ".join(contents[:10]) if contents else "(비어 있음)"
+        raise FileNotFoundError(
+            f"열 수 있는 rosbag을 찾지 못함: {p}\n폴더 내용: {shown}\n"
+            "metadata.yaml 또는 .db3/.mcap 파일이 있는지 확인하세요.")
+    raise FileNotFoundError(f"bag 을 찾을 수 없음: {p}")
 
 
 def open_reader(uri: str, storage: str):
