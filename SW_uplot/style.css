@@ -33,8 +33,12 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
   transition: flex-basis .2s ease, width .2s ease, padding .2s ease, border-color .2s ease; }
 .sidebar-collapsed #sidebar { flex-basis: 0; width: 0; padding-left: 0; padding-right: 0;
   overflow: hidden; border-color: transparent; }
-.sidebar-title { padding: 2px 7px 10px; color: #4f5d6b;
+.sidebar-bar { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 8px 7px; }
+.sidebar-title { color: #4f5d6b;
   font: 10px ui-monospace, SFMono-Regular, monospace; letter-spacing: .12em; }
+#flight-refresh { width: 25px; height: 25px; padding: 0; border: 1px solid #19232e;
+  border-radius: 6px; color: #687786; background: #090e14; cursor: pointer; font-size: 15px; }
+#flight-refresh:hover { color: #d2dde6; border-color: #334355; background: #101720; }
 #flight-list { display: grid; gap: 5px; }
 .flight-item { display: grid; gap: 3px; width: 100%; padding: 9px 10px; text-align: left;
   border: 1px solid transparent; border-radius: 7px; background: transparent; color: #83909d;
@@ -42,6 +46,9 @@ header p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .flight-item:hover { color: #c1ccd6; background: #0c1219; border-color: #182431; }
 .flight-item.active { color: #d8ecfb; background: #0b1a25; border-color: #214c69;
   box-shadow: inset 2px 0 var(--accent); }
+.flight-item.unavailable { color: #806d6d; border-color: #2a1d20; }
+.flight-item.unavailable:hover, .flight-item.unavailable.active {
+  color: #d7a4a4; background: #180d10; border-color: #593038; box-shadow: inset 2px 0 #b6515d; }
 .flight-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font: 11px ui-monospace, SFMono-Regular, monospace; }
 .flight-meta { color: #536170; font-size: 10px; }

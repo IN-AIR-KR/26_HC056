@@ -34,8 +34,9 @@ cd /path/to/ARMS/SW
 python3 scripts/bag_uplot/view_bag.py ~/arms_flight_log/20260923_153000
 ```
 
-자동으로 CSV와 `data.json`을 만들고 `http://127.0.0.1:8765/`를 연다. 입력은 비행 폴더,
-그 안의 `bag/`, 또는 기존 CSV 폴더 모두 가능하다.
+Flask 서버가 `http://127.0.0.1:8765/`를 연다. 입력은 비행 폴더, 그 안의 `bag/`, 또는
+기존 CSV 폴더 모두 가능하다. 로그 루트를 열 때는 선택한 기록만 CSV/JSON으로 변환하고,
+변경되지 않은 bag은 이전 변환 캐시를 재사용한다.
 
 로그 루트를 넘기면 그 안의 비행 기록들이 최신순으로 왼쪽 사이드바에 표시된다.
 사이드바에서 기록을 선택해 그래프를 전환할 수 있고, 상단 메뉴 버튼으로 목록을 접을 수 있다.
@@ -45,12 +46,6 @@ python3 scripts/bag_uplot/view_bag.py ~/arms_flight_log
 ```
 
 ```bash
-# 브라우저를 자동으로 열지 않기
-python3 scripts/bag_uplot/view_bag.py <bag> --no-browser
-
-# 정적 결과만 생성
-python3 scripts/bag_uplot/view_bag.py <bag> --export-only --outdir /tmp/arms_view
-
 # 다른 포트
 python3 scripts/bag_uplot/view_bag.py <bag> --port 9000
 ```
@@ -63,5 +58,6 @@ roll·pitch, PX4에 보내는 목표 자세, throttle이다.
 ## 의존성
 
 - bag 변환: ROS 2의 `rosbag2_py`, `rosidl_runtime_py`, PyYAML
+- 웹 서버: Flask (`sudo apt install python3-flask`)
 - 브라우저: uPlot을 jsDelivr에서 읽으므로 최초 열 때 인터넷 연결 필요
 - 별도 npm 설치는 필요 없다.

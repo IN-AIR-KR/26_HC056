@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>A.R.M.S. Flight Log</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <header>
+    <button id="sidebar-toggle" type="button" aria-label="기록 목록 접기">☰</button>
+    <div class="brand"><h1>A.R.M.S. Flight Log</h1><p id="current-flight">auto_save rosbag · uPlot</p></div>
+    <div id="summary"></div>
+  </header>
+  <div id="workspace">
+    <aside id="sidebar">
+      <div class="sidebar-bar">
+        <div class="sidebar-title">FLIGHT RECORDS</div>
+        <button id="flight-refresh" type="button" title="기록 목록 새로고침">↻</button>
+      </div>
+      <nav id="flight-list"><div class="loading small">기록 찾는 중…</div></nav>
+    </aside>
+    <main id="plots"><div class="loading">기록을 읽는 중…</div></main>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+  <script src="static/app.js"></script>
+</body>
+</html>

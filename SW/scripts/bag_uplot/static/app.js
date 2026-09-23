@@ -68,12 +68,30 @@ function showError(err) {
 async function selectFlight(flight, button) {
   const sequence = ++loadSequence;
   document.querySelectorAll(".flight-item").forEach(el => el.classList.toggle("active", el === button));
+  if (flight.error) {
+    clearPlots();
+    document.querySelector("#current-flight").textContent = flight.name;
+    document.querySelector("#summary").textContent = "unavailable";
+    const main = document.querySelector("#plots"); main.innerHTML = "";
+    const error = document.createElement("div"); error.className = "error";
+    error.textContent = `이 기록을 열 수 없습니다: ${flight.error}`;
+    main.appendChild(error);
+    return;
+  }
   document.querySelector("#plots").innerHTML = `<div class="loading">${flight.name} 읽는 중…</div>`;
   try {
-    const response = await fetch(flight.data);
-    if (!response.ok) throw new Error(response.statusText);
+    const response = await fetch(flight.data, {cache: "no-store"});
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).error || detail; } catch (_) {}
+      throw new Error(detail);
+    }
     const payload = await response.json();
-    if (sequence === loadSequence) renderPayload(payload, flight);
+    if (sequence === loadSequence) {
+      flight.topics = payload.topics.length;
+      button.querySelector(".flight-meta").textContent = `${flight.topics} topics`;
+      renderPayload(payload, flight);
+    }
   } catch (err) {
     if (sequence === loadSequence) showError(err);
   }
@@ -83,21 +101,39 @@ document.querySelector("#sidebar-toggle").addEventListener("click", () => {
   document.body.classList.toggle("sidebar-collapsed");
 });
 
-fetch("manifest.json")
-  .then(response => { if (!response.ok) throw new Error(response.statusText); return response.json(); })
-  .then(manifest => {
+async function fetchCatalog() {
+  const response = await fetch("/api/flights", {cache: "no-store"});
+  if (!response.ok) throw new Error(response.statusText);
+  return response.json();
+}
+
+async function loadFlightList() {
+  const list = document.querySelector("#flight-list");
+  list.innerHTML = `<div class="loading small">기록 찾는 중…</div>`;
+  try {
+    const manifest = await fetchCatalog();
     const list = document.querySelector("#flight-list");
     list.innerHTML = "";
-    manifest.flights.forEach((flight, index) => {
+    let firstAvailable = null;
+    manifest.flights.forEach(flight => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "flight-item";
+      button.className = `flight-item${flight.error ? " unavailable" : ""}`;
       const name = document.createElement("span"); name.className = "flight-name"; name.textContent = flight.name;
-      const meta = document.createElement("span"); meta.className = "flight-meta"; meta.textContent = `${flight.topics} topics`;
+      const meta = document.createElement("span"); meta.className = "flight-meta";
+      meta.textContent = flight.error ? "사용 불가 · 클릭해서 원인 보기"
+        : flight.topics == null ? "클릭해서 불러오기" : `${flight.topics} topics`;
       button.append(name, meta);
       button.addEventListener("click", () => selectFlight(flight, button));
       list.appendChild(button);
-      if (index === 0) selectFlight(flight, button);
+      if (!flight.error && firstAvailable === null) firstAvailable = [flight, button];
     });
-  })
-  .catch(showError);
+    if (!manifest.flights.length) list.innerHTML = `<div class="error small">기록이 없습니다.</div>`;
+    else if (firstAvailable) selectFlight(...firstAvailable);
+  } catch (err) {
+    showError(err);
+  }
+}
+
+document.querySelector("#flight-refresh").addEventListener("click", loadFlightList);
+loadFlightList();
