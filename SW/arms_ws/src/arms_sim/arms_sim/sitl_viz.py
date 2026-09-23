@@ -9,9 +9,10 @@ ground truth 라서 SITL 전용이다 — 그래서 arms_ui(실기체·시뮬 �
   발행 : /tf                        map → 드론 / 표적
   발행 : /arms/viz/drone_path       nav_msgs/Path   드론 궤적
   발행 : /arms/viz/target_path      nav_msgs/Path   표적 궤적
-  발행 : /arms/viz/markers          visualization_msgs/MarkerArray  기체 메쉬 + 표적
+  발행 : /arms/viz/markers          visualization_msgs/MarkerArray  기체/표적/유도 가속도
 
   구독 : gz /world/<world>/dynamic_pose/info   (in-process gz transport)
+  구독 : /arms/pn_debug             PN 유도 가속도(NED)
   구독 : /arms/reset                에피소드 경계 → 궤적 비움
 
 rviz Fixed Frame 은 map 으로 둔다.
@@ -40,6 +41,7 @@ from nav_msgs.msg import Path
 from std_msgs.msg import Empty
 from visualization_msgs.msg import Marker, MarkerArray
 from tf2_ros import TransformBroadcaster
+from arms_msgs.msg import PnDebug
 
 MODEL_BALLOON = "target_ball"
 MODEL_DRONE = "target_uav"
@@ -102,11 +104,16 @@ class SitlViz(Node):
         # 조준 보조선: 기체 yaw축(= body +Z = 상방 카메라 보어사이트) 방향으로 뻗는 선.
         # 표적 고도(기본 42m)보다 넉넉히 길어야 '겨냥했는지'가 눈에 보인다. 0 이면 끔.
         self.declare_parameter("aim_line_m", 60.0)
+        # guidance acceleration 1m/s²를 RViz에서 몇 m 길이로 그릴지.
+        self.declare_parameter("accel_arrow_scale", 1.0)
+        self.declare_parameter("accel_timeout_sec", 0.30)
 
         self._frame = self.get_parameter("frame_id").value
         self._max_pts = int(self.get_parameter("path_max_points").value)
         self._min_dist = float(self.get_parameter("path_min_dist").value)
         self._aim_len = float(self.get_parameter("aim_line_m").value)
+        self._accel_scale = float(self.get_parameter("accel_arrow_scale").value)
+        self._accel_timeout = float(self.get_parameter("accel_timeout_sec").value)
 
         # gz 콜백은 gz transport 스레드에서 온다. 거기서 바로 발행하지 않고 최신 포즈만
         # 담아두고, ROS 타이머가 꺼내 발행한다(=발행률도 여기서 제한된다).
@@ -117,6 +124,8 @@ class SitlViz(Node):
         self._target_path = []
         self._target_name = None    # 궤적이 어느 표적의 것인지 (바뀌면 비운다)
         self._drone_logged = False
+        self._guidance_accel_enu = None  # (east, north, up) [m/s²]
+        self._guidance_accel_time = None
 
         self._mesh_uri = self._find_mesh()
 
@@ -125,6 +134,7 @@ class SitlViz(Node):
         self._pub_target_path = self.create_publisher(Path, "/arms/viz/target_path", 1)
         self._pub_markers = self.create_publisher(MarkerArray, "/arms/viz/markers", 1)
         self.create_subscription(Empty, "/arms/reset", self._on_reset, 10)
+        self.create_subscription(PnDebug, "/arms/pn_debug", self._on_pn_debug, 10)
 
         world = self.get_parameter("world").value
         if _GZ_OK:
@@ -163,7 +173,25 @@ class SitlViz(Node):
         with self._lock:
             self._drone_path.clear()
             self._target_path.clear()
+        self._guidance_accel_enu = None
+        self._guidance_accel_time = None
         self.get_logger().info("실험 RESET: 궤적 비움")
+
+    def _on_pn_debug(self, msg):
+        """PN의 NED 가속도를 RViz map(ENU)으로 변환해 최신값을 보관한다.
+
+        NED (north, east, down) -> ENU (east, north, up): (y, x, -z)
+        """
+        if not msg.valid:
+            self._guidance_accel_enu = None
+            self._guidance_accel_time = None
+            return
+        self._guidance_accel_enu = (
+            float(msg.guidance_accel_y),
+            float(msg.guidance_accel_x),
+            -float(msg.guidance_accel_z),
+        )
+        self._guidance_accel_time = self.get_clock().now()
 
     def _on_poses(self, msg):
         """gz dynamic pose 콜백 — 최신 포즈만 담아둔다 (발행은 타이머가)."""
@@ -215,12 +243,20 @@ class SitlViz(Node):
             markers.markers.append(self._drone_marker(now, drone))
             if self._aim_len > 0.0:
                 markers.markers.append(self._aim_marker(now, drone))
+            if self._accel_fresh():
+                markers.markers.append(self._accel_marker(now, drone))
         if target:
             self._send_tf(now, target)
             markers.markers.append(self._target_marker(now, target))
         self._pub_markers.publish(markers)
         self._pub_drone_path.publish(self._path_msg(now, drone_pts))
         self._pub_target_path.publish(self._path_msg(now, target_pts))
+
+    def _accel_fresh(self):
+        if self._guidance_accel_enu is None or self._guidance_accel_time is None:
+            return False
+        age = (self.get_clock().now() - self._guidance_accel_time).nanoseconds / 1e9
+        return 0.0 <= age <= self._accel_timeout
 
     def _append(self, buf, pos):
         """이동했을 때만 점을 쌓는다. 정지 중에 같은 점을 쌓으면 버퍼만 갉아먹는다."""
@@ -308,6 +344,27 @@ class SitlViz(Node):
         m.points = [p0, p1]
         m.scale.x = 0.12          # LINE_STRIP 은 scale.x 가 선 두께
         m.color.r, m.color.g, m.color.b, m.color.a = 0.2, 1.0, 0.4, 0.8
+        return m
+
+    def _accel_marker(self, stamp, entity):
+        """기체 위치에서 PN total guidance acceleration 방향으로 뻗는 화살표."""
+        _, pos, _ = entity
+        ax, ay, az = self._guidance_accel_enu
+        scale = self._accel_scale
+        m = self._base_marker(stamp, "guidance_acceleration", 0)
+        m.type = Marker.ARROW
+        p0 = Point(x=pos[0], y=pos[1], z=pos[2])
+        p1 = Point(x=pos[0] + ax * scale,
+                   y=pos[1] + ay * scale,
+                   z=pos[2] + az * scale)
+        m.points = [p0, p1]
+        m.scale.x = 0.18       # shaft diameter
+        m.scale.y = 0.42       # head diameter
+        m.scale.z = 0.70       # head length
+        m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.85, 0.05, 0.95
+        # PN 로그가 끊기면 마지막 화살표가 RViz에 영구히 남지 않게 한다.
+        m.lifetime.sec = 0
+        m.lifetime.nanosec = 300_000_000
         return m
 
     def _target_marker(self, stamp, entity):

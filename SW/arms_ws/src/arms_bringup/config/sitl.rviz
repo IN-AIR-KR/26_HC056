@@ -25,7 +25,7 @@ Visualization Manager:
         Line Width: 0.03
         Value: Lines
     - Class: rviz_default_plugins/MarkerArray
-      Name: Models
+      Name: Models + guidance acceleration
       Enabled: true
       Topic:
         Value: /arms/viz/markers
