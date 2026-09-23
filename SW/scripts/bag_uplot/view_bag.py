@@ -58,18 +58,43 @@ def csv_to_topic(path: Path):
             "samples": len(rows), "columns": columns}
 
 
-def export_data(csv_dir: Path, out_dir: Path):
+def export_data(csv_dir: Path, out_dir: Path, copy_assets=True):
     topics = []
     for path in sorted(csv_dir.glob("*.csv")):
         topic = csv_to_topic(path)
         if topic:
             topics.append(topic)
     payload = {"state_codes": STATE_CODES, "topics": topics}
+    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "data.json").write_text(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    for asset in ("index.html", "app.js", "style.css"):
-        shutil.copy2(HERE / asset, out_dir / asset)
+    if copy_assets:
+        for asset in ("index.html", "app.js", "style.css"):
+            shutil.copy2(HERE / asset, out_dir / asset)
     return topics
+
+
+def discover_flights(source: Path):
+    """비행 하나 또는 로그 루트에서 [(표시 이름, bag 경로)]를 최신순으로 찾는다."""
+    from _common import resolve_bag
+
+    # auto_save 비행 폴더는 바로 아래에 bag/이 있다. bag 자체나 CSV 폴더도 단일 입력이다.
+    if (source / "bag").is_dir() or (source / "metadata.yaml").is_file() \
+            or any(source.glob("*.db3")) or any(source.glob("*.mcap")) \
+            or any(source.glob("*.csv")):
+        return [(source.name, source)]
+
+    flights = []
+    for child in source.iterdir() if source.is_dir() else []:
+        if not child.is_dir() or child.name.endswith("_uplot"):
+            continue
+        try:
+            resolve_bag(str(child))
+        except FileNotFoundError:
+            continue
+        flights.append((child.name, child))
+    flights.sort(key=lambda item: item[1].stat().st_mtime, reverse=True)
+    return flights
 
 
 def main():
@@ -85,17 +110,41 @@ def main():
     out = Path(args.outdir).expanduser().resolve() if args.outdir else Path(str(source) + "_uplot")
     out.mkdir(parents=True, exist_ok=True)
 
-    if source.is_dir() and any(source.glob("*.csv")):
-        csv_dir = source
-    else:
-        from bag_to_csv import bag_to_csv
-        csv_dir = out / "csv"
-        written = bag_to_csv(str(source), out_dir=str(csv_dir))
-        if not written:
-            raise SystemExit("변환 가능한 데이터 토픽이 없습니다.")
+    flights = discover_flights(source)
+    if not flights:
+        raise SystemExit(f"열 수 있는 비행 기록이 없습니다: {source}")
 
-    topics = export_data(csv_dir, out)
-    print(f"[uplot] {len(topics)}개 토픽 → {out / 'index.html'}")
+    from bag_to_csv import bag_to_csv
+    manifest = []
+    total_topics = 0
+    for index, (name, flight_source) in enumerate(flights):
+        key = f"{index:04d}_{name}"
+        flight_out = out / "flights" / key
+        if flight_source.is_dir() and any(flight_source.glob("*.csv")):
+            csv_dir = flight_source
+        else:
+            csv_dir = flight_out / "csv"
+            written = bag_to_csv(str(flight_source), out_dir=str(csv_dir))
+            if not written:
+                print(f"[uplot] 건너뜀(데이터 없음): {flight_source}")
+                continue
+        topics = export_data(csv_dir, flight_out, copy_assets=False)
+        total_topics += len(topics)
+        manifest.append({
+            "name": name,
+            "source": str(flight_source),
+            "data": f"flights/{key}/data.json",
+            "topics": len(topics),
+        })
+
+    if not manifest:
+        raise SystemExit("변환 가능한 데이터 토픽이 없습니다.")
+    for asset in ("index.html", "app.js", "style.css"):
+        shutil.copy2(HERE / asset, out / asset)
+    (out / "manifest.json").write_text(
+        json.dumps({"flights": manifest}, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8")
+    print(f"[uplot] {len(manifest)}개 기록, {total_topics}개 토픽 → {out / 'index.html'}")
     if args.export_only:
         return
 

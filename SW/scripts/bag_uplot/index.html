@@ -9,10 +9,17 @@
 </head>
 <body>
   <header>
-    <div><h1>A.R.M.S. Flight Log</h1><p>auto_save rosbag · uPlot</p></div>
+    <button id="sidebar-toggle" type="button" aria-label="기록 목록 접기">☰</button>
+    <div class="brand"><h1>A.R.M.S. Flight Log</h1><p id="current-flight">auto_save rosbag · uPlot</p></div>
     <div id="summary"></div>
   </header>
-  <main id="plots"><div class="loading">data.json 읽는 중…</div></main>
+  <div id="workspace">
+    <aside id="sidebar">
+      <div class="sidebar-title">FLIGHT RECORDS</div>
+      <nav id="flight-list"><div class="loading small">기록 찾는 중…</div></nav>
+    </aside>
+    <main id="plots"><div class="loading">기록을 읽는 중…</div></main>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
   <script src="app.js"></script>
 </body>

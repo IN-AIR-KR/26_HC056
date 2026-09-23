@@ -37,7 +37,8 @@ python3 scripts/bag_uplot/view_bag.py ~/arms_flight_log/20260923_153000
 자동으로 CSV와 `data.json`을 만들고 `http://127.0.0.1:8765/`를 연다. 입력은 비행 폴더,
 그 안의 `bag/`, 또는 기존 CSV 폴더 모두 가능하다.
 
-가장 최근 비행을 열려면 일시 폴더를 찾을 필요 없이 로그 루트만 넘겨도 된다.
+로그 루트를 넘기면 그 안의 비행 기록들이 최신순으로 왼쪽 사이드바에 표시된다.
+사이드바에서 기록을 선택해 그래프를 전환할 수 있고, 상단 메뉴 버튼으로 목록을 접을 수 있다.
 
 ```bash
 python3 scripts/bag_uplot/view_bag.py ~/arms_flight_log

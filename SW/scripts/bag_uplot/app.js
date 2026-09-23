@@ -4,6 +4,8 @@ const preferred = /(^valid$|state_code|error_[xy]|los_rate_[xyz]|range_m|closing
 // setSeries=false: 한 그래프에서 가까운 series를 고른 상태까지 다른 그래프에 강요하지 않고,
 // 시간 위치/세로 crosshair와 각 그래프 legend 값만 함께 갱신한다.
 const CURSOR_SYNC = {key: "arms-flight-time", setSeries: false};
+const plotHandles = [];
+let loadSequence = 0;
 
 function buildCard(topic) {
   const names = Object.keys(topic.columns).filter(n => n !== "t_rel");
@@ -37,15 +39,65 @@ function buildCard(topic) {
     toggles.appendChild(label);
   });
   const resize = () => plot.setSize({width: Math.max(320, plotEl.clientWidth - 16), height: 280});
-  new ResizeObserver(resize).observe(plotEl); resize();
+  const observer = new ResizeObserver(resize); observer.observe(plotEl); resize();
+  plotHandles.push({plot, observer});
   return card;
 }
 
-fetch("data.json").then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }).then(payload => {
+function clearPlots() {
+  plotHandles.splice(0).forEach(({plot, observer}) => {
+    observer.disconnect();
+    plot.destroy();
+  });
+}
+
+function renderPayload(payload, flight) {
+  clearPlots();
   const main = document.querySelector("#plots"); main.innerHTML = "";
   const samples = payload.topics.reduce((n, t) => n + t.samples, 0);
   document.querySelector("#summary").textContent = `${payload.topics.length} topics · ${samples.toLocaleString()} rows`;
+  document.querySelector("#current-flight").textContent = flight.name;
   payload.topics.forEach(t => main.appendChild(buildCard(t)));
-}).catch(err => {
+}
+
+function showError(err) {
+  clearPlots();
   document.querySelector("#plots").innerHTML = `<div class="error">로드 실패: ${err.message}<br>HTTP 서버로 열었는지 확인하세요.</div>`;
+}
+
+async function selectFlight(flight, button) {
+  const sequence = ++loadSequence;
+  document.querySelectorAll(".flight-item").forEach(el => el.classList.toggle("active", el === button));
+  document.querySelector("#plots").innerHTML = `<div class="loading">${flight.name} 읽는 중…</div>`;
+  try {
+    const response = await fetch(flight.data);
+    if (!response.ok) throw new Error(response.statusText);
+    const payload = await response.json();
+    if (sequence === loadSequence) renderPayload(payload, flight);
+  } catch (err) {
+    if (sequence === loadSequence) showError(err);
+  }
+}
+
+document.querySelector("#sidebar-toggle").addEventListener("click", () => {
+  document.body.classList.toggle("sidebar-collapsed");
 });
+
+fetch("manifest.json")
+  .then(response => { if (!response.ok) throw new Error(response.statusText); return response.json(); })
+  .then(manifest => {
+    const list = document.querySelector("#flight-list");
+    list.innerHTML = "";
+    manifest.flights.forEach((flight, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "flight-item";
+      const name = document.createElement("span"); name.className = "flight-name"; name.textContent = flight.name;
+      const meta = document.createElement("span"); meta.className = "flight-meta"; meta.textContent = `${flight.topics} topics`;
+      button.append(name, meta);
+      button.addEventListener("click", () => selectFlight(flight, button));
+      list.appendChild(button);
+      if (index === 0) selectFlight(flight, button);
+    });
+  })
+  .catch(showError);
