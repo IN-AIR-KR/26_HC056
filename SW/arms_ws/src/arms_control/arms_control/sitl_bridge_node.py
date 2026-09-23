@@ -13,11 +13,13 @@ CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=S
   high=Stabilized 는 자동수평 + throttle 직결(고도유지 없음). 실기체 FC 의 수동 모드와 동작을 맞춘 것.
 """
 
+import math
 import threading
 import time
 
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import QuaternionStamped
 
 try:
     from pymavlink import mavutil
@@ -122,11 +124,6 @@ class ArmsSITLCommNode(Node):
         self._conn_str   = self.get_parameter("connection").value
         self._crsf_port  = self.get_parameter("crsf_port").value
         self._send_rate  = self.get_parameter("send_rate_hz").value
-        # 자동(CH6 low)은 ACRO 고정이다. 고를 여지가 없다 -- arms_control_node 가
-        # 내는 자동 출력은 각속도[deg/s]를 max_rate_dps 로 정규화한 값이고, PX4 가
-        # 그걸 각속도로 되돌리는 모드는 ACRO 뿐이다. Manual(각도) 로 넣으면 같은
-        # 숫자에 MPC_MAN_TILT_MAX 가 곱해져 '기울기 명령'으로 조용히 오해석된다
-        # (안 떨어지고 그냥 다른 제어 법칙으로 난다 -- 그래서 더 나쁘다).
 
         self._channels  = [CRSF_MIN] * 16
         self._channels[2] = CRSF_MIN   # throttle min
@@ -145,6 +142,8 @@ class ArmsSITLCommNode(Node):
         # '조용히 기울기 명령으로 오해석' 상태로 계속 난다.
         self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
         self._reiniting = False        # _initial_setup 재실행 중복 방지
+        self._attitude_pub = self.create_publisher(
+            QuaternionStamped, "/arms/attitude_quaternion", 10)
 
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
@@ -181,9 +180,15 @@ class ArmsSITLCommNode(Node):
         """Set default autonomous mode after EKF convergence; arming is done via CH5.
         Flight mode thereafter follows CH6 (low=ACRO/자동, high=Stabilized/수동)."""
         time.sleep(3.0)
-        mode_name = "ACRO(각속도)"
+        mode_name = "Stabilized(자세)"
         self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
-        self._send_set_mode(PX4_CUSTOM_MAIN_MODE_ACRO)
+        self._send_set_mode(PX4_CUSTOM_MAIN_MODE_STABILIZED)
+        # PN의 관성 LOS 변환에 필요한 PX4 ATTITUDE(30)를 50 Hz로 요청.
+        self._mav.mav.command_long_send(
+            self._mav.target_system, self._mav.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 20000,
+            0, 0, 0, 0, 0)
         time.sleep(0.5)
 
         self._connected = True
@@ -212,13 +217,13 @@ class ArmsSITLCommNode(Node):
     # MAVLink RX (armed-state tracking via HEARTBEAT)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """HEARTBEAT(armed 상태) 수신 + PX4 재기동 감지 후 모드 재설정."""
+        """HEARTBEAT/ATTITUDE 수신 + PX4 재기동 감지 후 모드 재설정."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type=['HEARTBEAT'],
+                msg = self._mav.recv_match(type=['HEARTBEAT', 'ATTITUDE'],
                                            blocking=True, timeout=1.0)
                 now = time.monotonic()
                 if msg is None:
@@ -229,6 +234,11 @@ class ArmsSITLCommNode(Node):
                             "PX4 heartbeat 끊김 — 재기동 대기 (RESET?)")
                     continue
                 t = msg.get_type()
+                if (t != 'HEARTBEAT' and self._connected and self._last_hb > 0.0
+                        and now - self._last_hb > HB_TIMEOUT_SEC):
+                    self._connected = False
+                    self.get_logger().warn(
+                        "PX4 heartbeat 끊김 — 재기동 대기 (RESET?)")
                 if t == 'HEARTBEAT':
                     # 공백을 두고 돌아온 heartbeat = 갓 부팅한 새 PX4. 기본 모드는
                     # ACRO 가 아니므로 다시 넣어준다. 안 넣으면 자동 출력이 각속도가
@@ -241,6 +251,18 @@ class ArmsSITLCommNode(Node):
                         self._restore_mode()
                     self._last_hb = now
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+                elif t == 'ATTITUDE':
+                    cr, sr = math.cos(msg.roll * 0.5), math.sin(msg.roll * 0.5)
+                    cp, sp = math.cos(msg.pitch * 0.5), math.sin(msg.pitch * 0.5)
+                    cy, sy = math.cos(msg.yaw * 0.5), math.sin(msg.yaw * 0.5)
+                    out = QuaternionStamped()
+                    out.header.stamp = self.get_clock().now().to_msg()
+                    out.header.frame_id = "ned"
+                    out.quaternion.w = cr * cp * cy + sr * sp * sy
+                    out.quaternion.x = sr * cp * cy - cr * sp * sy
+                    out.quaternion.y = cr * sp * cy + sr * cp * sy
+                    out.quaternion.z = cr * cp * sy - sr * sp * cy
+                    self._attitude_pub.publish(out)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
@@ -271,8 +293,7 @@ class ArmsSITLCommNode(Node):
         ch6_high = ch6 > SWITCH_THRESH
         if ch6_high != (self._prev_ch6 > SWITCH_THRESH):
             # CH6 low→ACRO(자동/영상유도), high→Stabilized(수동/사람 입력)
-            self._mode_pending = (PX4_CUSTOM_MAIN_MODE_STABILIZED if ch6_high
-                                  else PX4_CUSTOM_MAIN_MODE_ACRO)
+            self._mode_pending = PX4_CUSTOM_MAIN_MODE_STABILIZED
         self._prev_ch6 = ch6
 
     # ------------------------------------------------------------------

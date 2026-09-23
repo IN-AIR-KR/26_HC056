@@ -208,11 +208,11 @@ class PanelGUI:
             return ep, ei, ed
 
         self.roll_kp, self.roll_ki, self.roll_kd = make_pid_group(
-            g_pid, "Roll PID  [px→deg/s]", [455, 0.0, 3.5],
+            g_pid, "Roll PID  [px→deg]", [130, 0.0, 1.0],
             ["control.roll_pid.kp", "control.roll_pid.ki", "control.roll_pid.kd"])
 
         self.pitch_kp, self.pitch_ki, self.pitch_kd = make_pid_group(
-            g_pid, "Pitch PID  [px→deg/s]", [455, 0.0, 3.5],
+            g_pid, "Pitch PID  [px→deg]", [130, 0.0, 1.0],
             ["control.pitch_pid.kp", "control.pitch_pid.ki", "control.pitch_pid.kd"])
 
         # ── [제어] 추력 ─────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ class PanelGUI:
         thr_row.pack(anchor="w")
         self.thr_entry = tk.Entry(thr_row, width=7, bg="#2e2e2e", fg="white",
                                   insertbackground="white", relief="flat")
-        self.thr_entry.insert(0, "0.85")   # yaml track_throttle 과 일치 (1.05kg)
+        self.thr_entry.insert(0, "0.70")   # 1.5kgf×4 기준 보수적 상한
         self.thr_entry.grid(row=0, column=0, padx=(4, 6))
         self._track(CTRL_NODE, "control.track_throttle",
                     lambda v: (self.thr_entry.delete(0, "end"),
@@ -283,7 +283,7 @@ class PanelGUI:
 
         # ── [유도] arms_control ─────────────────────────────────────────────
         g_guid = group(right, "유도  ·  arms_control")
-        # 0=기본 추적(각속도 PID 추종), 1=PN(비례항법). 기본은 기본 추적.
+        # 0=기본 추적(자세 PID), 1=PN(비례항법). 둘 다 PX4 Stabilized 자세 입력.
         self._guidance_mode = 0
         self.guid_btn = tk.Button(g_guid, text="방식: 기본 추적", font=("Arial", 11, "bold"),
                                   bg="#37474f", fg="white", activebackground="#546e7a",
@@ -303,24 +303,24 @@ class PanelGUI:
         self.lead.bind("<ButtonRelease-1>",
                        lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
 
-        self.pn_nav = tk.Scale(g_guid, from_=0, to=525, resolution=5, orient="horizontal",
-                               length=180, bg="#1e1e1e", fg="white", label="PN 항법이득 (PN 일때)",
+        self.pn_nav = tk.Scale(g_guid, from_=1.0, to=8.0, resolution=0.1, orient="horizontal",
+                               length=180, bg="#1e1e1e", fg="white", label="PN N (PN 일때)",
                                highlightthickness=0, troughcolor="#444")
-        self.pn_nav.set(175)
+        self.pn_nav.set(3.0)
         self.pn_nav.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.pn_nav_gain",
+        self._track(CTRL_NODE, "control.pn.navigation_ratio",
                     lambda v: self.pn_nav.set(float(v)))
         self.pn_nav.bind("<ButtonRelease-1>",
-                         lambda e: ros_param_set("control.pn_nav_gain", float(self.pn_nav.get())))
-        self.pn_center = tk.Scale(g_guid, from_=0.0, to=350.0, resolution=0.5, orient="horizontal",
-                                  length=180, bg="#1e1e1e", fg="white", label="PN 중심유지 (PN 일때)",
-                                  highlightthickness=0, troughcolor="#444")
-        self.pn_center.set(52.5)
-        self.pn_center.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.pn_center_gain",
-                    lambda v: self.pn_center.set(float(v)))
-        self.pn_center.bind("<ButtonRelease-1>",
-                            lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
+                         lambda e: ros_param_set("control.pn.navigation_ratio", float(self.pn_nav.get())))
+        self.pn_accel = tk.Scale(g_guid, from_=0.0, to=12.0, resolution=0.25, orient="horizontal",
+                                 length=180, bg="#1e1e1e", fg="white", label="PN 접근 가속도 m/s²",
+                                 highlightthickness=0, troughcolor="#444")
+        self.pn_accel.set(5.0)
+        self.pn_accel.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.pn.approach_accel_mps2",
+                    lambda v: self.pn_accel.set(float(v)))
+        self.pn_accel.bind("<ButtonRelease-1>",
+                           lambda e: ros_param_set("control.pn.approach_accel_mps2", float(self.pn_accel.get())))
 
         # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수

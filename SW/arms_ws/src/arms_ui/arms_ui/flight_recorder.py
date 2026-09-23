@@ -41,6 +41,10 @@ class FlightRecorder(Node):
             "/arms/crsf_rx",
             "/arms/mission_state",
             "/arms/command",
+            "/arms/control_debug",
+            "/arms/debug_looming",
+            "/arms/pn_debug",
+            "/arms/attitude_quaternion",
         ])
         self.declare_parameter("save_dir", "~/arms_flight_log")
         # 저장 포맷. 젯슨엔 mcap 플러그인이 없어 sqlite3 로 고정(항상 사용 가능).

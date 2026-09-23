@@ -1,0 +1,19 @@
+:root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #0b0f14; color: #d8e0e8; }
+header { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between;
+  align-items: center; padding: 14px 22px; background: #111821ee; border-bottom: 1px solid #273241; }
+h1 { margin: 0; font-size: 20px; } header p { margin: 3px 0 0; color: #8491a1; font-size: 12px; }
+#summary { color: #9aabbc; font-size: 13px; }
+main { padding: 16px; display: grid; gap: 14px; }
+.card { background: #111821; border: 1px solid #273241; border-radius: 10px; overflow: hidden; }
+.card-head { padding: 10px 12px; border-bottom: 1px solid #273241; }
+.card h2 { display: inline; margin: 0 10px 0 0; font-size: 15px; color: #eef5fb; }
+.meta { color: #718092; font-size: 12px; }
+.toggles { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 8px; }
+.toggles label { font: 11px ui-monospace, SFMono-Regular, monospace; color: #abb7c4; cursor: pointer; }
+.toggles input { margin: 0 4px 0 0; vertical-align: -1px; }
+.plot { min-height: 280px; padding: 8px; }
+.uplot { font-family: ui-monospace, SFMono-Regular, monospace; }
+.loading,.error { padding: 40px; color: #e6b566; }
+@media (max-width: 700px) { header { position: static; } .plot { min-height: 230px; } }

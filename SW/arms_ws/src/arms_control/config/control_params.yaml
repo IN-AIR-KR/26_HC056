@@ -81,10 +81,10 @@ arms_control_node:
     # =====================================================================
     # 제어
     # =====================================================================
-    # 신호 흐름 (자동요격은 PX4 ACRO 고정):
+    # 신호 흐름 (자동요격은 PX4 Stabilized 자세 제어):
     #
-    #   픽셀오차 ─→ [기본 추적 PID | PN] ─→ 각속도[deg/s]
-    #            ─→ clamp(max_cmd_rate_dps) ─→ ÷max_rate_dps ─→ CRSF
+    #   픽셀오차/관성 LOS ─→ [기본 추적 PID | PN] ─→ 목표 자세[deg]
+    #            ─→ clamp(max_angle_deg) ─→ 정규화 ─→ CRSF ─→ PX4 attitude controller
     #
     control:
 
@@ -93,11 +93,11 @@ arms_control_node:
 
       # ── 유도 방식 ─────────────────────────────────────────────────────
       # 0 = 기본 추적 (픽셀오차 PID 추종). 리드는 lead_gain(시간기반)으로 준다.
-      # 1 = PN 비례항법 (시선각속도를 없애도록 조종 → 미래 충돌점을 앞질러 겨냥).
-      #     리드를 alpha-beta(pn_alpha/pn_beta)로 스스로 만든다 → lead_gain 은 안 쓴다.
+      # 1 = 관성 LOS-rate PN. raw bbox + timestamped attitude를 constant-rate KF로
+      #     합성하고 bbox looming으로 Vc를 추정한다. center-holding은 없다.
       # ★ 두 방식은 배타적이다. 아래 파라미터는 "mode 0 전용 / mode 1(PN) 전용"으로 나뉘며,
       #   현재 mode 와 무관한 쪽 값은 무시된다. 소속을 각 블록 머리에 표기했다.
-      guidance_mode: 0
+      guidance_mode: 1
 
       # 중심 근처 게인 감쇠(gain_scale / pitch_scale) 스위치. false = 순수 P.
       #   켜면 느린 표적이 중심 근처일 때 게인을 0.5~0.75 배로 낮추고, roll 오차가
@@ -107,19 +107,17 @@ arms_control_node:
       gain_shaping: false
 
       # ── 기본 추적 PID [mode 0 전용] ───────────────────────────────────
-      # 단위: 정규화 픽셀오차 → 각속도[deg/s].
-      #   출력 한계는 아래 max_cmd_rate_dps 하나다 (per-PID output_limit 삭제).
-      #   kp 를 올릴 때 포화 시작점이 같이 내려간다: |오차| = max_cmd_rate_dps/kp
-      #   부터 P 항만으로 최대 출력이라, 그 위로는 kp 를 올려도 아무것도 안 바뀐다.
+      # 단위: 정규화 픽셀오차 → 목표 roll/pitch[deg].
+      # 출력은 max_angle_deg에서 포화되고 PX4 Stabilized 자세 제어기로 전달된다.
       # 튜닝 순서: kp 를 낮은 값에서 조금씩 ↑ (떨리면 30% ↓) → 그 다음 kd → lead.
       roll_pid:
-        kp: 400.0
+        kp: 130.0
         ki: 0.0
-        kd: 3.5
+        kd: 1.0
       pitch_pid:
-        kp: 400.0
+        kp: 130.0
         ki: 0.0
-        kd: 3.5
+        kd: 1.0
 
       roll_sign: 1.0
       pitch_sign: 1.0
@@ -131,31 +129,42 @@ arms_control_node:
       # 표적 속도추정(err_dot) — [mode 0 전용]. LOS 미분+LPF 로 표적 각속도를 추정한다.
       #   lead_gain(리드)과 gain_shaping 이 이 값을 공유한다(그래서 lead_ 접두사 아님).
       #   둘 다 꺼져 있으면(lead_gain=0, gain_shaping=false) 출력엔 영향 없고 로그 표시용.
-      #   PN(mode 1)은 이 대신 pn_alpha/pn_beta 로 시선각속도를 추정한다.
+      #   PN(mode 1)은 별도 constant angular-rate KF를 쓴다.
       err_dot_alpha: 0.2      # 속도추정 LPF (클수록 예측 민첩/노이즈↑)
       err_dot_clamp: 0.6      # 속도추정 스파이크 제한
 
       # ── PN 비례항법 [mode 1 전용] ─────────────────────────────────────
-      # ★ 아래 게인은 구 물리량(1.36kg·둔감) 기준 "3.6m/s 검증값"이다. 현재
-      #   기체는 더 가볍고 응답이 빨라 SITL 재검증이 필요하다.
-      #   빠른 표적 못 잡으면 pn_nav_gain ↑ / 떨리면 pn_nav_gain ↓ 또는 alpha·beta ↓
-      #   과조향·발진이면 pn_nav_gain 과 kp 부터 낮춘다.
-      pn_nav_gain: 175.0      # = 옛 50 x att_p 3.5. LOS각속도 → 각속도 명령
-      pn_center_gain: 52.5    # = 옛 15 x att_p 3.5. err→0 정면조준. 정지표적은 ↑
-      pn_alpha: 0.35          # alpha-beta 위치이득 (표적 상태추정)
-      pn_beta: 0.02           # alpha-beta 속도이득 (LOS각속도 추정). 낮추면 리드가 매끈해짐
-      pn_los_clamp: 1.5       # LOS각속도 제한. 근거리 폭주(±2↑) 차단. 0=무제한
+      # N은 3에서 시작하고, LOS-rate 노이즈와 기체 응답을 보며 조정한다.
+      # center-holding과 terminal 전용 로직은 현재 범위에서 제외했다.
+      pn:
+        navigation_ratio: 3.0
+        approach_accel_mps2: 5.0
+        target_diameter_m: 2.0
+        closing_speed_alpha: 0.25
+        kf_accel_noise: 0.8
+        kf_measurement_noise: 0.0025
+        max_lateral_accel_mps2: 12.0
+        max_measurement_age_sec: 0.20
+        camera:
+          fx: 231.16
+          fy: 231.16
+          cx: 360.0
+          cy: 240.0
+          width: 720.0
+          height: 480.0
+          r_bc: [0.0, 1.0, 0.0,
+                 1.0, 0.0, 0.0,
+                 0.0, 0.0, -1.0]
 
       # ── 출력 제한 (각속도) ────────────────────────────────────────────
-      max_cmd_rate_dps: 227.5 # 유도가 낼 수 있는 최대 각속도.
-      max_rate_dps: 400.0     # 풀스틱 각속도 = PX4 MC_ACRO_R/P_MAX (run_arms.sh 가 400 으로 설정)
+      max_angle_deg: 55.0     # CRSF 풀스틱 = PX4 Stabilized 목표 기울기
 
       # ── 추력 ──────────────────────────────────────────────────────────
       # TRACK 추력은 hover_throttle ↔ track_throttle 보간이 전부다. 겨냥이 좋을수록
       # (오차 < pursuit_gate) track 쪽으로, 빗나가면 hover 쪽으로 붙는다.
-      #   물리량 AUW 1.05kg · 추력 4kgf · TWR≈3.81 · 호버≈0.51 기준.
-      hover_throttle: 0.51    # 빗나갔을 때 최소 상승(재조준). MPC_THR_HOVER 와 일치
-      track_throttle: 0.85    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑
+      #   AUW 1.05kg · 모터당 1.5kgf(총 6kgf) · TWR≈5.71 · 이론 호버≈0.42.
+      hover_throttle: 0.42    # 1.05kg, 모터 1.5kgf×4 이론 호버. 실측 보정 필요
+      track_throttle: 0.70    # PN 추력 상한. 첫 비행은 보수적으로 유지
       pursuit_gate: 0.25      # 오차 이 이하면 full 상승 (pursuit_center_boost=true 일 때만 의미)
       # 중앙 정렬될수록 추력 세지는 로직 on/off. false=정렬 무관 상수 추력(track_throttle 고정).
       pursuit_center_boost: false   # ★ 비활성화(요청). true 면 기존처럼 center_q 로 hover↔track 보간

@@ -19,6 +19,7 @@ find_package(arms_msgs REQUIRED)
 # -----------------------------------------------------------------------
 add_library(arms_control_lib
   src/pid_controller.cpp
+  src/pn_guidance.cpp
   src/state_machine.cpp
   src/crsf_output.cpp
   src/servo_lock.cpp
@@ -50,6 +51,12 @@ ament_target_dependencies(arms_control_node
   geometry_msgs
   arms_msgs
 )
+
+if(BUILD_TESTING)
+  add_executable(pn_guidance_smoke test/pn_guidance_smoke.cpp)
+  target_link_libraries(pn_guidance_smoke arms_control_lib)
+  add_test(NAME pn_guidance_smoke COMMAND pn_guidance_smoke)
+endif()
 
 # -----------------------------------------------------------------------
 # Install

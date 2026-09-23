@@ -528,22 +528,21 @@ manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 
 ### 7.5 유도·제어 (TRACK / FIRE 상태에서 활성)
 
+> 관성 LOS-rate, PN 가속도 유도, 중력 보상 및 자세·추력 변환의 목표 설계는
+> [PN_GUIDANCE.md](PN_GUIDANCE.md)를 참고한다. 아래 내용은 현재 구현을 설명한다.
+
 파이프라인 (매 control_rate_hz 틱):
 
-1. **LOS = 픽셀 오차** (`filt_err_x/y`, LPF) → 중앙 데드존.
-   (예전의 자세보정 LOS는 **제거** — acro 전환으로 attitude 의존 삭제.)
-2. **alpha-beta 필터** (`pn_alpha`/`pn_beta`) 로 매끈한 LOS + **시선각속도(LOS rate)** 추정.
-3. **유도** (`control.guidance_mode`) — 출력은 **각속도[deg/s]** 다:
-   - **0 = 기본 추적 (기본값)**: `roll_pid`/`pitch_pid` PID(kp·ki·kd)로 LOS 오차
-     - 시간기반 리드(`lead_gain`) → 각속도 명령.
-   - **1 = 비례항법(PN)**: `각속도 = pn_nav_gain × 시선각속도 + pn_center_gain × LOS`.
-     시선각속도를 0으로 만들어 미래 충돌점을 앞질러 겨냥(빠른 표적에 유리). PID 미사용.
-
-   출력은 `±max_cmd_rate_dps`(227.5 deg/s) 로 제한한다.
-
-4. **스로틀(추격 궤적)**: 표적이 화면 중앙에 가까울수록(`center_q↑`) `hover_throttle`→`track_throttle`
-   로 상승 → 표적을 향해 대각선 돌진.
-5. **CRSF 출력**: 각속도 명령 / `max_rate_dps`(400) → CH1/CH2.
+1. **mode 0**: 기존 픽셀 오차 PID + 선택적 `lead_gain`을 유지한다.
+2. **mode 1 (PN, 기본값)**: `/arms/detections_raw` bbox를 bearing으로 변환하고,
+   영상 timestamp에 보간한 PX4 attitude로 world NED 관성 LOS를 만든다.
+3. 3축 constant angular-rate KF로 LOS/LOS-rate를 한 번만 필터링한다.
+4. bbox angular scale과 표적 지름으로 range를 구하고, 시간 차분한 looming으로 $V_c$를 추정한다.
+5. $a_{PN}=NV_c\dot l$에 접근방향 가속도를 더한 뒤 중력 보상, desired attitude/thrust로 변환한다.
+   center-holding은 넣지 않았고 yaw는 초기값을 고정한다.
+6. geometric attitude error 외부 루프가 CH1/CH2 body-rate를 만들고 PX4 ACRO가 내부 rate loop를 수행한다.
+   목표 자세는 `±max_angle_deg`로 제한한다.
+7. **CRSF 출력**: 목표 roll/pitch / `max_angle_deg` → CH1/CH2 → PX4 Stabilized.
    CH3=스로틀, CH4=중앙(yaw rate 0). PX4 ACRO 가 그 각속도로 직접 회전한다.
 6. **수동 모드**: PX4 **Altitude**, 스틱 패스스루 (FC 자동수평·고도유지).
 
@@ -589,7 +588,7 @@ arms_control_node
   |
   +-- [유도·제어]  (TRACK / FIRE 상태에서 활성)
   |     LOS(픽셀오차) → alpha-beta 필터 → 유도(기본 추적=PID / PN)
-  |       → 각속도[deg/s] → clamp(max_cmd_rate_dps) → ÷max_rate_dps → CH1/CH2
+  |       → 목표 자세[deg] → clamp(max_angle_deg) → 정규화 → CH1/CH2
   |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
   |     스로틀: hover→track (center_q 기반 추격 상승) → CH3
   |

@@ -1,0 +1,55 @@
+# A.R.M.S. uPlot 비행 로그 뷰어
+
+`auto_save:=true`가 만든 rosbag을 브라우저에서 확대·비교할 수 있는 uPlot 기반 뷰어다.
+영상은 기존 `scripts/bag_visualize`가 담당하고, 이 도구는 수치 토픽을 다룬다.
+
+## 녹화
+
+```bash
+ros2 launch arms_bringup arms.launch.py auto_save:=true
+```
+
+자동모드가 `SEARCH`에 들어가면 `~/arms_flight_log/<일시>/`에 녹화를 시작하고 ARM 스위치를
+내리면 종료한다. 현재 기본 녹화 토픽은 다음과 같다.
+
+- 영상: `/arms/ui_image/compressed`
+- 검출: `/arms/detections_raw`, `/arms/detections`, `/arms/detector_status`
+- PN: `/arms/pn_debug`, `/arms/control_debug`, `/arms/debug_looming`
+- 자세/FC: `/arms/attitude_quaternion`, `/arms/crsf_tx`, `/arms/crsf_rx`
+- 상태/입력: `/arms/mission_state`, `/arms/command`
+
+`detections_raw`는 detector KF 전 측정이고 `detections`는 detector KF 후 결과다. PN은 raw만
+입력받아 자체 timestamp-aware LOS KF를 한 번 적용한다.
+
+## 실행
+
+ROS 2가 설치되고 workspace가 source된 Ubuntu에서 실행한다.
+
+```bash
+cd /path/to/ARMS/SW
+python3 scripts/bag_uplot/view_bag.py ~/arms_flight_log/20260923_153000
+```
+
+자동으로 CSV와 `data.json`을 만들고 `http://127.0.0.1:8765/`를 연다. 입력은 비행 폴더,
+그 안의 `bag/`, 또는 기존 CSV 폴더 모두 가능하다.
+
+```bash
+# 브라우저를 자동으로 열지 않기
+python3 scripts/bag_uplot/view_bag.py <bag> --no-browser
+
+# 정적 결과만 생성
+python3 scripts/bag_uplot/view_bag.py <bag> --export-only --outdir /tmp/arms_view
+
+# 다른 포트
+python3 scripts/bag_uplot/view_bag.py <bag> --port 9000
+```
+
+그래프 위에서 드래그하면 시간축을 확대한다. 범례 아래 체크박스로 series를 켜고 끌 수 있다.
+새 PN 로그의 주요 필드는 LOS/LOS-rate, range, closing speed, PN·접근 가속도, 목표/실제
+roll·pitch, PX4에 보내는 목표 자세, throttle이다.
+
+## 의존성
+
+- bag 변환: ROS 2의 `rosbag2_py`, `rosidl_runtime_py`, PyYAML
+- 브라우저: uPlot을 jsDelivr에서 읽으므로 최초 열 때 인터넷 연결 필요
+- 별도 npm 설치는 필요 없다.

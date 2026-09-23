@@ -1183,18 +1183,18 @@ class ArmsUINode(Node):
             roll = self._latest_cmd.x
             pitch = self._latest_cmd.y
             thr = self._latest_cmd.z
-            scale = 8 / 3.5  # deg/s 당 픽셀 (옛 8 px/deg 와 같은 화면 길이)
+            scale = 8  # desired attitude deg 당 픽셀
             rx = int(roll * scale)
             ry = int(pitch * scale)
             cv2.arrowedLine(frame, (cx_f, cy_f), (cx_f + rx, cy_f + ry),
                             (0, 0, 255), 2, tipLength=0.2)
-            cv2.putText(frame, "CMD(rate deg/s)", (cx_f + rx + 5, cy_f + ry + 15),
+            cv2.putText(frame, "CMD(attitude deg)", (cx_f + rx + 5, cy_f + ry + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
             # --- 숫자 디버그 텍스트 (좌상단) ---
             cv2.putText(frame, f"err  x={self._latest_state.error_x:+.2f} y={self._latest_state.error_y:+.2f}",
                         (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            cv2.putText(frame, f"cmd  r={roll:+.0f} p={pitch:+.0f} deg/s  thr={thr:.2f}",
+            cv2.putText(frame, f"cmd  r={roll:+.0f} p={pitch:+.0f} deg  thr={thr:.2f}",
                         (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
         # --- State border ---
