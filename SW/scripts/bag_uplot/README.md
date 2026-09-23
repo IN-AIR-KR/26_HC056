@@ -6,7 +6,11 @@
 ## 녹화
 
 ```bash
+# 실기체
 ros2 launch arms_bringup arms.launch.py auto_save:=true
+
+# PX4/Gazebo SITL
+ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true
 ```
 
 자동모드가 `SEARCH`에 들어가면 `~/arms_flight_log/<일시>/`에 녹화를 시작하고 ARM 스위치를

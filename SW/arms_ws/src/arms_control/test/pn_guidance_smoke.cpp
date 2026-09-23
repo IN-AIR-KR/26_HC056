@@ -30,6 +30,7 @@ int main() {
   PnParameters params;
   params.target_diameter_m = 2.0;
   params.closing_speed_alpha = 1.0;
+  params.max_closing_speed_mps = 20.0;
   guidance.set_parameters(params);
 
   const Quaternion identity;
@@ -45,5 +46,9 @@ int main() {
   const auto &crossing = guidance.output();
   assert(norm(crossing.los_rate_ned) > 1e-3);
   assert(norm(crossing.acceleration_pn_ned) > 1e-3);
+
+  // 한 프레임에서 bbox가 비정상적으로 커져도 Vc가 PN을 폭주시켜선 안 된다.
+  assert(guidance.update_detection(1.15, 0.53, 0.50, 0.80, 0.80, identity));
+  assert(guidance.output().closing_speed_mps <= params.max_closing_speed_mps);
   return 0;
 }

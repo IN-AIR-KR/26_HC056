@@ -625,8 +625,12 @@ PN acceleration
 
 $$
 u_r=\operatorname{sat}\left(\frac{\phi_d}{\phi_{max}},-1,1\right),\qquad
-u_p=\operatorname{sat}\left(\frac{\theta_d}{\theta_{max}},-1,1\right)
+u_p=\operatorname{sat}\left(\frac{-\theta_d}{\theta_{max}},-1,1\right)
 $$
+
+pitch에만 음수가 붙는 이유는 좌표 convention 차이다. NED/FRD Euler pitch는
+$\theta_d<0$이 기수 하강이지만, PX4 manual pitch 입력은 양의 스틱이 기수 하강이다.
+이 변환을 생략하면 세로 유도가 정확히 반대 방향으로 동작한다.
 
 SITL의 `MPC_MAN_TILT_MAX`와 `control.max_angle_deg`는 모두 $55^\circ$로 맞춘다.
 실기체 PX4의 Stabilized 풀스틱 기울기도 같은 값으로 설정해야 한다.

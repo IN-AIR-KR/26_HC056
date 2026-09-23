@@ -4,6 +4,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
     ros2 launch arms_bringup arms_sitl.launch.py              # PX4+Gazebo 포함 전부
     ros2 launch arms_bringup arms_sitl.launch.py px4:=false   # PX4 가 이미 떠 있을 때 스택만
     ros2 launch arms_bringup arms_sitl.launch.py detection:=docker   # 검출을 컨테이너로
+    ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true     # 비행 로그 자동 저장
 
 이거 하나로 다음을 전부 띄운다:
   - PX4 SITL + Gazebo       (arms_sim/px4_sitl.launch.py include, px4:=false 로 생략)  [arms_sim]
@@ -155,6 +156,9 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="false",
                               description="rviz 3D 시각화(기체·표적·궤적) 기동 여부. "
                                           "sitl_viz(진실값 발행) + rviz2 가 같이 뜬다."),
+        DeclareLaunchArgument(
+            "auto_save", default_value="false",
+            description="SEARCH 진입부터 ARM OFF까지 ~/arms_flight_log에 rosbag 자동 저장"),
         DeclareLaunchArgument("detection", default_value="host",
                               description="검출 실행 위치: host(기본, 호스트 in-process YOLO) | "
                                           "docker(검출 컨테이너). 동시에 띄우면 노드 이름이 "
@@ -224,6 +228,13 @@ def generate_launch_description():
         Node(
             package="arms_ui", executable="arms_ui_node",
             name="arms_ui_node", output="screen",
+        ),
+        # SITL 비행 로그. 실기체 arms.launch.py와 같은 recorder를 사용한다.
+        # SEARCH 진입 시 시작하고 ARM 스위치를 내리거나 스택이 종료될 때 bag을 마감한다.
+        Node(
+            package="arms_ui", executable="flight_recorder",
+            name="flight_recorder", output="screen",
+            condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
         # 3D 시각화 (rviz:=true 일 때만). gz 진실값 → TF/궤적/마커.
         #   rviz 를 안 띄우면 발행할 이유도 없으므로 같은 인자로 묶는다.

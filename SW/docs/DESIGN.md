@@ -540,11 +540,10 @@ manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 4. bbox angular scale과 표적 지름으로 range를 구하고, 시간 차분한 looming으로 $V_c$를 추정한다.
 5. $a_{PN}=NV_c\dot l$에 접근방향 가속도를 더한 뒤 중력 보상, desired attitude/thrust로 변환한다.
    center-holding은 넣지 않았고 yaw는 초기값을 고정한다.
-6. geometric attitude error 외부 루프가 CH1/CH2 body-rate를 만들고 PX4 ACRO가 내부 rate loop를 수행한다.
-   목표 자세는 `±max_angle_deg`로 제한한다.
-7. **CRSF 출력**: 목표 roll/pitch / `max_angle_deg` → CH1/CH2 → PX4 Stabilized.
-   CH3=스로틀, CH4=중앙(yaw rate 0). PX4 ACRO 가 그 각속도로 직접 회전한다.
-6. **수동 모드**: PX4 **Altitude**, 스틱 패스스루 (FC 자동수평·고도유지).
+6. 목표 자세는 `±max_angle_deg`로 제한하며 Jetson에서 별도 attitude 외부 루프를 돌리지 않는다.
+7. **CRSF 출력**: 목표 roll과 `-pitch`를 `max_angle_deg`로 정규화해 CH1/CH2로 보내고,
+   PX4 Stabilized가 내부 attitude/rate loop를 수행한다. CH3=스로틀, CH4=중앙(yaw rate 0).
+8. **수동 모드**: PX4 **Altitude**, 스틱 패스스루 (FC 자동수평·고도유지).
 
 ### 7.6 sitl_bridge_node 동작 (SITL 전용)
 

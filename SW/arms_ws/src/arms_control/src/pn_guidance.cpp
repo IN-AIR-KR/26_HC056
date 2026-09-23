@@ -256,7 +256,12 @@ bool PnGuidance::update_detection(double stamp_sec, double x_center,
     if (scale_initialized_) {
       const double dt = stamp_sec - previous_scale_stamp_sec_;
       if (dt > 1e-3 && dt < 0.5) {
-        const double vc_raw = (previous_range_m_ - range_m) / dt;
+        // bbox 크기는 프레임마다 흔들리므로 미분값에 큰 스파이크가 생긴다.
+        // 물리적으로 가능한 접근속도 범위에서 먼저 자른 뒤 LPF에 넣어야
+        // 한 프레임의 잘못된 bbox가 이후 여러 프레임의 PN을 포화시키지 않는다.
+        const double vc_limit = std::max(0.0, params_.max_closing_speed_mps);
+        const double vc_raw = std::clamp(
+            (previous_range_m_ - range_m) / dt, -vc_limit, vc_limit);
         const double a = std::clamp(params_.closing_speed_alpha, 0.0, 1.0);
         closing_speed_mps_ = a * vc_raw + (1.0 - a) * closing_speed_mps_;
       }
@@ -270,7 +275,8 @@ bool PnGuidance::update_detection(double stamp_sec, double x_center,
   const Vec3 los = los_filter_.los();
   const Vec3 los_rate = los_filter_.los_rate();
   const Vec3 omega = cross(los, los_rate);
-  const double vc = std::max(0.0, closing_speed_mps_);
+  const double vc = std::clamp(closing_speed_mps_, 0.0,
+                               std::max(0.0, params_.max_closing_speed_mps));
   Vec3 a_pn = params_.navigation_ratio * vc * los_rate;
   const double lateral = norm(a_pn);
   if (params_.max_lateral_accel_mps2 > 0.0 &&

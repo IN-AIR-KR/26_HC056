@@ -146,6 +146,7 @@ struct PnParameters {
   double approach_accel_mps2{5.0};
   double target_diameter_m{2.0};
   double closing_speed_alpha{0.25};
+  double max_closing_speed_mps{20.0};
   double kf_accel_noise{0.8};
   double kf_measurement_noise{0.0025};
   double hover_throttle{0.42};

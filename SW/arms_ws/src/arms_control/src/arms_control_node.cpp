@@ -133,6 +133,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pn.approach_accel_mps2", 5.0);
     declare_parameter("control.pn.target_diameter_m", 2.0);
     declare_parameter("control.pn.closing_speed_alpha", 0.25);
+    declare_parameter("control.pn.max_closing_speed_mps", 20.0);
     declare_parameter("control.pn.kf_accel_noise", 0.8);
     declare_parameter("control.pn.kf_measurement_noise", 0.0025);
     declare_parameter("control.pn.max_lateral_accel_mps2", 12.0);
@@ -230,6 +231,8 @@ class ArmsControlNode : public rclcpp::Node {
     pn_params_.approach_accel_mps2 = get_parameter("control.pn.approach_accel_mps2").as_double();
     pn_params_.target_diameter_m = get_parameter("control.pn.target_diameter_m").as_double();
     pn_params_.closing_speed_alpha = get_parameter("control.pn.closing_speed_alpha").as_double();
+    pn_params_.max_closing_speed_mps =
+        get_parameter("control.pn.max_closing_speed_mps").as_double();
     pn_params_.kf_accel_noise = get_parameter("control.pn.kf_accel_noise").as_double();
     pn_params_.kf_measurement_noise = get_parameter("control.pn.kf_measurement_noise").as_double();
     pn_params_.max_lateral_accel_mps2 =
@@ -325,6 +328,8 @@ class ArmsControlNode : public rclcpp::Node {
               pn_params_.target_diameter_m = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.closing_speed_alpha") {
               pn_params_.closing_speed_alpha = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.max_closing_speed_mps") {
+              pn_params_.max_closing_speed_mps = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.kf_accel_noise") {
               pn_params_.kf_accel_noise = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.kf_measurement_noise") {
@@ -844,7 +849,11 @@ class ArmsControlNode : public rclcpp::Node {
           if (fabs(ex) > 0.12)      pitch_scale = 0.8;
           else if (fabs(ex) > 0.06) pitch_scale = 0.9;
         }
-        pitch_cmd_deg = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
+        // image down(+ey)=body forward이므로 목표 Euler pitch는 기수 하강(-)이다.
+        // 아래 CRSF 변환에서 PX4 stick convention에 맞게 다시 반전되므로 mode 0의
+        // 실제 채널 방향은 기존과 동일하다.
+        pitch_cmd_deg = -pitch_sign_ * gain_scale * pitch_scale *
+                        pid_pitch_->compute(ey_lead, dt);
       }
 
       // ---- 추격 궤적(Pursuit): 조준하며 처음부터 상승 ----
@@ -1018,7 +1027,9 @@ class ArmsControlNode : public rclcpp::Node {
         const double roll = std::clamp(roll_cmd_deg, -angle_limit, angle_limit);
         const double pitch = std::clamp(pitch_cmd_deg, -angle_limit, angle_limit);
         crsf[0] = CrsfOutput::norm_to_crsf(roll / angle_limit);
-        crsf[1] = CrsfOutput::norm_to_crsf(pitch / angle_limit);
+        // Euler pitch(NED/FRD)는 음수=기수 하강이지만 PX4 manual pitch stick은
+        // 양수=스틱 전진=기수 하강이다. 따라서 desired Euler pitch를 반전한다.
+        crsf[1] = CrsfOutput::norm_to_crsf(-pitch / angle_limit);
         crsf[2] = CrsfOutput::thr_to_crsf(static_cast<double>(thrust));
         crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw 중앙 = yaw rate 0(헤딩 유지)
       }

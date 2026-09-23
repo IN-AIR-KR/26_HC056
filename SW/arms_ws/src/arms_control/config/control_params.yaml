@@ -141,6 +141,7 @@ arms_control_node:
         approach_accel_mps2: 5.0
         target_diameter_m: 2.0
         closing_speed_alpha: 0.25
+        max_closing_speed_mps: 20.0  # bbox 미분 스파이크 제한. 로그의 145m/s 같은 값 차단
         kf_accel_noise: 0.8
         kf_measurement_noise: 0.0025
         max_lateral_accel_mps2: 12.0
