@@ -129,13 +129,99 @@ class ArmsControlNode : public rclcpp::Node {
     //   표적이 중앙에 안 붙는 증상을 만들 수 있다. 먼저 끄고 순수 P 를 본 뒤,
     //   지터가 실제로 보이면 그때 켠다.
     declare_parameter("control.gain_shaping", false);  // 유도 출력 각속도 상한[deg/s]
-    // 유도 방식: 0=기본 추적(현위치 추종 PID), 1=비례항법(PN, 시선각속도 제거/빠른표적)
-    declare_parameter("control.guidance_mode", 0);
+    // 유도 방식: 0=기본 추적(현위치 추종 PID), 1=비례항법(PN, 시선각속도 제거/빠른표적),
+    //            2=IBVS 공선유도(배리어 Lyapunov). 현재 기본값.
+    declare_parameter("control.guidance_mode", 2);
     declare_parameter("control.pn_nav_gain", 175.0);    // PN 항법이득 N (LOS각속도→기울기). 못따라가면↑ 떨리면↓
     declare_parameter("control.pn_center_gain", 52.5);  // 표적 중심유지(화면 이탈 방지)
     declare_parameter("control.pn_alpha", 0.35);         // alpha-beta 위치이득 (표적 상태추정)
     declare_parameter("control.pn_beta", 0.02);         // alpha-beta 속도이득 (LOS각속도 추정)
     declare_parameter("control.pn_los_clamp", 1.5);     // PN 시선각속도 제한(0=무제한)
+
+    // ── IBVS 공선유도 [mode 2 전용] ─────────────────────────────────────
+    // 논문: Yang, Bai, She, Quan, "High-Speed Interception Multicopter Control
+    //       by Image-based Visual Servoing" (arXiv:2404.08296) 식 (12),(13).
+    //
+    // 논문은 전방 카메라라 설계 LOS n_td(=광축)와 추력축 n_f 가 90° 어긋나 있고,
+    // 그래서 n_td 정렬 명령이 yaw 성분을 갖는다(논문은 R_tilt 로 따로 제거).
+    // 우리 기체는 카메라가 기체 +Z(=추력축)를 본다 → n_td = n_c = n_f 다. 결과:
+    //   · z1 = 1 - n_f^T n_t 를 풀면 자세 R_b^e 가 양변에서 상쇄되어 사라진다.
+    //       => z1 = 1 - cos(theta),  theta = 표적이 광축에서 벗어난 각도.
+    //          픽셀과 화각만으로 계산된다. 자세/거리/속도/DKF 전부 불필요.
+    //   · 회전축 e3 x (표적방향) 은 기체 z 에 수직 => yaw 성분이 구조적으로 0.
+    //          (지금 yaw 를 중앙 고정하는 것과 일치. 억지로 뺄 필요가 없다.)
+    //
+    // 픽셀오차(정규화 ±0.5) → tan 단위 이미지좌표 변환에 화각이 필요하다.
+    //   x_n = 2*tan(hfov/2) * error_x,   y_n = 2*tan(hfov/2)*aspect * error_y
+    // SITL 기본값은 arms_sim 기체 SDF 의 upward_camera 스펙(hfov 2.0rad, 720x480).
+    // ★ 실기체 FPV 카메라 화각이 다르면 hw_overrides.yaml 에서 덮어쓸 것.
+    declare_parameter("control.ibvs_hfov_deg", 114.5916);  // 수평 화각[deg] (=2.0 rad)
+    declare_parameter("control.ibvs_aspect", 0.6666667);   // 세로/가로 = 480/720
+    // 배리어 kb: z1 이 이 값에 닿으면 게인이 발산한다 = "여기는 못 넘어간다".
+    //   z1 = 1 - cos(theta) 이므로 kb 는 허용 최대 이탈각으로 환산된다.
+    //   화면 모서리의 z1 = 0.529 (hfov 115°, 3:2) 이므로 그보다 약간 크게 잡는다.
+    //   낮추면 표적을 더 중앙에 붙잡아두려 하고(공격적), 높이면 가장자리까지 허용.
+    declare_parameter("control.ibvs_kb", 0.55);
+    // 배리어항 계수[deg/s]. 유도 전체의 세기. 못 따라가면 ↑, 과조향이면 ↓.
+    declare_parameter("control.ibvs_gain", 200.0);
+    // 선형항 계수[deg/s]. 순수 배리어는 중앙 근처에서 theta^3 라 거의 0 이다
+    //   (논문은 그 구간을 자세루프 omega2 가 메우는데 지금은 omega1 만 쓴다).
+    //   0 으로 두면 논문 그대로의 순수 배리어 거동을 볼 수 있다.
+    declare_parameter("control.ibvs_center_gain", 100.0);
+    // LOS각속도항 계수 — ★횡단 표적 요격의 핵심★
+    //   alpha-beta 가 추정한 시선각속도(losf_*_dot_)에 곱한다. 한 항이 두 일을 한다:
+    //     · 표적이 화면을 가로지를 때  → 예측 조준(리드). PN 과 같은 역할.
+    //     · 내가 과조향해 오차가 빨리 줄 때 → 브레이크(감쇠). PID 의 kd 와 같은 역할.
+    //   배리어항만으로는 '표적이 지금 있는 곳'만 겨냥한다(pure pursuit). 횡단
+    //   표적은 거리가 가까워질수록 LOS각속도가 1/거리로 치솟아서(3.6m/s 표적
+    //   기준 10m 에서 21deg/s, 3m 에서 69deg/s) 게인을 아무리 올려도 종말에
+    //   반드시 빗나간다 — 리드가 없으면 구조적으로 못 맞힌다.
+    //   크기의 의미: 이 값 / (kx * 57.3) = 항법계수 N = 명령각속도 / LOS각속도.
+    //     175 → N=1.0  "시선과 같은 속도로 돈다" = 카메라만 붙어 있고 리드 없음
+    //     220 → N=1.2  약한 리드 (기본값 — 아래 ★주의★ 참고)
+    //     350 → N=2.0  강한 리드. SITL 에서 심한 진동을 유발해 낮췄다.
+    //
+    //   ★주의★ 이 항은 losf_x_dot_(alpha-beta 로 추정한 '화면이 움직이는 속도')
+    //   에 곱하는데, 그 속도에는 "표적이 움직여서"뿐 아니라 "내가 회전해서
+    //   카메라가 같이 돌아가서"도 섞여 있다(los_x = filt_err_x_ 는 자세 보정이
+    //   없는 순수 픽셀오차라서). 배리어항(z1)은 정적 정렬 오차라 자세가 기하학적
+    //   으로 상쇄되지만, 이 시간미분항은 그 상쇄가 안 된다 — 내 회전을 표적
+    //   움직임으로 착각해 더 돌고, 그게 더 큰 착각을 만드는 되먹임이 생길 수
+    //   있다. 게인을 낮추면 이 되먹임의 증폭이 줄어 완화되지만 원인 자체가
+    //   없어지진 않는다. 근본 해결은 자이로 각속도로 자기회전분을 빼는 것인데
+    //   (=논문의 R_b^e 보정과 같은 역할, 지금은 미구현) 그건 더 큰 변경이다.
+    //   흔들리면 ↓ (175까지, 그래도 흔들리면 pn_alpha/pn_beta 도 원인일 수 있음)
+    //   종말에 뒤처지면(못 맞추면) ↑ (350 이상은 SITL 에서 진동 확인됨, 주의)
+    declare_parameter("control.ibvs_los_rate_gain", 220.0);
+
+    // ── 근접도 기반 게인/스로틀 스케줄링 ────────────────────────────────
+    //   화면 속 표적 크기(loom_s_ema_, 클수록 가까움)를 기준으로 가까워질수록
+    //   회전 게인과 최대 추력을 같이 낮춘다. 원근 때문에 같은 실제 오차라도
+    //   가까울수록 화면 오차가 커져 PID/PN이 과민반응(오버슈트)하기 쉽고,
+    //   접근 속도가 빠르면 그 과민반응을 보정할 시간도 부족해진다 — 그래서
+    //   회전(각속도)과 병진(추력) 둘 다 같이 스케줄링해야 의미가 있다.
+    declare_parameter("control.near_size_start", 0.15);   // 이 크기부터 스케줄링 시작
+    declare_parameter("control.near_size_full", 0.35);    // 이 크기에서 최대(min_*)로 적용됨
+    declare_parameter("control.min_gain_scale", 0.4);     // 가장 가까울 때 회전 게인 배율(하한)
+    declare_parameter("control.min_throttle_scale", 0.6); // 가장 가까울 때 추력 상한 배율(하한)
+
+    // ── τ(충돌까지 시간) 기반 추력 감속 ─────────────────────────────────
+    // 위 near_size 스케줄링은 "화면 속 크기"만 보고 "접근 속도"는 모른다 — 같은
+    // 크기라도 천천히 다가오면 여유, 빠르게 다가오면 임박인데 구분을 못 한다.
+    // τ = 크기/팽창률 = 몇 초 뒤 충돌(update_looming() 에서 항상 계산됨, 스케일
+    // 불변이라 표적 실제크기 불필요)은 접근 속도까지 반영하는 더 나은 신호다.
+    //
+    // 겨냥(guidance_mode 2)이 좋아질수록 접근이 빨라지는데, 추력은 여전히
+    // "정렬 품질"만 보고 최대로 밀어붙인다(center_q, 위 pursuit 블록) → 정렬이
+    // 좋아도 관성 때문에 표적을 살짝 지나칠 수 있다. τ 가 작아질수록(=곧 충돌)
+    // 정렬 품질과 무관하게 추력을 hover 쪽으로 눌러, 지나치기 전에 속도를 줄이고
+    // 정밀 정렬에 시간을 벌어준다.
+    //   tau_ease_start 보다 멀면(τ 큼) 영향 없음(=지금과 동일).
+    //   tau_ease_full  에서 최소 배율까지 눌린다.
+    // 표적을 아예 못 볼 때/안 다가올 때는 τ=+inf 이므로 자동으로 영향 없음(1.0).
+    declare_parameter("control.tau_ease_start", 1.0);   // 이 초 전부터 서서히 감속 시작[s]
+    declare_parameter("control.tau_ease_full", 0.3);    // 이 초에서 최소 배율 적용[s] (tau_fire_sec 과 비슷한 크기가 자연스럽다)
+    declare_parameter("control.tau_ease_min_scale", 0.3); // τ 임박시 추력 배율 하한 (0=완전 hover, 1=끔)
 
     // ----------------------------------------------------------------
     // State machine
@@ -228,6 +314,20 @@ class ArmsControlNode : public rclcpp::Node {
     pn_alpha_ = get_parameter("control.pn_alpha").as_double();
     pn_beta_ = get_parameter("control.pn_beta").as_double();
     pn_los_clamp_ = get_parameter("control.pn_los_clamp").as_double();
+    ibvs_hfov_deg_ = get_parameter("control.ibvs_hfov_deg").as_double();
+    ibvs_aspect_ = get_parameter("control.ibvs_aspect").as_double();
+    ibvs_kb_ = get_parameter("control.ibvs_kb").as_double();
+    ibvs_gain_ = get_parameter("control.ibvs_gain").as_double();
+    ibvs_center_gain_ = get_parameter("control.ibvs_center_gain").as_double();
+    ibvs_los_rate_gain_ = get_parameter("control.ibvs_los_rate_gain").as_double();
+    update_ibvs_scale();
+    near_size_start_ = get_parameter("control.near_size_start").as_double();
+    near_size_full_ = get_parameter("control.near_size_full").as_double();
+    min_gain_scale_ = get_parameter("control.min_gain_scale").as_double();
+    min_throttle_scale_ = get_parameter("control.min_throttle_scale").as_double();
+    tau_ease_start_ = get_parameter("control.tau_ease_start").as_double();
+    tau_ease_full_ = get_parameter("control.tau_ease_full").as_double();
+    tau_ease_min_scale_ = get_parameter("control.tau_ease_min_scale").as_double();
     crsf_out_ = std::make_unique<CrsfOutput>(
         get_parameter("crsf.port").as_string(),
         static_cast<int>(get_parameter("crsf.baud").as_int()));
@@ -302,6 +402,20 @@ class ArmsControlNode : public rclcpp::Node {
               pn_beta_ = p.as_double();
             else if (n == "control.pn_los_clamp")
               pn_los_clamp_ = p.as_double();
+            else if (n == "control.ibvs_hfov_deg") {
+              ibvs_hfov_deg_ = p.as_double();
+              update_ibvs_scale();
+            } else if (n == "control.ibvs_aspect") {
+              ibvs_aspect_ = p.as_double();
+              update_ibvs_scale();
+            } else if (n == "control.ibvs_kb")
+              ibvs_kb_ = p.as_double();
+            else if (n == "control.ibvs_gain")
+              ibvs_gain_ = p.as_double();
+            else if (n == "control.ibvs_center_gain")
+              ibvs_center_gain_ = p.as_double();
+            else if (n == "control.ibvs_los_rate_gain")
+              ibvs_los_rate_gain_ = p.as_double();
             else if (n == "mission.tau_fire_sec")
               sm_->set_tau_fire(p.as_double());
             else if (n == "mission.loom_s_min")
@@ -332,6 +446,20 @@ class ArmsControlNode : public rclcpp::Node {
             } else if (n == "control.pitch_pid.kd") {
               pkd_ = p.as_double();
               pid_changed = true;
+            } else if (n == "control.near_size_start") {
+              near_size_start_ = p.as_double();
+            } else if (n == "control.near_size_full") {
+              near_size_full_ = p.as_double();
+            } else if (n == "control.min_gain_scale") {
+              min_gain_scale_ = p.as_double();
+            } else if (n == "control.min_throttle_scale") {
+              min_throttle_scale_ = p.as_double();
+            } else if (n == "control.tau_ease_start") {
+              tau_ease_start_ = p.as_double();
+            } else if (n == "control.tau_ease_full") {
+              tau_ease_full_ = p.as_double();
+            } else if (n == "control.tau_ease_min_scale") {
+              tau_ease_min_scale_ = p.as_double();
             }
           }
           if (pid_changed) {
@@ -494,7 +622,11 @@ class ArmsControlNode : public rclcpp::Node {
   //   τ = s/ṡ = d/v_closing. 초점거리·표적 실제크기가 소거되므로 카메라 스펙·표적
   //   크기 모두에 무관하다(작은 x500도, 큰 풍선도 같은 로직으로 접촉 직전 발사).
   void update_looming(const arms_msgs::msg::DetectionArray::SharedPtr & msg) {
-    if (msg->detections.empty()) { loom_init_ = false; return; }  // 표적 소실 → 추정 리셋
+    if (msg->detections.empty()) {
+      loom_init_ = false;
+      tau_sec_ = std::numeric_limits<double>::infinity();  // 표적 소실 → 급함 없음(추력 제약 해제)
+      return;
+    }
     // 검출 노드는 표적 1개만 발행. sphere/compact 표적이라 지름∝크기, 한 축 clip 대비 max.
     const auto & b = msg->detections.front();
     double s = std::max(b.width, b.height);
@@ -513,10 +645,11 @@ class ArmsControlNode : public rclcpp::Node {
     loom_s_ema_ = loom_size_alpha_ * s + (1.0 - loom_size_alpha_) * loom_s_ema_;
     double rate = (loom_s_ema_ - s_prev) / dt;  // ṡ (정규화크기/초)
     loom_rate_ema_ = loom_rate_alpha_ * rate + (1.0 - loom_rate_alpha_) * loom_rate_ema_;
-    // 닫히는 중(ṡ>0)일 때만 τ 유효. 아니면 무한대로 두어 FIRE 안 되게.
-    double tau = (loom_rate_ema_ > 1e-4)
+    // 닫히는 중(ṡ>0)일 때만 τ 유효. 아니면 무한대로 두어 FIRE 안 되게(=추력도 안 눌림).
+    const double tau = (loom_rate_ema_ > 1e-4)
                    ? (loom_s_ema_ / loom_rate_ema_)
                    : std::numeric_limits<double>::infinity();
+    tau_sec_ = tau;   // control_loop() 의 추력 스케줄링이 재사용 (FIRE 활성 여부와 무관하게 항상 갱신)
     // 비전 τ FIRE 는 looming_fire_enabled 일 때만. 꺼져 있으면(현재 실기체·SITL)
     //   τ 로 FIRE 하지 않는다 — TRACK 유지하며 추격만 하고 FIRE 상태엔 진입 안 함.
     //   SITL 은 대신 심판 /arms/hit 로 RTL, 실기체는 지금 자동 요격을 아직 안 켬.
@@ -530,6 +663,23 @@ class ArmsControlNode : public rclcpp::Node {
     lm.z = loom_rate_ema_;
     if (pub_loom_->get_subscription_count() > 0)  // 튜닝용: 구독자 있을 때만 발행
       pub_loom_->publish(lm);
+  }
+
+  /* 화각/종횡비 → 정규화오차(±0.5) 를 tan 단위 이미지좌표로 바꾸는 배율.
+     error=±0.5(화면 가장자리)에서 x_n = tan(hfov/2) 가 되도록 맞춘다.
+     세로는 정사각 픽셀 가정으로 tan(vfov/2) = tan(hfov/2) * (세로/가로). */
+  void update_ibvs_scale() {
+    const double half = 0.5 * ibvs_hfov_deg_ * M_PI / 180.0;
+    const double t = std::tan(std::clamp(half, 1e-3, 1.5533));  // <89°로 제한(tan 발산 방지)
+    ibvs_kx_ = 2.0 * t;
+    ibvs_ky_ = 2.0 * t * ibvs_aspect_;
+    RCLCPP_INFO(get_logger(),
+                "IBVS 스케일: hfov=%.1fdeg aspect=%.3f → kx=%.3f ky=%.3f "
+                "(화면 모서리 z1=%.3f, kb=%.3f)",
+                ibvs_hfov_deg_, ibvs_aspect_, ibvs_kx_, ibvs_ky_,
+                1.0 - 1.0 / std::sqrt(1.0 + 0.25 * (ibvs_kx_ * ibvs_kx_ +
+                                                    ibvs_ky_ * ibvs_ky_)),
+                ibvs_kb_);
   }
 
   static double apply_deadzone(double e, double dz) {
@@ -691,7 +841,10 @@ class ArmsControlNode : public rclcpp::Node {
     double pitch_rate_cmd = 0.0;
     float thrust = 0.f;
 
-    if (state == State::TRACK || state == State::FIRE) {
+    // LOCK 단계부터 필터(LOS/오차미분/alpha-beta 추정)를 미리 갱신해둔다.
+    // 실제 회전/추력 명령은 여전히 TRACK/FIRE 에서만 나가지만(아래 안쪽 if),
+    // 발사(TRACK 진입) 순간 filt_err_x_/y_ 등이 0부터 다시 시작하는 콜드스타트를 없애기 위함.
+    if (state == State::LOCK || state == State::TRACK || state == State::FIRE) {
       double raw_ex = sm_->current_error_x();
       double raw_ey = sm_->current_error_y();
       filt_err_x_ =
@@ -746,7 +899,60 @@ class ArmsControlNode : public rclcpp::Node {
         losf_y_dot_ = std::clamp(losf_y_dot_, -3.0, 3.0);
       }
 
-      if (guidance_mode_ == 1) {
+      // ---- LOCK 프리웜 디버그: filt_err_x/y_ 가 실제로 수렴해가는지 눈으로 확인용 ----
+      //   TRACK 진입 순간 이 값이 이미 실제 오차 근처여야 콜드스타트 수정이 제대로 먹은 것.
+      if (state == State::LOCK && (++dbg_count_ % 6 == 0)) {
+        RCLCPP_INFO(get_logger(), "LOCK 프리웜: filt_err=(%.3f,%.3f) raw=(%.3f,%.3f)",
+                    filt_err_x_, filt_err_y_, raw_ex, raw_ey);
+      }
+
+      // ---- 여기부터 실제 회전/추력 명령을 만든다: TRACK/FIRE(발사 이후)에서만 ----
+      if(state == State::TRACK || state == State::FIRE) {
+      if (guidance_mode_ == 2) {
+        // ===== IBVS 공선유도 (배리어 Lyapunov) =====
+        //   논문 식 (12),(13) 을 우리 기하(광축 = 추력축 = 기체 +Z)에 적용한 것.
+        //   목표: 추력축을 시선에 정렬 = "표적을 겨누면 곧 표적으로 가속한다".
+        //   자세/거리/속도 없이 픽셀과 화각만으로 계산된다 (자세 R_b^e 가 상쇄됨).
+
+        // ① 픽셀오차 → tan 단위 정규화 이미지좌표. error=±0.5 가 화면 가장자리.
+        const double x_n = ibvs_kx_ * los_x;
+        const double y_n = ibvs_ky_ * los_y;
+        const double Nn  = std::sqrt(1.0 + x_n * x_n + y_n * y_n);
+
+        // ② 공선 오차 z1 = 1 - cos(theta). theta = 광축에서 벗어난 각도.
+        double z1 = 1.0 - 1.0 / Nn;
+        // 배리어 안쪽으로 강제한다. kb 를 화면보다 작게 잡았거나 검출이 튀어
+        //   z1 >= kb 가 되면 분모가 음수로 넘어가 명령 부호가 뒤집힌다 — 그러면
+        //   드론이 표적 반대로 돌아버린다. 여기서 반드시 막아야 한다.
+        const double z1_max = ibvs_kb_ * 0.995;
+        if (z1 > z1_max) z1 = z1_max;
+        const double denom   = std::max(ibvs_kb_ * ibvs_kb_ - z1 * z1, 1e-6);
+        const double barrier = z1 / denom;   // 중앙에선 ~0, 가장자리에서 발산
+        ibvs_z1_dbg_ = z1;
+
+        // ③ 회전축 = e3 x (표적 방향). 기체좌표계에서 (x_n, y_n, 0)/N 이 된다.
+        //    크기는 sin(theta), yaw(z) 성분은 구조적으로 0 — 상방 카메라 기하 덕분.
+        const double dir_x = x_n / Nn;
+        const double dir_y = y_n / Nn;
+
+        // ④ LOS각속도(리드/감쇠) 항. 배리어항만으론 '표적의 현재 위치'만 겨냥하는
+        //    pure pursuit 이라 횡단 표적을 종말에 놓친다 — 이 항이 리드를 만든다.
+        //    근거리 폭주 방지 클램프는 PN(mode 1)과 같은 pn_los_clamp 를 쓴다
+        //    (같은 신호에 한계가 둘이면 어느 쪽이 걸리는지 알 수 없다).
+        double ldx = losf_x_dot_, ldy = losf_y_dot_;
+        if (pn_los_clamp_ > 0.0) {
+          ldx = std::clamp(ldx, -pn_los_clamp_, pn_los_clamp_);
+          ldy = std::clamp(ldy, -pn_los_clamp_, pn_los_clamp_);
+        }
+
+        // ⑤ 배리어항(FOV 유지) + 선형항(중앙 권한) + LOS각속도항(리드/감쇠).
+        const double rc = (ibvs_gain_ * barrier + ibvs_center_gain_) * dir_x
+                          + ibvs_los_rate_gain_ * ldx;
+        const double pc = (ibvs_gain_ * barrier + ibvs_center_gain_) * dir_y
+                          + ibvs_los_rate_gain_ * ldy;
+        roll_rate_cmd  = roll_sign_  * rc;
+        pitch_rate_cmd = pitch_sign_ * pc;
+      } else if (guidance_mode_ == 1) {
         // ===== 비례항법 (Proportional Navigation) =====
         //   기본 추적(현위치 추종)과 달리 '시선각속도(losf_dot)를 0으로' 만들도록 조종한다.
         //   → 자동으로 미래 충돌점을 앞질러 겨냥 = 가로지르는 빠른 표적에 훨씬 유리.
@@ -786,23 +992,60 @@ class ArmsControlNode : public rclcpp::Node {
         pitch_rate_cmd = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
       }
 
+      // ---- 근접도(closeness) 기반 회전 게인 스케줄링 ----
+      //   loom_s_ema_(화면 속 표적 크기)가 near_size_start_를 넘으면서부터 서서히,
+      //   near_size_full_에서 min_gain_scale_까지 낮춘다. guidance_mode(PID/PN)
+      //   양쪽 다 여기서 공통으로 적용 — 원근 때문에 가까울수록 같은 실제 오차도
+      //   화면상 커 보여서 과민반응(오버슈트)하기 쉬운 걸 완화한다.
+      {
+        double closeness = std::clamp(
+            (loom_s_ema_ - near_size_start_) /
+                std::max(near_size_full_ - near_size_start_, 1e-3),
+            0.0, 1.0);
+        double range_gain_scale = 1.0 - closeness * (1.0 - min_gain_scale_);
+        roll_rate_cmd  *= range_gain_scale;
+        pitch_rate_cmd *= range_gain_scale;
+      }
+
       // ---- 추격 궤적(Pursuit): 조준하며 처음부터 상승 ----
       //   정렬 완료를 기다리지 않는다. 추력은 기체가 기울어진 방향(=공을 겨눈 방향)으로
       //   나가므로, "공쪽으로 기울이기(추적)" + "상승" 을 동시에 하면 드론이 공을 향해
       //   대각선으로 날아간다(추격). 공을 잘 겨눌수록(center_q↑) 그쪽으로 더 세게 상승하고,
       //   빗나가면 상승을 줄여(hover) 재조준을 우선한다. → 수직으로 떴다 늦게 꺾는 문제 해결.
       {
-        const double up = track_throttle_;      // 잘 겨눴을 때 최대 상승(=공쪽 돌진)
+        // 근접도 기반 스로틀 스케줄링: 가까울수록 최대 추력 상한을 낮춰서
+        // 회전 게인을 부드럽게 만든 만큼 반응할 시간도 같이 벌어준다
+        // (속도를 안 줄이면 게인만 낮춰봤자 스쳐 지나가는 시간이 그대로라 무의미함).
+        double closeness_thr = std::clamp(
+            (loom_s_ema_ - near_size_start_) /
+                std::max(near_size_full_ - near_size_start_, 1e-3),
+            0.0, 1.0);
+        double range_throttle_scale = 1.0 - closeness_thr * (1.0 - min_throttle_scale_);
+        const double up = hover_throttle_ +
+            (track_throttle_ - hover_throttle_) * range_throttle_scale;  // 잘 겨눴을 때 최대 상승(=공쪽 돌진, 근접시 하향)
         const double hover = hover_throttle_;   // 빗나갔을 때 최소(재조준)
         double emag = std::hypot(filt_err_x_, filt_err_y_);
+
+        // ---- τ(충돌까지 시간) 기반 추력 감속 ----
+        //   위 near_size 스케줄링은 "크기"만 보고 접근속도는 모른다. τ 는 크기와
+        //   팽창률을 같이 보므로 "곧 부딪힌다"를 더 일찍/정확히 안다. 정렬 품질
+        //   (center_q)과 무관하게 곱해져서, 겨냥이 완벽해도 임박하면 추력을 눌러
+        //   관성으로 지나치는 것을 막고 정밀 정렬에 시간을 번다.
+        //   τ=+inf(표적 없음/안 다가오는 중)면 tau_ease=1.0 → 지금과 동일하게 동작.
+        const double tau_ease = std::clamp(
+            (tau_sec_ - tau_ease_full_) /
+                std::max(tau_ease_start_ - tau_ease_full_, 1e-3),
+            tau_ease_min_scale_, 1.0);
+        tau_ease_dbg_ = tau_ease;   // 로그용
+
         if (pursuit_center_boost_) {
           // 중앙 정렬될수록(center_q↑) 그쪽으로 더 세게 상승, 빗나가면 hover 로 낮춰 재조준 우선.
           double center_q =
               std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
-          thrust = static_cast<float>(hover + (up - hover) * center_q);
+          thrust = static_cast<float>(hover + (up - hover) * center_q * tau_ease);
         } else {
-          // 비활성화: 정렬 정도와 무관하게 상수 추력(track_throttle) 유지.
-          thrust = static_cast<float>(up);
+          // 비활성화: 정렬 정도와 무관하게 상수 추력(track_throttle) 유지 (τ 감속만 적용).
+          thrust = static_cast<float>(hover + (up - hover) * tau_ease);
         }
 
         if (!align_locked_ && emag < 0.15) {
@@ -812,17 +1055,24 @@ class ArmsControlNode : public rclcpp::Node {
       }
 
       if (++dbg_count_ % 6 == 0) {
+        const char* gm = (guidance_mode_ == 2) ? "IBVS"
+                       : (guidance_mode_ == 1) ? "PN" : "PUR";
         RCLCPP_INFO(get_logger(),
-                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f rate=(%.0f,%.0f)deg/s",
-                    guidance_mode_ == 1 ? "PN" : "PUR",
+                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) z1=%.3f/%.2f bbox=%.2f "
+                    "tau=%.2fs ease=%.2f thr=%.2f rate=(%.0f,%.0f)deg/s",
+                    gm,
                     filt_err_x_, filt_err_y_,
-                    guidance_mode_ == 1 ? losf_x_dot_ : err_dot_x_,
-                    guidance_mode_ == 1 ? losf_y_dot_ : err_dot_y_,
-                    loom_s_ema_, roll_rate_cmd,
+                    guidance_mode_ >= 1 ? losf_x_dot_ : err_dot_x_,
+                    guidance_mode_ >= 1 ? losf_y_dot_ : err_dot_y_,
+                    ibvs_z1_dbg_, ibvs_kb_,
+                    loom_s_ema_,
+                    std::isfinite(tau_sec_) ? tau_sec_ : 9.99, tau_ease_dbg_, thrust,
+                    roll_rate_cmd,
                     pitch_rate_cmd);
       }
+      }
     } else {
-      // IDLE / SEARCH / LOCK / RTL
+      // IDLE / SEARCH / RTL (표적을 아예 못 보거나 교전 밖인 진짜 리셋 상황)
       pid_roll_->reset();
       pid_pitch_->reset();
       filt_err_x_ = 0.0;
@@ -831,6 +1081,8 @@ class ArmsControlNode : public rclcpp::Node {
       align_locked_ = false;
       pn_init_ = false;   // alpha-beta 추정기 재초기화 (다음 TRACK 진입 시)
       losf_x_ = losf_y_ = losf_x_dot_ = losf_y_dot_ = 0.0;
+      ibvs_z1_dbg_ = 0.0;
+      tau_ease_dbg_ = 1.0;
     }
 
     // ---- 유효 스위치 = 상태 스위치 && 재토글 래치 해제 ----
@@ -950,7 +1202,7 @@ class ArmsControlNode : public rclcpp::Node {
         crsf[3] = CrsfOutput::norm_to_crsf(joy_axes_[0]);  // CH4 yaw   = L-stick X
       } else {
         // AUTO(영상유도) 출력 — ACRO 고정.
-        //   유도(PID/PN)가 낸 각속도 명령을 max_cmd_rate_dps 로 제한하고,
+        //   유도(PID/PN/IBVS)가 낸 각속도 명령을 max_cmd_rate_dps 로 제한하고,
         //   풀스틱 기준 max_rate_dps 로 정규화한다. PX4 ACRO 가 그 각속도로 직접
         //   회전한다(자동수평 없음). 중간의 '목표 기울기' 단계는 없다.
         double rr = std::clamp(roll_rate_cmd,  -max_cmd_rate_dps_, max_cmd_rate_dps_);
@@ -1104,6 +1356,9 @@ class ArmsControlNode : public rclcpp::Node {
   double loom_rate_ema_{0.0};
   bool   loom_init_{false};
   rclcpp::Time loom_last_time_;
+  // τ(충돌까지 시간) — update_looming() 이 매번 갱신, control_loop() 의 추력 스케줄링이 재사용.
+  //   기본값은 반드시 +inf(급함 없음). 0.0 이면 첫 검출 전에 추력이 hover 에 묶인다.
+  double tau_sec_{std::numeric_limits<double>::infinity()};
 
   int dbg_count_{0};
   double control_rate_hz_{50.0};
@@ -1164,13 +1419,33 @@ class ArmsControlNode : public rclcpp::Node {
   double err_dot_clamp_{0.6};
   double max_cmd_rate_dps_{227.5};   // 유도 출력 각속도 상한[deg/s]
   bool   gain_shaping_{false};       // 중심 근처 게인 감쇠 (기본 off = 순수 P)
-  // 유도(Guidance): 기본 추적(0) / 비례항법 PN(1)
-  int    guidance_mode_{0};
+  // 유도(Guidance): 기본 추적(0) / 비례항법 PN(1) / IBVS 공선유도(2)
+  int    guidance_mode_{2};
+  // IBVS 공선유도 [mode 2] — 배리어 Lyapunov. 광축=추력축 기하라 자세 불필요.
+  double ibvs_hfov_deg_{114.5916};   // 수평 화각[deg]
+  double ibvs_aspect_{0.6666667};    // 세로/가로
+  double ibvs_kx_{3.1148};           // = 2*tan(hfov/2)         (update_ibvs_scale 가 계산)
+  double ibvs_ky_{2.0765};           // = 2*tan(hfov/2)*aspect
+  double ibvs_kb_{0.55};             // 배리어 한계 (z1 = 1-cos(theta) 기준)
+  double ibvs_gain_{200.0};          // 배리어항 계수[deg/s]
+  double ibvs_center_gain_{100.0};   // 선형항 계수[deg/s] (중앙 근처 권한 보강)
+  double ibvs_los_rate_gain_{220.0}; // LOS각속도항 (횡단표적 리드) — 자기회전 오염 주의, 흔들리면 ↓
+  double ibvs_z1_dbg_{0.0};          // 로그용 현재 z1
+  double tau_ease_dbg_{1.0};         // 로그용 현재 τ 추력 감속 배율
   double pn_nav_gain_{175.0};
   double pn_center_gain_{52.5};
   double pn_alpha_{0.35};
   double pn_beta_{0.02};
   double pn_los_clamp_{1.5};
+  // 근접도(화면 속 표적 크기) 기반 게인/스로틀 스케줄링
+  double near_size_start_{0.15};
+  double near_size_full_{0.35};
+  double min_gain_scale_{0.4};
+  double min_throttle_scale_{0.6};
+  // τ 기반 추력 감속 (near_size 와 별개 — 크기가 아니라 접근속도를 반영)
+  double tau_ease_start_{1.0};
+  double tau_ease_full_{0.3};
+  double tau_ease_min_scale_{0.3};
   // alpha-beta 표적 상태추정 (매끈한 LOS + LOS각속도)
   double losf_x_{0.0}, losf_y_{0.0};
   double losf_x_dot_{0.0}, losf_y_dot_{0.0};

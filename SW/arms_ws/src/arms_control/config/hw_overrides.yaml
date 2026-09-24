@@ -39,6 +39,23 @@ arms_control_node:
       looming_fire_enabled: false
 
     control:
+      # ── IBVS 공선유도 카메라 스펙 (mode 2, 실기체 미측정) ────────────────
+      # control_params.yaml 의 기본값은 SITL 기체 SDF 의 upward_camera 스펙
+      # (hfov 2.0rad = 114.59deg, 720x480)이다. 실기체 FPV 카메라 화각이 다르면
+      # 픽셀→각도 환산이 통째로 어긋나 ibvs_gain/kb 가 전부 무의미해진다.
+      #
+      # ★ 실기체 비행 전에 반드시 할 것:
+      #   1) 카메라 데이터시트의 수평 화각을 확인하거나,
+      #      `ros2 run camera_calibration cameracalibrator` 로 fx 를 구해
+      #      hfov = 2*atan(width/(2*fx)) 로 환산한다.
+      #   2) 광축이 정말 기체 +Z(수직 상방)인지 확인한다. 앞으로 기울어 달려
+      #      있으면 mode 2 의 전제(광축=추력축)가 깨진다.
+      #   3) 기체를 손으로 들고 롤/피치를 줘서 화면 속 표적이 예상대로
+      #      움직이는지 확인한다(어긋나면 roll_sign/pitch_sign 으로 교정).
+      # 확인되면 아래 주석을 풀고 값을 채울 것.
+      # ibvs_hfov_deg: 114.5916
+      # ibvs_aspect: 0.6666667
+
       # ── 실기체 PID (미측정) ──────────────────────────────────────────────
       # 단위: 정규화 픽셀오차 → 각속도[deg/s]. 각도 단계는 없다(ACRO 고정).
       # 튜닝 순서: kp 를 낮은 값에서 조금씩 ↑ → 떨리면 30% ↓ → 그 다음 kd.
