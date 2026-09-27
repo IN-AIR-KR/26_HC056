@@ -1,0 +1,10 @@
+std_msgs/Header header
+bool valid
+float32 los_x
+float32 los_y
+float32 los_z
+float32 los_rate_x
+float32 los_rate_y
+float32 los_rate_z
+float32 range_m
+float32 closing_speed_mps

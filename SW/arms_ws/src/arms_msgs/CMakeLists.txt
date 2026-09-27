@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectionArray.msg"
   "msg/MissionState.msg"
   "msg/CrsfTelemetry.msg"
+  "msg/GuidanceGroundTruth.msg"
   "msg/PnDebug.msg"
   DEPENDENCIES std_msgs
 )

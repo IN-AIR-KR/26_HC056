@@ -33,6 +33,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
+from arms_msgs.msg import GuidanceGroundTruth
 
 WORLD = "arms_sitl"
 MODEL_BALLOON = "target_ball"   # 표적 A: 풍선(빨간 구)
@@ -127,7 +128,11 @@ class BalloonReferee(Node):
         self.pause_until = 0.0          # 재등장 대기 종료 시각
         self._ball_pos = (0.0, 0.0, HIDE_Z)   # 풍선 현재 위치(직격 판정용)
         self._drone_pos = None                # 드론 실제 위치(gz 구독)
+        self._target_pos_gt = None            # 선택 표적 실제 위치(gz 구독)
         self._drone_seen = False
+        self._gt_prev_time = None
+        self._gt_prev_los = None
+        self._gt_prev_range = None
         # 드론 실제 위치 구독 → 진짜 충돌(직격) 판정. (gz dynamic pose)
         if _GZ_OK and _GzPoseV is not None:
             try:
@@ -162,6 +167,8 @@ class BalloonReferee(Node):
         # 이제 둘은 독립이고, 어긋나는 것 자체가 정보다.
         # /arms/hit 은 통지용 — arms_control 은 이걸 로그로만 쓴다.
         self._hit_pub = self.create_publisher(Empty, "/arms/hit", 10)
+        self._gt_pub = self.create_publisher(
+            GuidanceGroundTruth, "/arms/guidance_ground_truth", 10)
         self.create_subscription(Empty, "/arms/reset", self._on_reset, 10)
         self._last_dist_log = 0.0     # 접근거리 로그 스로틀
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
@@ -184,6 +191,7 @@ class BalloonReferee(Node):
         self._prev_enabled = True
         self._launched_once = False
         self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
+        self._reset_ground_truth_history()
         self._park_at_start()
         self.get_logger().info("실험 RESET: 표적을 패스 시작점에 대기")
 
@@ -228,14 +236,64 @@ class BalloonReferee(Node):
             self._names_logged = True
             self.get_logger().info(
                 f"gz dynamic pose 모델들: {[p.name for p in msg.pose]}")
+        drone_pos = None
+        target_pos = None
         for p in msg.pose:
             n = p.name
             if ("drone" in n or "x500" in n) and n not in (MODEL_BALLOON, MODEL_DRONE):
-                self._drone_pos = (p.position.x, p.position.y, p.position.z)
+                drone_pos = (p.position.x, p.position.y, p.position.z)
                 if not self._drone_seen:
                     self._drone_seen = True
                     self.get_logger().info(f"직격 판정 활성화 (드론='{n}' 위치 추적 중)")
-                return
+            elif n == self.target_model and p.position.z > HIDE_Z / 2.0:
+                target_pos = (p.position.x, p.position.y, p.position.z)
+        if drone_pos is not None:
+            self._drone_pos = drone_pos
+        self._target_pos_gt = target_pos
+
+    def _reset_ground_truth_history(self):
+        self._gt_prev_time = None
+        self._gt_prev_los = None
+        self._gt_prev_range = None
+
+    def _publish_guidance_ground_truth(self, now):
+        """Gazebo ENU 상대위치로 NED LOS, LOS-rate, range, Vc를 계산한다."""
+        msg = GuidanceGroundTruth()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        if self._drone_pos is None or self._target_pos_gt is None:
+            self._reset_ground_truth_history()
+            self._gt_pub.publish(msg)
+            return
+
+        dx = self._target_pos_gt[0] - self._drone_pos[0]  # ENU east
+        dy = self._target_pos_gt[1] - self._drone_pos[1]  # ENU north
+        dz = self._target_pos_gt[2] - self._drone_pos[2]  # ENU up
+        # ENU(east,north,up) -> NED(north,east,down)
+        rel = (dy, dx, -dz)
+        distance = math.sqrt(sum(v * v for v in rel))
+        if distance < 1e-6:
+            self._reset_ground_truth_history()
+            self._gt_pub.publish(msg)
+            return
+        los = tuple(v / distance for v in rel)
+
+        if self._gt_prev_time is not None:
+            dt = now - self._gt_prev_time
+            if 1e-4 < dt < 0.5:
+                raw_rate = tuple(
+                    (los[i] - self._gt_prev_los[i]) / dt for i in range(3))
+                parallel = sum(raw_rate[i] * los[i] for i in range(3))
+                los_rate = tuple(raw_rate[i] - parallel * los[i] for i in range(3))
+                msg.valid = True
+                msg.los_rate_x, msg.los_rate_y, msg.los_rate_z = los_rate
+                msg.closing_speed_mps = (self._gt_prev_range - distance) / dt
+
+        msg.los_x, msg.los_y, msg.los_z = los
+        msg.range_m = distance
+        self._gt_prev_time = now
+        self._gt_prev_los = los
+        self._gt_prev_range = distance
+        self._gt_pub.publish(msg)
 
     @staticmethod
     def _is_our_drone(collision_name):
@@ -292,6 +350,7 @@ class BalloonReferee(Node):
     def tick(self):
         enabled = self.get_parameter("enabled").value
         now = self.get_clock().now().nanoseconds * 1e-9
+        self._publish_guidance_ground_truth(now)
 
         # ---- 표적 종류 전환 (UI 토글: target 파라미터) ----
         #   선택된 모델만 비행시키고, 직전 표적은 지하로 숨긴다. (명중은 거리기반이라 무손상)
@@ -300,6 +359,8 @@ class BalloonReferee(Node):
         if want != self.target_model:
             old = self.target_model
             self.target_model = want
+            self._target_pos_gt = None
+            self._reset_ground_truth_history()
             set_pose(old, 0.0, 0.0, HIDE_Z)              # 이전 표적 숨김
             bx, by, bz = self._ball_pos
             set_pose(self.target_model, bx, by, bz)      # 새 표적을 현재 위치로 (비행 중이면 즉시 교체 보임)

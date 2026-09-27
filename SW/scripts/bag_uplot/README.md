@@ -18,7 +18,7 @@ ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true
 
 - 영상: `/arms/ui_image/compressed`
 - 검출: `/arms/detections_raw`, `/arms/detections`, `/arms/detector_status`
-- PN: `/arms/pn_debug`, `/arms/control_debug`, `/arms/debug_looming`
+- PN: `/arms/pn_debug`, `/arms/guidance_ground_truth`, `/arms/control_debug`, `/arms/debug_looming`
 - 자세/FC: `/arms/attitude_quaternion`, `/arms/crsf_tx`, `/arms/crsf_rx`
 - 상태/입력: `/arms/mission_state`, `/arms/command`
 

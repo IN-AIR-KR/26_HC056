@@ -21,3 +21,14 @@ float32 actual_pitch_deg
 float32 roll_cmd_deg
 float32 pitch_cmd_deg
 float32 throttle
+bool ground_truth_valid
+bool use_ground_truth_los_rate
+bool use_ground_truth_closing_speed
+float32 ground_truth_los_x
+float32 ground_truth_los_y
+float32 ground_truth_los_z
+float32 ground_truth_los_rate_x
+float32 ground_truth_los_rate_y
+float32 ground_truth_los_rate_z
+float32 ground_truth_range_m
+float32 ground_truth_closing_speed_mps

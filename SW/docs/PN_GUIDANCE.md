@@ -998,14 +998,37 @@ accel_saturated, tilt_saturated, rate_saturated, thrust_saturated
 miss_distance, miss_vertical, miss_horizontal
 ```
 
-### 12.2 estimator 성공 기준
+### 12.2 SITL ground-truth 비교와 제어 입력 전환
+
+`balloon_referee`는 Gazebo의 드론·표적 pose로 `/arms/guidance_ground_truth`를 발행한다.
+이 토픽에는 NED 기준 LOS, LOS-rate, 거리와 signed closing speed가 들어 있다.
+
+다음 두 파라미터는 서로 독립적이다.
+
+```yaml
+control:
+  pn:
+    use_ground_truth_los_rate: false
+    use_ground_truth_closing_speed: false
+```
+
+- `use_ground_truth_los_rate=true`: PN의 $\dot{\mathbf l}$만 GT로 대체
+- `use_ground_truth_closing_speed=true`: PN의 $V_c$만 GT로 대체
+- 둘 다 `true`: bbox bearing은 유지하고 PN 운동학 입력 두 개를 모두 GT로 대체
+- 둘 다 `false`: 실제 구현 경로인 KF LOS-rate와 bbox looming $V_c$ 사용
+
+GT가 유효하지 않거나 `ground_truth_timeout_sec`보다 오래됐을 때는 추정값으로 몰래
+fallback하지 않고 PN measurement 갱신을 보류한다. 사용된 값은 기존 `los_rate_*`,
+`closing_speed_mps`에 기록되고, 비교용 참값은 `ground_truth_*` 필드에 항상 함께 기록된다.
+
+### 12.3 estimator 성공 기준
 
 - 제자리 body rotation에서 inertial LOS-rate bias가 충분히 작음
 - 횡이동 시 ground-truth LOS-rate와 부호 일치
 - 유효 비행 구간 RMS 오차와 시간지연이 요구 miss distance를 만족
 - 재획득 순간 rate spike가 acceleration clamp를 지속적으로 때리지 않음
 
-### 12.3 guidance 성공 기준
+### 12.4 guidance 성공 기준
 
 - 정지 표적 반복시험에서 miss의 평균과 분산이 감소
 - 화면 중앙 오차뿐 아니라 LOS-rate와 실제 miss가 함께 감소

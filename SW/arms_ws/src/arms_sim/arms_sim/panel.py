@@ -322,6 +322,33 @@ class PanelGUI:
         self.pn_accel.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.pn.approach_accel_mps2", float(self.pn_accel.get())))
 
+        gt_row = tk.Frame(g_guid, bg="#1e1e1e")
+        gt_row.pack(fill="x", pady=(5, 0))
+        self.gt_los_rate = tk.BooleanVar(value=False)
+        self.gt_closing_speed = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            gt_row, text="GT LOS-rate", variable=self.gt_los_rate,
+            bg="#1e1e1e", fg="#f0c84b", selectcolor="#333333",
+            activebackground="#1e1e1e", activeforeground="#f0c84b",
+            command=lambda: ros_param_set(
+                "control.pn.use_ground_truth_los_rate",
+                "true" if self.gt_los_rate.get() else "false")
+        ).pack(side="left")
+        tk.Checkbutton(
+            gt_row, text="GT Vc", variable=self.gt_closing_speed,
+            bg="#1e1e1e", fg="#f0c84b", selectcolor="#333333",
+            activebackground="#1e1e1e", activeforeground="#f0c84b",
+            command=lambda: ros_param_set(
+                "control.pn.use_ground_truth_closing_speed",
+                "true" if self.gt_closing_speed.get() else "false")
+        ).pack(side="left", padx=(8, 0))
+        self._track(
+            CTRL_NODE, "control.pn.use_ground_truth_los_rate",
+            lambda v: self.gt_los_rate.set(str(v).lower() == "true"))
+        self._track(
+            CTRL_NODE, "control.pn.use_ground_truth_closing_speed",
+            lambda v: self.gt_closing_speed.set(str(v).lower() == "true"))
+
         # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수
         # 있는 노브였다), 발사 τ 는 control_params.yaml 에서 잡는다.

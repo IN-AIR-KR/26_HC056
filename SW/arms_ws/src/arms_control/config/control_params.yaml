@@ -142,6 +142,11 @@ arms_control_node:
         target_diameter_m: 2.0
         closing_speed_alpha: 0.25
         max_closing_speed_mps: 20.0  # bbox 미분 스파이크 제한. 로그의 145m/s 같은 값 차단
+        # SITL 검증용. true면 해당 PN 입력만 Gazebo ground truth로 대체한다.
+        # 실기체에는 GT 발행자가 없으므로 false 유지.
+        use_ground_truth_los_rate: false
+        use_ground_truth_closing_speed: false
+        ground_truth_timeout_sec: 0.20
         kf_accel_noise: 0.8
         kf_measurement_noise: 0.0025
         max_lateral_accel_mps2: 12.0

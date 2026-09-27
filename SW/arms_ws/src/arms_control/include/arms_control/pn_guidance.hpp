@@ -193,7 +193,9 @@ public:
 
   // raw bbox 중심/크기를 한 번만 필터링한다. stamp는 원본 영상 촬영시각이다.
   bool update_detection(double stamp_sec, double x_center, double y_center,
-                        double width, double height, const Quaternion &q_nb);
+                        double width, double height, const Quaternion &q_nb,
+                        const Vec3 *los_rate_override_ned = nullptr,
+                        const double *closing_speed_override_mps = nullptr);
 
   const PnOutput &output() const { return output_; }
 

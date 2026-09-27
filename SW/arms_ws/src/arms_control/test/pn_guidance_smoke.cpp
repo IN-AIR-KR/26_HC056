@@ -50,5 +50,13 @@ int main() {
   // 한 프레임에서 bbox가 비정상적으로 커져도 Vc가 PN을 폭주시켜선 안 된다.
   assert(guidance.update_detection(1.15, 0.53, 0.50, 0.80, 0.80, identity));
   assert(guidance.output().closing_speed_mps <= params.max_closing_speed_mps);
+
+  const arms_control::pn::Vec3 gt_rate{0.1, -0.2, 0.05};
+  const double gt_vc = 7.0;
+  assert(guidance.update_detection(1.20, 0.53, 0.50, 0.13, 0.13, identity,
+                                   &gt_rate, &gt_vc));
+  assert(std::abs(guidance.output().los_rate_ned.x - gt_rate.x) < 1e-9);
+  assert(std::abs(guidance.output().los_rate_ned.y - gt_rate.y) < 1e-9);
+  assert(std::abs(guidance.output().closing_speed_mps - gt_vc) < 1e-9);
   return 0;
 }

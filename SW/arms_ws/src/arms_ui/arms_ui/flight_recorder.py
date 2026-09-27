@@ -44,6 +44,7 @@ class FlightRecorder(Node):
             "/arms/control_debug",
             "/arms/debug_looming",
             "/arms/pn_debug",
+            "/arms/guidance_ground_truth",
             "/arms/attitude_quaternion",
         ])
         self.declare_parameter("save_dir", "~/arms_flight_log")

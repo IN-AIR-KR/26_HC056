@@ -17,6 +17,7 @@
 #include "arms_control/state_machine.hpp"
 #include "arms_msgs/msg/crsf_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
+#include "arms_msgs/msg/guidance_ground_truth.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
 #include "arms_msgs/msg/pn_debug.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
@@ -138,6 +139,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pn.kf_measurement_noise", 0.0025);
     declare_parameter("control.pn.max_lateral_accel_mps2", 12.0);
     declare_parameter("control.pn.max_measurement_age_sec", 0.20);
+    declare_parameter("control.pn.use_ground_truth_los_rate", false);
+    declare_parameter("control.pn.use_ground_truth_closing_speed", false);
+    declare_parameter("control.pn.ground_truth_timeout_sec", 0.20);
     declare_parameter("control.pn.camera.fx", 231.16);
     declare_parameter("control.pn.camera.fy", 231.16);
     declare_parameter("control.pn.camera.cx", 360.0);
@@ -239,6 +243,12 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("control.pn.max_lateral_accel_mps2").as_double();
     pn_params_.max_measurement_age_sec =
         get_parameter("control.pn.max_measurement_age_sec").as_double();
+    use_gt_los_rate_ =
+        get_parameter("control.pn.use_ground_truth_los_rate").as_bool();
+    use_gt_closing_speed_ =
+        get_parameter("control.pn.use_ground_truth_closing_speed").as_bool();
+    gt_timeout_sec_ =
+        get_parameter("control.pn.ground_truth_timeout_sec").as_double();
     pn_params_.hover_throttle = hover_throttle_;
     pn_params_.max_throttle = track_throttle_;
     pn_camera_.fx = get_parameter("control.pn.camera.fx").as_double();
@@ -338,6 +348,12 @@ class ArmsControlNode : public rclcpp::Node {
               pn_params_.max_lateral_accel_mps2 = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.max_measurement_age_sec") {
               pn_params_.max_measurement_age_sec = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.use_ground_truth_los_rate") {
+              use_gt_los_rate_ = p.as_bool();
+            } else if (n == "control.pn.use_ground_truth_closing_speed") {
+              use_gt_closing_speed_ = p.as_bool();
+            } else if (n == "control.pn.ground_truth_timeout_sec") {
+              gt_timeout_sec_ = p.as_double();
             }
             else if (n == "mission.tau_fire_sec")
               sm_->set_tau_fire(p.as_double());
@@ -426,9 +442,38 @@ class ArmsControlNode : public rclcpp::Node {
           pn::Quaternion q_nb;
           if (!pn_attitudes_.interpolate(sample.seconds(),
                                           pn_params_.max_measurement_age_sec, q_nb)) return;
+          const bool need_gt = use_gt_los_rate_ || use_gt_closing_speed_;
+          if (need_gt && !ground_truth_fresh(receipt)) {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "PN ground truth 옵션이 켜졌지만 /arms/guidance_ground_truth가 없거나 오래됨");
+            return;
+          }
+          pn::Vec3 gt_los_rate;
+          double gt_closing_speed = 0.0;
+          const pn::Vec3 *los_rate_override = nullptr;
+          const double *closing_speed_override = nullptr;
+          if (use_gt_los_rate_) {
+            gt_los_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
+                           latest_gt_.los_rate_z};
+            los_rate_override = &gt_los_rate;
+          }
+          if (use_gt_closing_speed_) {
+            gt_closing_speed = latest_gt_.closing_speed_mps;
+            closing_speed_override = &gt_closing_speed;
+          }
           const auto & b = msg->detections.front();
           pn_guidance_.update_detection(sample.seconds(), b.x_center, b.y_center,
-                                        b.width, b.height, q_nb);
+                                        b.width, b.height, q_nb,
+                                        los_rate_override, closing_speed_override);
+        });
+
+    sub_guidance_gt_ = create_subscription<arms_msgs::msg::GuidanceGroundTruth>(
+        "/arms/guidance_ground_truth", rclcpp::SensorDataQoS(),
+        [this](arms_msgs::msg::GuidanceGroundTruth::SharedPtr msg) {
+          latest_gt_ = *msg;
+          gt_receipt_time_ = now();
+          gt_received_ = true;
         });
 
     sub_attitude_ = create_subscription<geometry_msgs::msg::QuaternionStamped>(
@@ -756,6 +801,12 @@ class ArmsControlNode : public rclcpp::Node {
       crsf_telem_.header.stamp = now();
       pub_crsf_rx_->publish(crsf_telem_);
     }
+  }
+
+  bool ground_truth_fresh(const rclcpp::Time &t) const {
+    if (!gt_received_ || !latest_gt_.valid) return false;
+    const double age = (t - gt_receipt_time_).seconds();
+    return age >= 0.0 && age <= gt_timeout_sec_;
   }
 
   // ----------------------------------------------------------------
@@ -1107,6 +1158,20 @@ class ArmsControlNode : public rclcpp::Node {
       dbg.roll_cmd_deg = roll_cmd_deg;
       dbg.pitch_cmd_deg = pitch_cmd_deg;
       dbg.throttle = thrust;
+      const bool gt_fresh = ground_truth_fresh(now_t);
+      dbg.ground_truth_valid = gt_fresh;
+      dbg.use_ground_truth_los_rate = use_gt_los_rate_;
+      dbg.use_ground_truth_closing_speed = use_gt_closing_speed_;
+      if (gt_fresh) {
+        dbg.ground_truth_los_x = latest_gt_.los_x;
+        dbg.ground_truth_los_y = latest_gt_.los_y;
+        dbg.ground_truth_los_z = latest_gt_.los_z;
+        dbg.ground_truth_los_rate_x = latest_gt_.los_rate_x;
+        dbg.ground_truth_los_rate_y = latest_gt_.los_rate_y;
+        dbg.ground_truth_los_rate_z = latest_gt_.los_rate_z;
+        dbg.ground_truth_range_m = latest_gt_.range_m;
+        dbg.ground_truth_closing_speed_mps = latest_gt_.closing_speed_mps;
+      }
       pub_pn_dbg_->publish(dbg);
     }
 
@@ -1277,10 +1342,17 @@ class ArmsControlNode : public rclcpp::Node {
   pn::CameraModel pn_camera_{};
   pn::PnGuidance pn_guidance_{};
   pn::AttitudeBuffer pn_attitudes_{};
+  bool use_gt_los_rate_{false};
+  bool use_gt_closing_speed_{false};
+  double gt_timeout_sec_{0.20};
+  bool gt_received_{false};
+  rclcpp::Time gt_receipt_time_{};
+  arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_raw_;
   rclcpp::Subscription<geometry_msgs::msg::QuaternionStamped>::SharedPtr sub_attitude_;
+  rclcpp::Subscription<arms_msgs::msg::GuidanceGroundTruth>::SharedPtr sub_guidance_gt_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;

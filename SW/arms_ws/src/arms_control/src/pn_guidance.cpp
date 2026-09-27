@@ -226,7 +226,9 @@ Mat3 PnGuidance::desired_attitude(const Vec3 &specific_thrust_ned) const {
 
 bool PnGuidance::update_detection(double stamp_sec, double x_center,
                                   double y_center, double width, double height,
-                                  const Quaternion &q_nb) {
+                                  const Quaternion &q_nb,
+                                  const Vec3 *los_rate_override_ned,
+                                  const double *closing_speed_override_mps) {
   if (!(camera_.fx > 1.0 && camera_.fy > 1.0 && camera_.width > 1.0 &&
         camera_.height > 1.0))
     return false;
@@ -273,9 +275,14 @@ bool PnGuidance::update_detection(double stamp_sec, double x_center,
   }
 
   const Vec3 los = los_filter_.los();
-  const Vec3 los_rate = los_filter_.los_rate();
+  const Vec3 los_rate = los_rate_override_ned != nullptr
+                            ? *los_rate_override_ned
+                            : los_filter_.los_rate();
   const Vec3 omega = cross(los, los_rate);
-  const double vc = std::clamp(closing_speed_mps_, 0.0,
+  const double vc_source = closing_speed_override_mps != nullptr
+                               ? *closing_speed_override_mps
+                               : closing_speed_mps_;
+  const double vc = std::clamp(vc_source, 0.0,
                                std::max(0.0, params_.max_closing_speed_mps));
   Vec3 a_pn = params_.navigation_ratio * vc * los_rate;
   const double lateral = norm(a_pn);
