@@ -59,16 +59,6 @@ except Exception as _e:                     # 무엇이 왜 실패했는지 남�
     _GzPose = _GzBool = _GzPoseV = _GzContacts = None
     _GZ_OK = False
 
-# RESET 때 풍선 속도를 0으로 만드는 VelocityControl 메시지. 바인딩이 없으면
-# stop_balloon 이 gz topic CLI로 한 번만 발행한다.
-try:
-    from gz.msgs10.twist_pb2 import Twist as _GzTwist
-    _gz_twist_pub = (_gz_node.advertise(
-        "/model/target_ball/cmd_vel", _GzTwist) if _GZ_OK else None)
-except Exception:
-    _GzTwist = None
-    _gz_twist_pub = None
-
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
 ALT = 42.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
 # 광역 비행: 카메라 화각 밖 먼 지점에서 시작 → 대각선으로 시야 통과 → 반대편 먼 곳으로 이탈.
@@ -118,23 +108,6 @@ def set_pose(model, x, y, z):
          "--timeout", "300", "--req", req],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-
-
-def stop_balloon():
-    """엔티티를 재생성하지 않고 풍선의 선속도·각속도를 0으로 만든다."""
-    if _gz_twist_pub is not None and _GzTwist is not None:
-        try:
-            _gz_twist_pub.publish(_GzTwist())
-            return True
-        except Exception:
-            pass
-    result = subprocess.run(
-        ["gz", "topic", "-t", f"/model/{MODEL_BALLOON}/cmd_vel",
-         "-m", "gz.msgs.Twist", "-p",
-         "linear: {x: 0, y: 0, z: 0}, angular: {x: 0, y: 0, z: 0}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    return result.returncode == 0
 
 
 class BalloonReferee(Node):
@@ -221,10 +194,6 @@ class BalloonReferee(Node):
         self._target_pos_gt = None
         self._reset_ground_truth_history()
         self._park_at_start()
-        if self.target_model == MODEL_BALLOON:
-            if not stop_balloon():
-                self.get_logger().error(
-                    "RESET 중 풍선 속도 초기화 실패")
         self.get_logger().info("실험 RESET: 표적을 패스 시작점에 대기")
 
     @staticmethod

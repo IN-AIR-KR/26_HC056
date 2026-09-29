@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Panel-triggered SITL episode reset without restarting Gazebo.
 
-순서: /arms/reset 알림 → PX4 종료 → 기체를 출발 위치로 되돌림 → PX4 재기동(기존 기체에 attach).
+순서: PX4 종료 → Gazebo 모델 상태 reset → /arms/reset 알림 → 시작 위치 배치
+      → PX4 재기동(기존 기체에 attach).
 
 ★ 기체 엔티티를 지우지 않는 것이 이 파일의 핵심 제약이다.
 
@@ -15,10 +16,11 @@
      만들어도 arms_ui 화면이 reset 직전 장면에 멈춰 있었다.
      (실측: reset 직후 model list 에 기체가 없는데도 카메라 publisher 는 살아서 발행 중)
 
-그래서 삭제 대신 set_pose 로 **되돌린다**. 엔티티가 한 번도 안 죽으니 센서도 멀쩡하고,
+그래서 `all` reset 대신 엔티티를 유지하는 `model_only` reset으로 물리 상태(속도 포함)를
+초기화한 뒤 set_pose 로 **되돌린다**. 엔티티가 한 번도 안 죽으니 센서도 멀쩡하고,
 PX4 는 원래 의도대로 PX4_GZ_STANDALONE + PX4_GZ_MODEL_NAME 으로 기존 기체에 다시 붙는다.
-표적(target_ball/target_uav)은 referee 가 /arms/reset 을 받아 직접 되돌리므로 여기서
-월드를 건드릴 이유가 없다.
+model_only reset 직후 표적(target_ball/target_uav)은 referee 가 /arms/reset 을 받아
+대기 위치로 옮기고, 드론은 이 노드가 출발 위치로 옮긴다.
 """
 
 import os
@@ -62,9 +64,11 @@ class SitlResetManager(Node):
             #   PX4 도 없는 더 나쁜 상태가 됐다. 살릴 수 없는 리셋이면 아무것도
             #   건드리지 말고 그대로 실패를 알린다.
             self._require_gazebo()
-            # Referee/control 등이 이전 에피소드의 표적 진행 및 명령을 버리게 한다.
-            self._reset_pub.publish(Empty())
             self._stop_px4()
+            self._reset_model_states()
+            # model_only reset 뒤 referee가 풍선을 대기 위치로 옮기고, control은
+            # 이전 에피소드의 상태와 명령을 버린다.
+            self._reset_pub.publish(Empty())
             self._park_drone()
             self._start_px4()
             drone = self._wait_for_px4()
@@ -106,9 +110,8 @@ class SitlResetManager(Node):
     def _park_drone(self):
         """기체를 출발 위치·수평 자세로 되돌린다 (삭제하지 않는다).
 
-        set_pose 는 속도를 0 으로 만들어주지 않는다. PX4 를 끈 직후 기체는 추력을 잃고
-        낙하 중이라 그대로 두면 잔여 속도를 가진 채 재시작된다. 그래서 지면 높이로
-        되돌린 뒤 잠깐 기다린다 — 접지 접촉이 속도를 깎아 없앤다.
+        직전 model_only reset이 속도를 이미 0으로 만들었고, 여기서는 시작 pose와
+        수평 자세만 보장한다. 지면 접촉이 안정될 시간은 기존처럼 잠깐 둔다.
         """
         world = self.get_parameter("world").value
         drone = self.get_parameter("drone_model").value
@@ -127,6 +130,19 @@ class SitlResetManager(Node):
                 f"기체 위치 복귀 실패({drone}): {detail or 'gz service 오류'} — "
                 "Gazebo 가 떠 있는지, 기체 이름이 맞는지 확인")
         time.sleep(1.0)   # 접지로 잔여 속도가 사라질 시간
+
+    def _reset_model_states(self):
+        """엔티티를 삭제하지 않고 모든 모델의 pose/velocity 상태만 초기화한다."""
+        world = self.get_parameter("world").value
+        result = subprocess.run([
+            "gz", "service", "-s", f"/world/{world}/control",
+            "--reqtype", "gz.msgs.WorldControl", "--reptype", "gz.msgs.Boolean",
+            "--timeout", "3000", "--req", "reset: {model_only: true}",
+        ], capture_output=True, text=True)
+        if result.returncode or "true" not in result.stdout:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(
+                f"Gazebo 모델 상태 초기화 실패: {detail or 'gz service 오류'}")
 
     def _start_px4(self):
         px4_dir = Path(os.path.expanduser(self.get_parameter("px4_dir").value))

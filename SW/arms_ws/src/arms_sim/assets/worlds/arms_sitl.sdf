@@ -83,11 +83,6 @@
     <model name="target_ball">
       <static>false</static>
       <pose>0 0 -100 0 0 0</pose>
-      <!-- 모델을 삭제·재생성하지 않고 RESET 때 cmd_vel=0으로 잔여 속도를 제거한다. -->
-      <plugin filename="gz-sim-velocity-control-system"
-              name="gz::sim::systems::VelocityControl">
-        <topic>/model/target_ball/cmd_vel</topic>
-      </plugin>
       <link name="link">
         <gravity>false</gravity>
         <kinematic>true</kinematic>
