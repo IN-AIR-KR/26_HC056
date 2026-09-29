@@ -15,6 +15,7 @@ referee.py — 표적(풍선/드론)을 "비행"시키고 "명중"을 판정/연
 실행: ros2 run arms_sim referee   (node name = balloon_referee)
 """
 
+import json
 import math
 import os
 import random
@@ -58,6 +59,14 @@ except Exception as _e:                     # 무엇이 왜 실패했는지 남�
     _gz_node = None
     _GzPose = _GzBool = _GzPoseV = _GzContacts = None
     _GZ_OK = False
+
+# RESET 때 풍선을 삭제·재생성하기 위한 메시지. 배포판에 Python 바인딩이 없으면
+# reset_balloon 이 gz CLI로 폴백하며, 기존 pose/contact 경로에는 영향을 주지 않는다.
+try:
+    from gz.msgs10.entity_pb2 import Entity as _GzEntity
+    from gz.msgs10.entity_factory_pb2 import EntityFactory as _GzEntityFactory
+except Exception:
+    _GzEntity = _GzEntityFactory = None
 
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
 ALT = 42.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
@@ -108,6 +117,65 @@ def set_pose(model, x, y, z):
          "--timeout", "300", "--req", req],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+
+
+def reset_balloon(x, y, z):
+    """풍선을 초기 위치에 새로 만들어 pose와 선·각속도를 함께 초기화한다."""
+    sdf = f"""<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="{MODEL_BALLOON}">
+    <static>false</static><pose>{x} {y} {z} 0 0 0</pose>
+    <link name="link">
+      <gravity>false</gravity><kinematic>true</kinematic>
+      <inertial><mass>0.05</mass>
+        <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><sphere><radius>1.0</radius></sphere></geometry>
+      </collision>
+      <sensor name="contact_sensor" type="contact">
+        <always_on>true</always_on><update_rate>100</update_rate>
+        <contact><collision>collision</collision></contact>
+      </sensor>
+      <visual name="visual">
+        <geometry><sphere><radius>1.0</radius></sphere></geometry>
+        <material><ambient>1 0 0 1</ambient><diffuse>1 0 0 1</diffuse>
+          <specular>0.5 0.5 0.5 1</specular></material>
+      </visual>
+    </link>
+  </model>
+</sdf>"""
+
+    if _GZ_OK and _GzEntity is not None and _GzEntityFactory is not None:
+        try:
+            remove = _GzEntity()
+            remove.name = MODEL_BALLOON
+            remove.type = _GzEntity.MODEL
+            _gz_node.request(
+                f"/world/{WORLD}/remove", remove, _GzEntity, _GzBool, 1000)
+            create = _GzEntityFactory()
+            create.sdf = sdf
+            _gz_node.request(
+                f"/world/{WORLD}/create", create, _GzEntityFactory, _GzBool, 1000)
+            return True
+        except Exception:
+            pass
+
+    remove = subprocess.run(
+        ["gz", "service", "-s", f"/world/{WORLD}/remove",
+         "--reqtype", "gz.msgs.Entity", "--reptype", "gz.msgs.Boolean",
+         "--timeout", "1000", "--req", f'name: "{MODEL_BALLOON}", type: MODEL'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if remove.returncode != 0:
+        return False
+    create = subprocess.run(
+        ["gz", "service", "-s", f"/world/{WORLD}/create",
+         "--reqtype", "gz.msgs.EntityFactory", "--reptype", "gz.msgs.Boolean",
+         "--timeout", "1000", "--req", f"sdf: {json.dumps(sdf)}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return create.returncode == 0
 
 
 class BalloonReferee(Node):
@@ -191,8 +259,13 @@ class BalloonReferee(Node):
         self._prev_enabled = True
         self._launched_once = False
         self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
+        self._target_pos_gt = None
         self._reset_ground_truth_history()
         self._park_at_start()
+        if self.target_model == MODEL_BALLOON:
+            if not reset_balloon(*self._ball_pos):
+                self.get_logger().error(
+                    "RESET 중 풍선 재생성 실패 — 위치는 복귀했지만 속도가 남을 수 있음")
         self.get_logger().info("실험 RESET: 표적을 패스 시작점에 대기")
 
     @staticmethod
