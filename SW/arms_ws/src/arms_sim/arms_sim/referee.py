@@ -249,7 +249,11 @@ class BalloonReferee(Node):
                 target_pos = (p.position.x, p.position.y, p.position.z)
         if drone_pos is not None:
             self._drone_pos = drone_pos
-        self._target_pos_gt = target_pos
+        # dynamic_pose/info 는 변경된 엔티티만 담긴 부분 갱신일 수 있다.
+        # 표적이 포함되지 않은 메시지마다 None 으로 지우면 GT가 대부분 invalid가
+        # 되어, GT를 제어에 사용하지 않는 모드의 pn_debug 비교값도 전부 0이 된다.
+        if target_pos is not None:
+            self._target_pos_gt = target_pos
 
     def _reset_ground_truth_history(self):
         self._gt_prev_time = None
