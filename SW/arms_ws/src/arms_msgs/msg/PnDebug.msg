@@ -6,8 +6,13 @@ float32 los_z
 float32 los_rate_x
 float32 los_rate_y
 float32 los_rate_z
+float32 bbox_scale
+float32 range_raw_m
 float32 range_m
+float32 closing_speed_raw_mps
 float32 closing_speed_mps
+float32 range_innovation_m
+bool range_measurement_accepted
 float32 pn_accel_x
 float32 pn_accel_y
 float32 pn_accel_z

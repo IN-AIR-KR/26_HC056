@@ -133,8 +133,11 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pn.navigation_ratio", 3.0);
     declare_parameter("control.pn.approach_accel_mps2", 5.0);
     declare_parameter("control.pn.target_diameter_m", 0.5);
-    declare_parameter("control.pn.closing_speed_alpha", 0.25);
     declare_parameter("control.pn.max_closing_speed_mps", 20.0);
+    declare_parameter("control.pn.range_kf_accel_noise_mps2", 8.0);
+    declare_parameter("control.pn.range_kf_measurement_noise_ratio", 0.04);
+    declare_parameter("control.pn.range_kf_min_measurement_noise_m", 0.15);
+    declare_parameter("control.pn.range_kf_innovation_gate_sigma", 4.0);
     declare_parameter("control.pn.kf_accel_noise", 0.8);
     declare_parameter("control.pn.kf_measurement_noise", 0.0025);
     declare_parameter("control.pn.max_lateral_accel_mps2", 12.0);
@@ -234,9 +237,16 @@ class ArmsControlNode : public rclcpp::Node {
     pn_params_.navigation_ratio = get_parameter("control.pn.navigation_ratio").as_double();
     pn_params_.approach_accel_mps2 = get_parameter("control.pn.approach_accel_mps2").as_double();
     pn_params_.target_diameter_m = get_parameter("control.pn.target_diameter_m").as_double();
-    pn_params_.closing_speed_alpha = get_parameter("control.pn.closing_speed_alpha").as_double();
     pn_params_.max_closing_speed_mps =
         get_parameter("control.pn.max_closing_speed_mps").as_double();
+    pn_params_.range_kf_accel_noise_mps2 =
+        get_parameter("control.pn.range_kf_accel_noise_mps2").as_double();
+    pn_params_.range_kf_measurement_noise_ratio =
+        get_parameter("control.pn.range_kf_measurement_noise_ratio").as_double();
+    pn_params_.range_kf_min_measurement_noise_m =
+        get_parameter("control.pn.range_kf_min_measurement_noise_m").as_double();
+    pn_params_.range_kf_innovation_gate_sigma =
+        get_parameter("control.pn.range_kf_innovation_gate_sigma").as_double();
     pn_params_.kf_accel_noise = get_parameter("control.pn.kf_accel_noise").as_double();
     pn_params_.kf_measurement_noise = get_parameter("control.pn.kf_measurement_noise").as_double();
     pn_params_.max_lateral_accel_mps2 =
@@ -336,10 +346,16 @@ class ArmsControlNode : public rclcpp::Node {
               pn_params_.approach_accel_mps2 = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.target_diameter_m") {
               pn_params_.target_diameter_m = p.as_double(); pn_changed = true;
-            } else if (n == "control.pn.closing_speed_alpha") {
-              pn_params_.closing_speed_alpha = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.max_closing_speed_mps") {
               pn_params_.max_closing_speed_mps = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.range_kf_accel_noise_mps2") {
+              pn_params_.range_kf_accel_noise_mps2 = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.range_kf_measurement_noise_ratio") {
+              pn_params_.range_kf_measurement_noise_ratio = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.range_kf_min_measurement_noise_m") {
+              pn_params_.range_kf_min_measurement_noise_m = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.range_kf_innovation_gate_sigma") {
+              pn_params_.range_kf_innovation_gate_sigma = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.kf_accel_noise") {
               pn_params_.kf_accel_noise = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.kf_measurement_noise") {
@@ -1140,8 +1156,13 @@ class ArmsControlNode : public rclcpp::Node {
       dbg.los_rate_x = out.los_rate_ned.x;
       dbg.los_rate_y = out.los_rate_ned.y;
       dbg.los_rate_z = out.los_rate_ned.z;
+      dbg.bbox_scale = out.bbox_scale;
+      dbg.range_raw_m = out.range_raw_m;
       dbg.range_m = out.range_m;
+      dbg.closing_speed_raw_mps = out.closing_speed_raw_mps;
       dbg.closing_speed_mps = out.closing_speed_mps;
+      dbg.range_innovation_m = out.range_innovation_m;
+      dbg.range_measurement_accepted = out.range_measurement_accepted;
       dbg.pn_accel_x = out.acceleration_pn_ned.x;
       dbg.pn_accel_y = out.acceleration_pn_ned.y;
       dbg.pn_accel_z = out.acceleration_pn_ned.z;

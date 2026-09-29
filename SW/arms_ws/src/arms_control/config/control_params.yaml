@@ -140,8 +140,12 @@ arms_control_node:
         navigation_ratio: 3.0
         approach_accel_mps2: 5.0
         target_diameter_m: 0.5
-        closing_speed_alpha: 0.25
-        max_closing_speed_mps: 20.0  # bbox 미분 스파이크 제한. 로그의 145m/s 같은 값 차단
+        max_closing_speed_mps: 20.0  # KF 출력이 PN에 들어가기 전 적용하는 물리 상한
+        # bbox 거리 측정 → [range, range-rate] KF. Vc=-range-rate.
+        range_kf_accel_noise_mps2: 8.0       # 클수록 실제 가감속 추종이 빠르지만 Vc 노이즈 증가
+        range_kf_measurement_noise_ratio: 0.04 # 거리 비례 측정 표준편차(4%)
+        range_kf_min_measurement_noise_m: 0.15 # 근거리 측정 표준편차 하한
+        range_kf_innovation_gate_sigma: 4.0    # 이 범위 밖 bbox 거리 측정은 예측만 유지
         # SITL 검증용. true면 해당 PN 입력만 Gazebo ground truth로 대체한다.
         # 실기체에는 GT 발행자가 없으므로 false 유지.
         use_ground_truth_los_rate: false

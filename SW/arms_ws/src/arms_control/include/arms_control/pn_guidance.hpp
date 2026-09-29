@@ -141,12 +141,42 @@ private:
   Vec3 los_rate_{};
 };
 
+// bbox 크기로 얻은 거리 측정값에서 거리와 거리 변화율을 함께 추정한다.
+// 상태는 [range, range_rate]이며 closing speed는 -range_rate이다.
+class ConstantRateRangeKalman {
+public:
+  void reset();
+  bool update(double range_measurement_m, double stamp_sec,
+              double accel_noise_mps2, double measurement_noise_ratio,
+              double min_measurement_noise_m, double innovation_gate_sigma);
+  bool initialized() const { return initialized_; }
+  double range_m() const { return range_m_; }
+  double range_rate_mps() const { return range_rate_mps_; }
+  double innovation_m() const { return innovation_m_; }
+  bool measurement_accepted() const { return measurement_accepted_; }
+
+private:
+  bool initialized_{false};
+  double last_stamp_sec_{0.0};
+  double range_m_{0.0};
+  double range_rate_mps_{0.0};
+  double p00_{1.0};
+  double p01_{0.0};
+  double p10_{0.0};
+  double p11_{100.0};
+  double innovation_m_{0.0};
+  bool measurement_accepted_{false};
+};
+
 struct PnParameters {
   double navigation_ratio{3.0};
   double approach_accel_mps2{5.0};
   double target_diameter_m{0.5};
-  double closing_speed_alpha{0.25};
   double max_closing_speed_mps{20.0};
+  double range_kf_accel_noise_mps2{8.0};
+  double range_kf_measurement_noise_ratio{0.04};
+  double range_kf_min_measurement_noise_m{0.15};
+  double range_kf_innovation_gate_sigma{4.0};
   double kf_accel_noise{0.8};
   double kf_measurement_noise{0.0025};
   double hover_throttle{0.42};
@@ -174,8 +204,13 @@ struct PnOutput {
   Vec3 los_ned{};
   Vec3 los_rate_ned{};
   Vec3 omega_los_ned{};
+  double bbox_scale{0.0};
+  double range_raw_m{0.0};
   double range_m{0.0};
+  double closing_speed_raw_mps{0.0};
   double closing_speed_mps{0.0};
+  double range_innovation_m{0.0};
+  bool range_measurement_accepted{false};
   Vec3 acceleration_pn_ned{};
   Vec3 acceleration_guidance_ned{};
   Vec3 specific_thrust_ned{};
@@ -205,10 +240,10 @@ private:
   PnParameters params_{};
   CameraModel camera_{};
   ConstantRateLosKalman los_filter_{};
-  bool scale_initialized_{false};
-  double previous_range_m_{0.0};
-  double previous_scale_stamp_sec_{0.0};
-  double closing_speed_mps_{0.0};
+  ConstantRateRangeKalman range_filter_{};
+  bool raw_range_initialized_{false};
+  double previous_raw_range_m_{0.0};
+  double previous_raw_range_stamp_sec_{0.0};
   bool yaw_initialized_{false};
   double fixed_yaw_rad_{0.0};
   PnOutput output_{};

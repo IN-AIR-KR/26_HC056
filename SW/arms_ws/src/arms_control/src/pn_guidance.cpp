@@ -200,12 +200,98 @@ bool ConstantRateLosKalman::update(const Vec3 &measurement, double stamp_sec,
   return true;
 }
 
+void ConstantRateRangeKalman::reset() {
+  initialized_ = false;
+  last_stamp_sec_ = 0.0;
+  range_m_ = 0.0;
+  range_rate_mps_ = 0.0;
+  p00_ = 1.0;
+  p01_ = p10_ = 0.0;
+  p11_ = 100.0;
+  innovation_m_ = 0.0;
+  measurement_accepted_ = false;
+}
+
+bool ConstantRateRangeKalman::update(
+    double z, double stamp_sec, double accel_noise_mps2,
+    double measurement_noise_ratio, double min_measurement_noise_m,
+    double innovation_gate_sigma) {
+  if (!(std::isfinite(z) && z > 0.0 && std::isfinite(stamp_sec)))
+    return false;
+
+  const double min_sigma = std::max(0.0, min_measurement_noise_m);
+  const double noise_ratio = std::max(0.0, measurement_noise_ratio);
+
+  if (!initialized_) {
+    const double sigma = std::max(min_sigma, noise_ratio * z);
+    const double r = std::max(1e-9, sigma * sigma);
+    initialized_ = true;
+    last_stamp_sec_ = stamp_sec;
+    range_m_ = z;
+    range_rate_mps_ = 0.0;
+    p00_ = r;
+    p01_ = p10_ = 0.0;
+    p11_ = 100.0;
+    innovation_m_ = 0.0;
+    measurement_accepted_ = true;
+    return true;
+  }
+
+  const double dt = stamp_sec - last_stamp_sec_;
+  if (!(dt > 1e-4 && dt < 0.5)) {
+    if (dt <= 0.0)
+      return false;
+    reset();
+    return update(z, stamp_sec, accel_noise_mps2, measurement_noise_ratio,
+                  min_measurement_noise_m, innovation_gate_sigma);
+  }
+
+  range_m_ += range_rate_mps_ * dt;
+  const double p00 = p00_ + dt * (p10_ + p01_) + dt * dt * p11_;
+  const double p01 = p01_ + dt * p11_;
+  const double p10 = p10_ + dt * p11_;
+  const double p11 = p11_;
+  const double q = std::max(0.0, accel_noise_mps2) *
+                   std::max(0.0, accel_noise_mps2);
+  const double dt2 = dt * dt, dt3 = dt2 * dt, dt4 = dt2 * dt2;
+  p00_ = p00 + q * dt4 * 0.25;
+  p01_ = p01 + q * dt3 * 0.5;
+  p10_ = p10 + q * dt3 * 0.5;
+  p11_ = p11 + q * dt2;
+  last_stamp_sec_ = stamp_sec;
+
+  // 이상 측정이 자신의 noise와 gate까지 키우지 않도록, 측정 z가 아니라
+  // 갱신 전 예측 거리를 기준으로 거리 비례 측정 잡음을 정한다.
+  const double sigma = std::max(min_sigma, noise_ratio * std::max(0.0, range_m_));
+  const double r = std::max(1e-9, sigma * sigma);
+  innovation_m_ = z - range_m_;
+  const double innovation_variance = p00_ + r;
+  const double gate = std::max(0.0, innovation_gate_sigma) *
+                      std::sqrt(innovation_variance);
+  measurement_accepted_ = innovation_gate_sigma <= 0.0 ||
+                          std::abs(innovation_m_) <= gate;
+  if (!measurement_accepted_)
+    return true;
+
+  const double k0 = p00_ / innovation_variance;
+  const double k1 = p10_ / innovation_variance;
+  const double prior_p00 = p00_;
+  const double prior_p01 = p01_;
+  range_m_ += k0 * innovation_m_;
+  range_rate_mps_ += k1 * innovation_m_;
+  p00_ -= k0 * prior_p00;
+  p01_ -= k0 * prior_p01;
+  p10_ -= k1 * prior_p00;
+  p11_ -= k1 * prior_p01;
+  return true;
+}
+
 void PnGuidance::reset() {
   los_filter_.reset();
-  scale_initialized_ = false;
-  previous_range_m_ = 0.0;
-  previous_scale_stamp_sec_ = 0.0;
-  closing_speed_mps_ = 0.0;
+  range_filter_.reset();
+  raw_range_initialized_ = false;
+  previous_raw_range_m_ = 0.0;
+  previous_raw_range_stamp_sec_ = 0.0;
   yaw_initialized_ = false;
   fixed_yaw_rad_ = 0.0;
   output_ = {};
@@ -251,28 +337,29 @@ bool PnGuidance::update_detection(double stamp_sec, double x_center,
   // 이것이 looming의 scale 변화에 절대 단위(m)를 부여해 Vc[m/s]를 만든다.
   const double scale_x = width * camera_.width / camera_.fx;
   const double scale_y = height * camera_.height / camera_.fy;
-  const double angular_scale = std::max(scale_x, scale_y);
-  double range_m = 0.0;
-  if (angular_scale > 1e-4 && params_.target_diameter_m > 0.0) {
-    range_m = params_.target_diameter_m / angular_scale;
-    if (scale_initialized_) {
-      const double dt = stamp_sec - previous_scale_stamp_sec_;
-      if (dt > 1e-3 && dt < 0.5) {
-        // bbox 크기는 프레임마다 흔들리므로 미분값에 큰 스파이크가 생긴다.
-        // 물리적으로 가능한 접근속도 범위에서 먼저 자른 뒤 LPF에 넣어야
-        // 한 프레임의 잘못된 bbox가 이후 여러 프레임의 PN을 포화시키지 않는다.
-        const double vc_limit = std::max(0.0, params_.max_closing_speed_mps);
-        const double vc_raw = std::clamp(
-            (previous_range_m_ - range_m) / dt, -vc_limit, vc_limit);
-        const double a = std::clamp(params_.closing_speed_alpha, 0.0, 1.0);
-        closing_speed_mps_ = a * vc_raw + (1.0 - a) * closing_speed_mps_;
-      }
-    } else {
-      scale_initialized_ = true;
-    }
-    previous_range_m_ = range_m;
-    previous_scale_stamp_sec_ = stamp_sec;
+  // 구형 표적은 두 축이 같은 지름이어야 한다. max()는 지배 축이 바뀔 때
+  // 불연속이 생기므로 두 축의 기하평균을 사용한다.
+  const double angular_scale =
+      scale_x > 0.0 && scale_y > 0.0 ? std::sqrt(scale_x * scale_y) : 0.0;
+  if (!(angular_scale > 1e-4 && params_.target_diameter_m > 0.0))
+    return false;
+  double range_raw_m = 0.0;
+  double closing_speed_raw_mps = 0.0;
+  range_raw_m = params_.target_diameter_m / angular_scale;
+  if (raw_range_initialized_) {
+    const double dt = stamp_sec - previous_raw_range_stamp_sec_;
+    if (dt > 1e-3 && dt < 0.5)
+      closing_speed_raw_mps = (previous_raw_range_m_ - range_raw_m) / dt;
   }
+  raw_range_initialized_ = true;
+  previous_raw_range_m_ = range_raw_m;
+  previous_raw_range_stamp_sec_ = stamp_sec;
+  if (!range_filter_.update(
+          range_raw_m, stamp_sec, params_.range_kf_accel_noise_mps2,
+          params_.range_kf_measurement_noise_ratio,
+          params_.range_kf_min_measurement_noise_m,
+          params_.range_kf_innovation_gate_sigma))
+    return false;
 
   const Vec3 los = los_filter_.los();
   const Vec3 los_rate = los_rate_override_ned != nullptr
@@ -281,7 +368,7 @@ bool PnGuidance::update_detection(double stamp_sec, double x_center,
   const Vec3 omega = cross(los, los_rate);
   const double vc_source = closing_speed_override_mps != nullptr
                                ? *closing_speed_override_mps
-                               : closing_speed_mps_;
+                               : -range_filter_.range_rate_mps();
   const double vc = std::clamp(vc_source, 0.0,
                                std::max(0.0, params_.max_closing_speed_mps));
   Vec3 a_pn = params_.navigation_ratio * vc * los_rate;
@@ -299,13 +386,19 @@ bool PnGuidance::update_detection(double stamp_sec, double x_center,
   // Vc=0이어도 LOS 방향 접근 가속도는 유효하다. 정지 상태에서
   // looming을 기다리며 hover하면 스케일이 변하지 않아 출발할 수 없다.
   output_.valid =
-      los_filter_.initialized() && scale_initialized_ && range_m > 0.0;
+      los_filter_.initialized() && range_filter_.initialized() &&
+      range_filter_.range_m() > 0.0;
   output_.stamp_sec = stamp_sec;
   output_.los_ned = los;
   output_.los_rate_ned = los_rate;
   output_.omega_los_ned = omega;
-  output_.range_m = range_m;
+  output_.bbox_scale = angular_scale;
+  output_.range_raw_m = range_raw_m;
+  output_.range_m = range_filter_.range_m();
+  output_.closing_speed_raw_mps = closing_speed_raw_mps;
   output_.closing_speed_mps = vc;
+  output_.range_innovation_m = range_filter_.innovation_m();
+  output_.range_measurement_accepted = range_filter_.measurement_accepted();
   output_.acceleration_pn_ned = a_pn;
   output_.acceleration_guidance_ned = a_guidance;
   output_.specific_thrust_ned = specific_thrust;

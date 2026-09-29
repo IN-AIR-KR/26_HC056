@@ -18,13 +18,16 @@ _카메라 bearing으로부터 관성 LOS를 추정하고, 충돌 가속도를 �
 `feat/pn-test`의 현재 구현은 이 문서의 기본 구조를 따른다. 선택한 범위는 다음과 같다.
 
 - 인접한 두 관성 LOS 벡터의 변화를 constant angular-rate KF로 추정
-- bbox angular scale + 알려진 표적 지름의 looming으로 $V_c$ 추정
+- bbox angular scale + 알려진 표적 지름으로 거리를 측정하고 range/range-rate KF로 $V_c$ 추정
 - center-holding 없이 PN + LOS 방향 접근 가속도만 사용
 - 상방 카메라, 초기 yaw 고정
 - gravity compensation 후 desired attitude/thrust 생성
 - desired roll/pitch를 CRSF로 보내 PX4 Stabilized attitude controller에 연결
 
 terminal 전용 로직과 FOV/center-holding은 이번 구현 범위에서 제외했다.
+
+거리·접근속도 추정기의 상세 수식과 튜닝 방법은 별첨
+[PN_GUIDANCE_RANGE_RATE_APPENDIX.md](PN_GUIDANCE_RANGE_RATE_APPENDIX.md)에 정리한다.
 
 ## 목차
 
