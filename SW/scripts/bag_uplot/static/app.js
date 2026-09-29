@@ -1,5 +1,5 @@
 const COLORS = ["#55b8ff", "#ff9f43", "#55d98b", "#ef6f9a", "#b48cff", "#f3d65c", "#65d7dc", "#f07c60"];
-const preferred = /(^valid$|state_code|error_[xy]|los_rate_[xyz]|range_m|closing_speed|pn_accel_[xyz]|desired_(roll|pitch)|actual_(roll|pitch)|(roll|pitch)_cmd_deg|throttle|voltage|battery|detections_0_(x_center|y_center|width|height))/;
+const preferred = /(^valid$|state_code|error_[xy]|los_rate_[xyz]|range_m|closing_speed|pn_accel_[xyz]|desired_(roll|pitch)|actual_(roll|pitch)|(roll|pitch)_cmd_deg|throttle|time_to_collision_sec|bbox_(size|growth)|voltage|battery|detections_0_(x_center|y_center|width|height))/;
 // 모든 plot이 같은 bag 기준 t_rel 축을 쓰므로 uPlot cursor sync group 하나로 묶는다.
 // setSeries=false: 한 그래프에서 가까운 series를 고른 상태까지 다른 그래프에 강요하지 않고,
 // 시간 위치/세로 crosshair와 각 그래프 legend 값만 함께 갱신한다.

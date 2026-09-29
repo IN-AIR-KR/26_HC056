@@ -60,7 +60,7 @@ except Exception as _e:                     # 무엇이 왜 실패했는지 남�
     _GZ_OK = False
 
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
-ALT = 42.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
+ALT = 30.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
 # 광역 비행: 카메라 화각 밖 먼 지점에서 시작 → 대각선으로 시야 통과 → 반대편 먼 곳으로 이탈.
 # 화각 제약 scale 을 제거하고 SPAN 을 기존(28) 대비 ~2.5배로 키움.
 SPAN = 100.0         # 대각선 가로지르는 총 거리 [m] (먼곳→먼곳). x/y 각각 ±SPAN/2 이동
@@ -133,6 +133,8 @@ class BalloonReferee(Node):
         self._gt_prev_time = None
         self._gt_prev_los = None
         self._gt_prev_range = None
+        self._gt_drone_updated = False
+        self._gt_target_updated = False
         # 드론 실제 위치 구독 → 진짜 충돌(직격) 판정. (gz dynamic pose)
         if _GZ_OK and _GzPoseV is not None:
             try:
@@ -250,16 +252,20 @@ class BalloonReferee(Node):
                 target_pos = (p.position.x, p.position.y, p.position.z)
         if drone_pos is not None:
             self._drone_pos = drone_pos
+            self._gt_drone_updated = True
         # dynamic_pose/info 는 변경된 엔티티만 담긴 부분 갱신일 수 있다.
         # 표적이 포함되지 않은 메시지마다 None 으로 지우면 GT가 대부분 invalid가
         # 되어, GT를 제어에 사용하지 않는 모드의 pn_debug 비교값도 전부 0이 된다.
         if target_pos is not None:
             self._target_pos_gt = target_pos
+            self._gt_target_updated = True
 
     def _reset_ground_truth_history(self):
         self._gt_prev_time = None
         self._gt_prev_los = None
         self._gt_prev_range = None
+        self._gt_drone_updated = False
+        self._gt_target_updated = False
 
     def _publish_guidance_ground_truth(self, now):
         """Gazebo ENU 상대위치로 NED LOS, LOS-rate, range, Vc를 계산한다."""
@@ -267,8 +273,14 @@ class BalloonReferee(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         if self._drone_pos is None or self._target_pos_gt is None:
             self._reset_ground_truth_history()
-            self._gt_pub.publish(msg)
             return
+        # referee 타이머가 Gazebo pose 발행보다 먼저 다시 돌면 cached pose 두 개로
+        # distance 차분을 계산해 Vc=0, LOS-rate=0을 valid=true로 내보내게 된다.
+        # 두 엔티티의 pose가 모두 새로 들어온 한 쌍에 대해서만 미분한다.
+        if not (self._gt_drone_updated and self._gt_target_updated):
+            return
+        self._gt_drone_updated = False
+        self._gt_target_updated = False
 
         dx = self._target_pos_gt[0] - self._drone_pos[0]  # ENU east
         dy = self._target_pos_gt[1] - self._drone_pos[1]  # ENU north
@@ -278,7 +290,6 @@ class BalloonReferee(Node):
         distance = math.sqrt(sum(v * v for v in rel))
         if distance < 1e-6:
             self._reset_ground_truth_history()
-            self._gt_pub.publish(msg)
             return
         los = tuple(v / distance for v in rel)
 
@@ -298,7 +309,10 @@ class BalloonReferee(Node):
         self._gt_prev_time = now
         self._gt_prev_los = los
         self._gt_prev_range = distance
-        self._gt_pub.publish(msg)
+        # 첫 샘플이나 pose 단절 직후에는 미분값을 계산할 수 없다. 0으로 채운
+        # invalid 메시지를 내보내 그래프를 떨어뜨리지 말고, 다음 유효 샘플부터 발행한다.
+        if msg.valid:
+            self._gt_pub.publish(msg)
 
     @staticmethod
     def _is_our_drone(collision_name):

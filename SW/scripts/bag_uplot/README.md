@@ -19,6 +19,10 @@ ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true
 - 영상: `/arms/ui_image/compressed`
 - 검출: `/arms/detections_raw`, `/arms/detections`, `/arms/detector_status`
 - PN: `/arms/pn_debug`, `/arms/guidance_ground_truth`, `/arms/control_debug`, `/arms/debug_looming`
+
+`/arms/debug_looming`은 원래 `geometry_msgs/Vector3`이지만 뷰어에서는 의미에 맞게
+`x → time_to_collision_sec`, `y → bbox_size_ema`,
+`z → bbox_growth_rate_per_sec`로 표시한다.
 - 자세/FC: `/arms/attitude_quaternion`, `/arms/crsf_tx`, `/arms/crsf_rx`
 - 상태/입력: `/arms/mission_state`, `/arms/command`
 

@@ -144,7 +144,7 @@ private:
 struct PnParameters {
   double navigation_ratio{3.0};
   double approach_accel_mps2{5.0};
-  double target_diameter_m{2.0};
+  double target_diameter_m{0.5};
   double closing_speed_alpha{0.25};
   double max_closing_speed_mps{20.0};
   double kf_accel_noise{0.8};

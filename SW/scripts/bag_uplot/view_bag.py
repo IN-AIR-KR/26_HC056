@@ -16,6 +16,14 @@ BAG_VIS = HERE.parent / "bag_visualize"
 sys.path.insert(0, str(BAG_VIS))
 
 STATE_CODES = {"IDLE": 0, "SEARCH": 1, "LOCK": 2, "TRACK": 3, "FIRE": 4, "RTL": 5}
+VIEWER_SCHEMA_VERSION = 2
+TOPIC_COLUMN_NAMES = {
+    "/arms/debug_looming": {
+        "x": "time_to_collision_sec",
+        "y": "bbox_size_ema",
+        "z": "bbox_growth_rate_per_sec",
+    },
+}
 
 
 def number(value):
@@ -39,13 +47,15 @@ def csv_to_topic(path: Path):
     if not rows or "t_rel" not in rows[0]:
         return None
 
+    topic_name = "/" + path.stem.replace("_", "/", 1)
+    aliases = TOPIC_COLUMN_NAMES.get(topic_name, {})
     columns = {"t_rel": [number(row.get("t_rel", "")) for row in rows]}
     for name in rows[0]:
         if name in {"t_ns", "t_rel"} or name.startswith("header_stamp"):
             continue
         values = [number(row.get(name, "")) for row in rows]
         if any(v is not None for v in values):
-            columns[name] = values
+            columns[aliases.get(name, name)] = values
 
     # mission state 문자열은 숫자 상태축도 같이 만든다.
     if "state" in rows[0]:
@@ -55,7 +65,7 @@ def csv_to_topic(path: Path):
 
     if len(columns) == 1:
         return None
-    return {"name": "/" + path.stem.replace("_", "/", 1), "file": path.name,
+    return {"name": topic_name, "file": path.name,
             "samples": len(rows), "columns": columns}
 
 
@@ -65,7 +75,8 @@ def export_data(csv_dir: Path, out_dir: Path):
         topic = csv_to_topic(path)
         if topic:
             topics.append(topic)
-    payload = {"state_codes": STATE_CODES, "topics": topics}
+    payload = {"schema_version": VIEWER_SCHEMA_VERSION,
+               "state_codes": STATE_CODES, "topics": topics}
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "data.json").write_text(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -115,7 +126,12 @@ def convert_flight(name: str, flight_source: Path, out: Path):
     flight_out = out / "flights" / name
     data_path = flight_out / "data.json"
     if data_path.is_file() and data_path.stat().st_mtime >= source_mtime(flight_source):
-        return data_path
+        try:
+            cached = json.loads(data_path.read_text(encoding="utf-8"))
+            if cached.get("schema_version") == VIEWER_SCHEMA_VERSION:
+                return data_path
+        except (OSError, ValueError):
+            pass
 
     # 생성 캐시만 지운다. 원본 arms_flight_log는 절대 건드리지 않는다.
     if flight_out.exists():

@@ -132,7 +132,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.guidance_mode", 0);
     declare_parameter("control.pn.navigation_ratio", 3.0);
     declare_parameter("control.pn.approach_accel_mps2", 5.0);
-    declare_parameter("control.pn.target_diameter_m", 2.0);
+    declare_parameter("control.pn.target_diameter_m", 0.5);
     declare_parameter("control.pn.closing_speed_alpha", 0.25);
     declare_parameter("control.pn.max_closing_speed_mps", 20.0);
     declare_parameter("control.pn.kf_accel_noise", 0.8);
@@ -471,6 +471,10 @@ class ArmsControlNode : public rclcpp::Node {
     sub_guidance_gt_ = create_subscription<arms_msgs::msg::GuidanceGroundTruth>(
         "/arms/guidance_ground_truth", rclcpp::SensorDataQoS(),
         [this](arms_msgs::msg::GuidanceGroundTruth::SharedPtr msg) {
+          // referee는 두 pose가 아직 준비되지 않은 순간 valid=false인 0 메시지도
+          // 발행한다. 그걸 저장하면 pn_debug GT 곡선이 중간중간 0으로 떨어진다.
+          // 마지막 유효 샘플만 유지하고 freshness는 수신 시각으로 별도 판정한다.
+          if (!msg->valid) return;
           latest_gt_ = *msg;
           gt_receipt_time_ = now();
           gt_received_ = true;
@@ -1162,7 +1166,9 @@ class ArmsControlNode : public rclcpp::Node {
       dbg.ground_truth_valid = gt_fresh;
       dbg.use_ground_truth_los_rate = use_gt_los_rate_;
       dbg.use_ground_truth_closing_speed = use_gt_closing_speed_;
-      if (gt_fresh) {
+      // fresh가 아니어도 마지막 유효 GT 값은 그래프 연속성을 위해 유지한다.
+      // ground_truth_valid가 false이므로 제어에는 사용되지 않고 stale 여부도 구분된다.
+      if (gt_received_) {
         dbg.ground_truth_los_x = latest_gt_.los_x;
         dbg.ground_truth_los_y = latest_gt_.los_y;
         dbg.ground_truth_los_z = latest_gt_.los_z;

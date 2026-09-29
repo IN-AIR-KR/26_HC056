@@ -41,6 +41,7 @@ SWITCH_THRESH = 1500  # > threshold → switch is ON
 
 MAV_MODE_FLAG_SAFETY_ARMED = 128
 ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed state
+ARM_IDLE_SETTLE_SEC = 0.2     # ARM 전 throttle-min이 PX4에 반영될 시간
 # 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
 # PX4 는 1Hz 로 heartbeat 을 보내므로 3s 면 오탐 없이 충분히 빠르다.
 HB_TIMEOUT_SEC = 3.0
@@ -133,6 +134,7 @@ class ArmsSITLCommNode(Node):
 
         self._armed = False            # last known FC armed state, from HEARTBEAT
         self._last_arm_send = 0.0      # throttle for arm/disarm resend
+        self._arm_idle_since = None    # throttle-min 선행 전송 시작 시각
 
         self._mav       = None
         self._connected = False
@@ -309,18 +311,6 @@ class ArmsSITLCommNode(Node):
             mode_req = self._mode_pending
             self._mode_pending = None
 
-        # Arm/disarm: keep resending while the FC's actual armed state doesn't match
-        # CH5 yet. A single MAV_CMD_COMPONENT_ARM_DISARM can be TEMPORARILY_REJECTED
-        # (e.g. EKF/position estimate not converged yet right after boot) — without a
-        # retry that one lost attempt meant "denied forever" until CH5 toggled again.
-        now = time.time()
-        if ch5_high != self._armed and (now - self._last_arm_send) >= ARM_RETRY_INTERVAL_SEC:
-            self._last_arm_send = now
-            self.get_logger().info(
-                f"CH5={'ON' if ch5_high else 'OFF'}, armed={self._armed} → "
-                f"sending {'ARM' if ch5_high else 'DISARM'}")
-            self._send_arm(ch5_high)
-
         # Handle pending flight-mode change (CH6)
         if mode_req is not None:
             name = {PX4_CUSTOM_MAIN_MODE_STABILIZED: "Stabilized",
@@ -328,8 +318,20 @@ class ArmsSITLCommNode(Node):
             self.get_logger().info(f"CH6 → {name} mode")
             self._send_set_mode(mode_req)
 
-        # RC_CHANNELS_OVERRIDE: CRSF → microseconds
+        # RC_CHANNELS_OVERRIDE: CRSF → microseconds.
+        # RESET 뒤 bridge가 재연결될 때 control은 이미 TRACK일 수 있다. 이때
+        # CH5=ARM과 TRACK throttle을 동시에 보내면 PX4가 "throttle not idle"로
+        # arming을 거부한다. 실제 armed heartbeat가 확인될 때까지 CH3를 최저로
+        # 고정하고, PX4에 반영될 시간을 둔 뒤 ARM 명령을 보낸다.
         us = [_crsf_to_us(v) for v in chs]
+        now = time.time()
+        arming = ch5_high and not self._armed
+        if arming:
+            us[2] = 1000
+            if self._arm_idle_since is None:
+                self._arm_idle_since = now
+        else:
+            self._arm_idle_since = None
         try:
             self._mav.mav.rc_channels_override_send(
                 self._mav.target_system,
@@ -340,6 +342,19 @@ class ArmsSITLCommNode(Node):
         except Exception as e:
             self.get_logger().warn(
                 f"RC override failed: {e}", throttle_duration_sec=5.0)
+
+        # ARM은 throttle-min override를 먼저 보낸 뒤 요청한다. 일시 거부되면 기존처럼
+        # 실제 armed 상태가 맞을 때까지 ARM_RETRY_INTERVAL_SEC 간격으로 재시도한다.
+        idle_ready = (not arming or
+                      (self._arm_idle_since is not None and
+                       now - self._arm_idle_since >= ARM_IDLE_SETTLE_SEC))
+        if (ch5_high != self._armed and idle_ready and
+                (now - self._last_arm_send) >= ARM_RETRY_INTERVAL_SEC):
+            self._last_arm_send = now
+            self.get_logger().info(
+                f"CH5={'ON' if ch5_high else 'OFF'}, armed={self._armed} → "
+                f"sending {'ARM' if ch5_high else 'DISARM'}")
+            self._send_arm(ch5_high)
 
     # ------------------------------------------------------------------
     # MAVLink helpers

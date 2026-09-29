@@ -91,7 +91,7 @@
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
         </inertial>
         <collision name="collision">
-          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <geometry><sphere><radius>0.25</radius></sphere></geometry>
         </collision>
         <!-- 실제 접촉 판정. referee 가 이 토픽을 구독해 명중을 보고한다
              (거리 임계값 방식은 폐기: hit_radius 는 임의 상수였다). -->
@@ -103,7 +103,7 @@
           </contact>
         </sensor>
         <visual name="visual">
-          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <geometry><sphere><radius>0.25</radius></sphere></geometry>
           <material>
             <ambient>1 0 0 1</ambient>
             <diffuse>1 0 0 1</diffuse>
@@ -126,10 +126,10 @@
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
         </inertial>
         <collision name="collision">
-          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <geometry><sphere><radius>0.25</radius></sphere></geometry>
         </collision>
         <!-- 풍선 표적과 같은 접촉 센서. 시각적으로는 x500 이지만 충돌 형상은
-             반경 1.0 구 하나라, 접촉 판정 기준은 두 표적이 동일하다. -->
+             반경 0.25 m 구 하나라, 접촉 판정 기준은 두 표적이 동일하다. -->
         <sensor name="contact_sensor" type="contact">
           <always_on>true</always_on>
           <update_rate>100</update_rate>
