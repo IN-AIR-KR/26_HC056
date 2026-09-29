@@ -84,9 +84,9 @@ PX4는 내부적으로 NED/FRD를 주로 사용한다. ENU에서 계산한 벡�
 
 `BoundingBox`의 중심은 영상 크기로 정규화되어 있다. 영상 폭과 높이를 $W,H$라 하면
 
-$$
+```math
 u=x_{center}W,\qquad v=y_{center}H
-$$
+```
 
 이다. bbox 중심은 표적의 기하학적 중심과 일치한다는 가정이 들어간다. 풍선이 화면 밖으로
 잘리거나 검출 박스가 한쪽으로 치우치면 bearing에도 같은 bias가 생긴다.
@@ -98,9 +98,9 @@ undistort한다. OpenCV를 사용한다면 `cv::undistortPoints()`의 출력을 
 
 현재 `arms_video/config/camera_info.yaml`은
 
-$$
+```math
 f_x=f_y=600,\qquad c_x=360,\qquad c_y=240
-$$
+```
 
 인 플레이스홀더이며 왜곡계수가 모두 0이다. 실제 기체에서 관성 LOS-rate를 사용하려면
 카메라 캘리브레이션을 먼저 수행해야 한다.
@@ -109,19 +109,19 @@ $$
 
 카메라 내부행렬을
 
-$$
+```math
 K=
 \begin{bmatrix}
 f_x&0&c_x\\
 0&f_y&c_y\\
 0&0&1
 \end{bmatrix}
-$$
+```
 
 라고 한다. 동차 픽셀벡터 $\tilde{\mathbf z}=[u,v,1]^T$로부터 카메라 좌표계의
 LOS ray를 구한다.
 
-$$
+```math
 \tilde{\mathbf l}_C=K^{-1}\tilde{\mathbf z}
 =
 \begin{bmatrix}
@@ -129,24 +129,24 @@ $$
 (v-c_y)/f_y\\
 1
 \end{bmatrix}
-$$
+```
 
-$$
+```math
 \boxed{
 \mathbf l_C=\frac{\tilde{\mathbf l}_C}{\|\tilde{\mathbf l}_C\|}
 }
-$$
+```
 
 필요하면 방위각과 고각으로도 표현할 수 있다.
 
-$$
+```math
 \beta_{az}=\operatorname{atan2}(l_{C,x},l_{C,z})
-$$
+```
 
-$$
+```math
 \beta_{el}=-\operatorname{atan2}
 \left(l_{C,y},\sqrt{l_{C,x}^2+l_{C,z}^2}\right)
-$$
+```
 
 영상 $y$축은 아래가 양수이므로 elevation에는 음수가 붙는다. 제어와 필터 내부에서는
 두 각도보다 단위벡터 $\mathbf l_C$를 유지하는 편이 특이점과 부호 오류가 적다.
@@ -155,18 +155,18 @@ $$
 
 카메라에서 body로 가는 고정 extrinsic을 $R_{BC}$라 하면
 
-$$
+```math
 \mathbf l_B=R_{BC}\mathbf l_C
-$$
+```
 
 이다. 카메라가 기체 정면을 본다는 가정만으로 항등행렬을 쓰면 안 된다. optical frame과
 PX4 body frame은 축 순서부터 다르며, 실제 장착 pitch/yaw/roll 오차도 존재한다.
 
 extrinsic은 다음 두 부분으로 관리한다.
 
-$$
+```math
 R_{BC}=R_{axes}R_{mount}
-$$
+```
 
 - $R_{axes}$: 카메라 optical 축과 body 축 정의의 고정 변환
 - $R_{mount}$: 실제 장착 오차 캘리브레이션
@@ -175,11 +175,11 @@ $$
 
 영상 촬영 시각 $t_k$의 PX4 attitude로부터 body-to-world 회전행렬 $R_{WB}(t_k)$를 얻는다.
 
-$$
+```math
 \boxed{
 \mathbf l_W(t_k)=R_{WB}(t_k)R_{BC}\mathbf l_C(t_k)
 }
-$$
+```
 
 드론과 표적이 정지하고 드론만 회전할 때 $\mathbf l_C$는 크게 변하지만 $\mathbf l_W$는
 거의 일정해야 한다. 이것이 body rotation이 제거되었는지 확인하는 가장 중요한 단위 시험이다.
@@ -190,40 +190,40 @@ $$
 
 작은 각도에서는
 
-$$
+```math
 \boldsymbol\omega_{LOS}
 \approx
 \frac{\mathbf l_{k-1}\times\mathbf l_k}{\Delta t}
-$$
+```
 
 를 사용할 수 있다. 큰 회전에도 유효한 axis-angle 식은 다음과 같다.
 
-$$
+```math
 \mathbf c=\mathbf l_{k-1}\times\mathbf l_k
-$$
+```
 
-$$
+```math
 \theta=\operatorname{atan2}
 \left(\|\mathbf c\|,\mathbf l_{k-1}^T\mathbf l_k\right)
-$$
+```
 
-$$
+```math
 \boxed{
 \boldsymbol\omega_{LOS}
 =
 \frac{\theta}{\Delta t}
 \frac{\mathbf c}{\|\mathbf c\|}
 }
-$$
+```
 
 $\|\mathbf c\|$가 매우 작으면 0으로 처리한다. LOS 단위벡터의 변화율은
 
-$$
+```math
 \boxed{
 \dot{\mathbf l}
 =\boldsymbol\omega_{LOS}\times\mathbf l
 }
-$$
+```
 
 이다.
 
@@ -232,22 +232,22 @@ $$
 카메라 좌표계에서 측정한 ray 변화율을 $\dot{\mathbf l}_C$, 카메라의 관성 각속도를
 카메라 좌표계로 표현한 값을 $\boldsymbol\omega_C$라 하면
 
-$$
+```math
 \left.\dot{\mathbf l}\right|_I^C
 =
 \dot{\mathbf l}_C
 +\boldsymbol\omega_C\times\mathbf l_C
-$$
+```
 
 이다. rigid mount라면
 
-$$
+```math
 \boldsymbol\omega_C=R_{CB}\boldsymbol\omega_B
-$$
+```
 
 이다. 따라서
 
-$$
+```math
 \boldsymbol\omega_{LOS}^C
 =
 \mathbf l_C\times
@@ -255,7 +255,7 @@ $$
 \dot{\mathbf l}_C+
 \boldsymbol\omega_C\times\mathbf l_C
 \right)
-$$
+```
 
 로 구할 수 있다. 고주파 보상에는 gyro 방식이 유리하지만 좌표계와 timestamp 실수가 바로
 큰 오차로 이어진다. 첫 구현은 attitude로 각 프레임의 LOS를 world에 회전시키는 방식을
@@ -269,31 +269,31 @@ $$
 
 상대 위치와 속도는
 
-$$
+```math
 \mathbf r=\mathbf p_T-\mathbf p_D,
 \qquad
 \mathbf v_r=\mathbf v_T-\mathbf v_D
-$$
+```
 
 이다. LOS와 접근속도는
 
-$$
+```math
 \mathbf l=\frac{\mathbf r}{R},
 \qquad
 V_c=-\mathbf l^T\mathbf v_r
-$$
+```
 
 이다. $V_c>0$이면 접근 중이고, $V_c\le0$이면 거리가 줄어들지 않는 상태다.
 
 상대 위치·속도를 알고 있을 때 LOS-rate의 ground truth는
 
-$$
+```math
 \boxed{
 \boldsymbol\omega_{LOS,GT}
 =
 \frac{\mathbf r\times\mathbf v_r}{R^2}
 }
-$$
+```
 
 이다. SITL에서는 영상 추정값의 정답으로만 사용하며, 실기체용 제어 입력에 Gazebo 값을
 섞지 않는다.
@@ -302,7 +302,7 @@ $$
 
 PN의 목적은 접근 중 LOS 회전을 줄여 constant-bearing collision course를 만드는 것이다.
 
-$$
+```math
 \boxed{
 \mathbf a_{PN}
 =N V_c
@@ -310,13 +310,13 @@ $$
 \boldsymbol\omega_{LOS}\times\mathbf l
 \right)
 }
-$$
+```
 
 $\boldsymbol\omega_{LOS}\times\mathbf l=\dot{\mathbf l}$이므로
 
-$$
+```math
 \mathbf a_{PN}=N V_c\dot{\mathbf l}
-$$
+```
 
 로도 쓸 수 있다.
 
@@ -342,19 +342,19 @@ $V_c$ 없이 $K\boldsymbol\omega_{LOS}$만 쓰는 방식도 작동할 수 있지
 
 가장 단순한 근사는
 
-$$
+```math
 \boxed{
 t_{go}\approx\frac{R}{\max(V_c,V_{c,min})}
 }
-$$
+```
 
 이다. bbox scale $s$가 표적의 선형 크기에 비례하고 $\dot s>0$이면 looming TTC는
 
-$$
+```math
 \boxed{
 \tau=\frac{s}{\dot s}
 }
-$$
+```
 
 이다. 이상적인 pinhole과 일정 접근속도에서는 $\tau\approx t_{go}$다. bbox가 화면 밖으로
 잘리거나 detector가 크기를 흔들면 $\tau$가 크게 오염되므로 유효성 게이트가 필요하다.
@@ -363,12 +363,12 @@ $$
 
 LOS-rate 추정과 접근속도 추정이 유효할 때 횡가속도 명령은 다음과 같다.
 
-$$
+```math
 \boxed{
 \mathbf a_\perp=\mathbf a_{PN}
 =N V_c(\boldsymbol\omega_{LOS}\times\mathbf l)
 }
-$$
+```
 
 terminal 구간에서도 같은 식을 사용하되, 센서 지연과 기체 응답시간 때문에 남은 시간 안에
 실현할 수 없는 명령이 생기지 않도록 acceleration, tilt, thrust, jerk를 제한하고 포화 상태를
@@ -382,9 +382,9 @@ terminal 구간에서도 같은 식을 사용하되, 센서 지연과 기체 응
 
 따라서 기존의
 
-$$
+```math
 K_Ce
-$$
+```
 
 를 PN 명령에 큰 값으로 바로 더하는 대신 다음 중 하나를 사용한다.
 
@@ -395,14 +395,14 @@ $$
 
 단순한 soft constraint 예시는
 
-$$
+```math
 a_{FOV}=
 \begin{cases}
 0,&|\beta|\le\beta_{soft}\\
 -K_F\left(|\beta|-\beta_{soft}\right)\operatorname{sgn}(\beta),
 &|\beta|>\beta_{soft}
 \end{cases}
-$$
+```
 
 이다. 이 항은 PN보다 낮은 우선순위와 별도 제한을 가져야 한다.
 
@@ -410,17 +410,17 @@ $$
 
 PN은 LOS에 수직인 가속도를 만든다. 표적을 향한 접근속도는 별도로 설계한다.
 
-$$
+```math
 \mathbf a_{guidance}
 =a_\parallel\mathbf l+\mathbf a_\perp
-$$
+```
 
 여기서 $a_\parallel$는 목표 접근속도 추종으로 만들 수 있다.
 
-$$
+```math
 a_\parallel
 =K_v\left(V_{c,ref}-V_c\right)
-$$
+```
 
 가속도 크기는 기체 추력과 tilt 한계를 넘지 않도록 제한한다.
 
@@ -430,42 +430,42 @@ $$
 
 world ENU에서 중력가속도는
 
-$$
+```math
 \mathbf g=
 \begin{bmatrix}0&0&-g\end{bmatrix}^T,
 \qquad g\approx9.81\ \mathrm{m/s^2}
-$$
+```
 
 이다. 드론의 실제 관성가속도는
 
-$$
+```math
 \ddot{\mathbf p}_D=\mathbf f+\mathbf g
-$$
+```
 
 로 쓸 수 있다. $\mathbf f$는 프로펠러가 만드는 specific thrust acceleration이다.
 유도기가 원하는 관성가속도가 $\mathbf a_{guidance}$라면 필요한 specific thrust는
 
-$$
+```math
 \boxed{
 \mathbf f_{des}=\mathbf a_{guidance}-\mathbf g
 }
-$$
+```
 
 이다.
 
 이 식이 정지 표적을 정조준한 드론이 아래로 통과하는 문제의 핵심이다. 추력 방향을 LOS에
 그대로 맞추면
 
-$$
+```math
 \ddot{\mathbf p}_D=a_T\mathbf l+\mathbf g
-$$
+```
 
 가 되어 합가속도가 LOS 아래로 기운다. 유한한 추력에서는 단순히 throttle을 높여도 이 각도는
 작아질 뿐 정확히 0이 되지 않는다. 원하는 합가속도를 LOS 방향으로 만들려면 추력벡터는
 
-$$
+```math
 \mathbf f_{des}=a_\parallel\mathbf l-\mathbf g
-$$
+```
 
 처럼 LOS보다 위를 향해야 한다.
 
@@ -473,9 +473,9 @@ $$
 
 고도 유지에 필요한 단순 tilt compensation은
 
-$$
+```math
 T=\frac{mg}{\cos\phi\cos\theta}
-$$
+```
 
 이다. 이는 수직가속도 0이라는 특수한 경우다. PN의 3차원 가속도 명령까지 포함하려면
 스칼라 throttle 보정보다 $\mathbf f_{des}=\mathbf a_{guidance}-\mathbf g$를 계산하고 그 벡터에서
@@ -485,10 +485,10 @@ $$
 
 고속 비행에서는 drag를 포함해
 
-$$
+```math
 \mathbf f_{des}
 =\mathbf a_{guidance}-\mathbf g-\hat{\mathbf a}_{drag}
-$$
+```
 
 로 확장할 수 있다. 첫 구현에서는 drag feedforward를 생략하고 PX4 및 바깥쪽 피드백이
 오차를 수정하도록 한다. 중력 보상이 검증된 뒤에 drag 모델을 추가한다.
@@ -501,19 +501,19 @@ $$
 
 프로펠러가 만드는 양의 추력축 단위벡터를 $\mathbf b_3$라 정의한다. 목표축은
 
-$$
+```math
 \boxed{
 \mathbf b_{3,d}=\frac{\mathbf f_{des}}{\|\mathbf f_{des}\|}
 }
-$$
+```
 
 이고 총 추력은
 
-$$
+```math
 \boxed{
 T_d=m\|\mathbf f_{des}\|
 }
-$$
+```
 
 이다. 실제 PX4 FRD body에서는 프로펠러 추력이 body $-z$ 방향이므로 메시지와 controller의
 축 정의에 맞춰 부호를 변환한다.
@@ -522,43 +522,43 @@ $$
 
 목표 yaw를 $\psi_d$라 하면 수평면의 기준 heading 벡터를
 
-$$
+```math
 \mathbf b_{1,c}=
 \begin{bmatrix}
 \cos\psi_d\\
 \sin\psi_d\\
 0
 \end{bmatrix}
-$$
+```
 
 로 둔다. 목표 body 축은
 
-$$
+```math
 \mathbf b_{2,d}
 =
 \frac{\mathbf b_{3,d}\times\mathbf b_{1,c}}
 {\|\mathbf b_{3,d}\times\mathbf b_{1,c}\|}
-$$
+```
 
-$$
+```math
 \mathbf b_{1,d}=\mathbf b_{2,d}\times\mathbf b_{3,d}
-$$
+```
 
-$$
+```math
 \boxed{
 R_{WB,d}=
 \begin{bmatrix}
 \mathbf b_{1,d}&\mathbf b_{2,d}&\mathbf b_{3,d}
 \end{bmatrix}
 }
-$$
+```
 
 로 만든다. 이를 quaternion $q_d$로 변환해 PX4 attitude setpoint로 전달할 수 있다.
 
 ### 5.3 yaw 선택
 
 현 기체는 상방 카메라이고 yaw를 별도 유도할 필요가 없으므로, PN 필터가 초기화될 때의
-yaw를 $ψ_d$로 래치한다. CH4는 yaw-rate 0을 지시하며 아래의 LOS 방위각 추종은
+yaw를 $\psi_d$로 래치한다. CH4는 yaw-rate 0을 지시하며 아래의 LOS 방위각 추종은
 현 구현에서 사용하지 않는 확장안이다.
 
 고정 전방 카메라라면 yaw는 다음 목표를 함께 고려해야 한다.
@@ -569,9 +569,9 @@ yaw를 $ψ_d$로 래치한다. CH4는 yaw-rate 0을 지시하며 아래의 LOS �
 
 가장 단순한 방식은 LOS의 수평 방위각을 yaw reference로 두고 LPF/rate limit를 적용하는 것이다.
 
-$$
+```math
 \psi_d=\operatorname{atan2}(l_y,l_x)
-$$
+```
 
 다만 표적을 항상 광축 중앙에 두도록 roll/pitch까지 강제하면 중력 보상 thrust 방향과 충돌할
 수 있다. yaw는 표적을 수평 중앙에 가깝게 유지하되 pitch 방향에는 필요한 look-angle 여유를
@@ -579,13 +579,13 @@ $$
 
 ### 5.4 추력 한계와 tilt 한계
 
-$$
+```math
 T_{min}\le T_d\le T_{max}
-$$
+```
 
-$$
+```math
 \cos^{-1}(\mathbf b_{3,d}^T\mathbf e_z)\le\theta_{max}
-$$
+```
 
 를 적용한다. 포화가 발생하면 desired acceleration을 그대로 유지할 수 없으므로 우선순위를
 정해야 한다. 권장 우선순위는 다음과 같다.
@@ -623,10 +623,10 @@ PN acceleration
 정규화해 CRSF CH1/CH2로 보낸다. PX4 Stabilized가 이 입력을 attitude setpoint로
 해석하므로 Jetson에서 별도 attitude outer loop를 돌리지 않는다.
 
-$$
+```math
 u_r=\operatorname{sat}\left(\frac{\phi_d}{\phi_{max}},-1,1\right),\qquad
 u_p=\operatorname{sat}\left(\frac{-\theta_d}{\theta_{max}},-1,1\right)
-$$
+```
 
 pitch에만 음수가 붙는 이유는 좌표 convention 차이다. NED/FRD Euler pitch는
 $\theta_d<0$이 기수 하강이지만, PX4 manual pitch 입력은 양의 스틱이 기수 하강이다.
@@ -647,33 +647,33 @@ SITL의 `MPC_MAN_TILT_MAX`와 `control.max_angle_deg`는 모두 $55^\circ$로 �
 
 목표 및 현재 회전행렬을 $R_d,R$라 하면 geometric attitude error는
 
-$$
+```math
 \mathbf e_R
 =
 \frac12
 \left(R_d^TR-R^TR_d\right)^\vee
-$$
+```
 
 이다. 목표 body-rate는
 
-$$
+```math
 \boxed{
 \boldsymbol\omega_d
 =-K_R\mathbf e_R+\boldsymbol\omega_{ff}
 }
-$$
+```
 
 로 만들 수 있다. 첫 구현에서는 $\boldsymbol\omega_{ff}=0$으로 시작한다. 각속도를 제한한 뒤
 CRSF 풀스틱 rate로 정규화한다.
 
-$$
+```math
 u_{CRSF,i}
 =
 \operatorname{clip}
 \left(
 \frac{\omega_{d,i}}{\omega_{max,i}},-1,1
 \right)
-$$
+```
 
 이 자세 바깥루프가 있어야 목표 tilt에 도달한 뒤 rate가 0으로 내려가고 필요한 기울기를
 유지한다. 영상오차에서 rate를 바로 만들면 목표 가속도와 실제 가속도의 대응이 명확하지 않다.
@@ -682,15 +682,15 @@ $$
 
 물리 추력 $T_d$와 throttle 사이에는 모터·프로펠러·배터리·ESC에 따른 비선형성이 있다.
 
-$$
+```math
 T\ne k\,u_{throttle}
-$$
+```
 
 실기체에서는 thrust stand 또는 비행 로그로 다음 형태의 모델을 식별한다.
 
-$$
+```math
 T(u)=a_2u^2+a_1u+a_0
-$$
+```
 
 필요한 throttle은 역함수로 구하고 배터리 전압 보상을 추가한다. SITL에서도 PX4의 hover
 thrust 및 motor model과 일치하는지 확인한다.
@@ -707,16 +707,16 @@ LOS 변환에는 detection callback 시각이 아니라 원본 image header의 �
 attitude를 시간순 ring buffer에 저장하고, 검출 시각 $t_k$ 양쪽의 quaternion
 $q(t_a),q(t_b)$를 SLERP한다.
 
-$$
+```math
 q(t_k)=\operatorname{SLERP}
 \left(q(t_a),q(t_b),\frac{t_k-t_a}{t_b-t_a}\right)
-$$
+```
 
 현재 attitude를 과거 영상에 적용하면
 
-$$
+```math
 \Delta\lambda_{delay}\approx\omega_{body}t_{delay}
-$$
+```
 
 의 가짜 LOS 오차가 생긴다. 빠른 기동에서는 수십 ms도 무시할 수 없다.
 
@@ -725,16 +725,16 @@ $$
 bbox 중심을 미분하면 검출 노이즈가 증폭된다. 권장 상태는 LOS의 두 tangent 성분과 그
 각속도다.
 
-$$
+```math
 \mathbf x=
 \begin{bmatrix}
 \lambda_1&\lambda_2&\dot\lambda_1&\dot\lambda_2
 \end{bmatrix}^T
-$$
+```
 
 constant angular-rate 모델은
 
-$$
+```math
 \mathbf x_{k+1}=
 \begin{bmatrix}
 1&0&\Delta t&0\\
@@ -743,26 +743,26 @@ $$
 0&0&0&1
 \end{bmatrix}
 \mathbf x_k+\mathbf w_k
-$$
+```
 
 로 둘 수 있다. 초기 구현은 alpha-beta 필터를 사용할 수 있다.
 
-$$
+```math
 \lambda_k^-=\hat\lambda_{k-1}+\dot{\hat\lambda}_{k-1}\Delta t
-$$
+```
 
-$$
+```math
 r_k=\lambda_k-\lambda_k^-
-$$
+```
 
-$$
+```math
 \hat\lambda_k=\lambda_k^-+\alpha r_k
-$$
+```
 
-$$
+```math
 \dot{\hat\lambda}_k
 =\dot{\hat\lambda}_{k-1}+\frac{\beta}{\Delta t}r_k
-$$
+```
 
 ### 7.3 중복 필터 지연 방지
 
@@ -775,9 +775,9 @@ $$
 필터 게인은 1차적으로 노이즈 크기가 아니라 허용 지연으로 결정한다. 예를 들어 총 지연이
 $t_d$이고 횡속도가 $v_\perp$면 추가 miss는 대략
 
-$$
+```math
 d_{delay}\approx v_\perp t_d
-$$
+```
 
 다.
 
@@ -915,12 +915,12 @@ terminal 전용 로직은 후속 단계로 미뤄다. 현재는 전 구간에 �
 드론 자세를 고정하고 풍선을 알려진 영상 위치에 둔다. 추정 $\mathbf l_C$와 Gazebo 상대
 위치를 카메라 frame으로 변환한 값의 각도 오차를 계산한다.
 
-$$
+```math
 e_l=\cos^{-1}
 \left(
 \operatorname{clip}(\mathbf l_{est}^T\mathbf l_{GT},-1,1)
 \right)
-$$
+```
 
 ### 11.2 기체 회전 제거 시험
 
@@ -936,10 +936,10 @@ $$
 
 자세를 고정하고 드론을 좌우 또는 상하로 이동한다. 추정값을
 
-$$
+```math
 \boldsymbol\omega_{LOS,GT}
 =\frac{\mathbf r\times\mathbf v_r}{R^2}
-$$
+```
 
 와 비교한다. 부호, 축, 진폭, 지연을 각각 확인한다.
 
