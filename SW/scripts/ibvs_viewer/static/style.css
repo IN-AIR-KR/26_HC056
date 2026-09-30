@@ -112,24 +112,22 @@ body {
 .u-legend tr.u-series:first-child .u-value { min-width: 60px; }
 .u-select { background: rgba(37, 99, 235, 0.12); }
 
-/* 패널 "보는 법" */
-.help {
-  font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 8px 12px; margin: 2px 0 8px;
+/* 패널 위 필터 칩: [체크박스][필드명][수식] */
+.help { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 6px; }
+.hide-help .help .ds { display: none; }   /* 수식만 숨기고 체크박스·이름은 남긴다 */
+.help .chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  font-size: 11.5px; line-height: 1.3; cursor: pointer; user-select: none;
+  background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--c);
+  border-radius: 5px; padding: 3px 8px 3px 6px;
 }
-.hide-help .help .ds { display: none; }   /* 수식만 숨기고 체크박스는 남긴다 */
-.help .guide { margin: 0 0 6px; padding-left: 18px; }
-.help .guide li { margin: 2px 0; }
-.help code { font-family: var(--mono); font-size: 11.5px; background: var(--panel);
-  border: 1px solid var(--border); border-radius: 3px; padding: 0 3px; }
-.help .gloss { border-collapse: collapse; width: 100%; }
-.help .gloss td { padding: 2px 8px 2px 0; vertical-align: top; }
-.help .gloss .sw { display: inline-block; width: 18px; margin-top: 8px; }
-.help .gloss .cb { margin: 3px 0 0; cursor: pointer; }
-.help .gloss tr:has(.cb:not(:checked)) .nm { color: var(--muted); text-decoration: line-through; }
-.help .gloss .nm { white-space: nowrap; font-weight: 600; }
-.help .gloss .fd { white-space: nowrap; color: var(--muted); font-size: 11px; padding-top: 3px; }
-.help .gloss .ds { color: var(--muted); }
+.help .chip.dashed { border-left-style: dashed; }
+.help .chip:hover { border-color: var(--c); }
+.help .chip .cb { margin: 0; accent-color: var(--c); cursor: pointer; }
+.help .chip .nm { font-weight: 600; white-space: nowrap; }
+.help .chip .ds { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.help .chip:has(.cb:not(:checked)) { opacity: .5; }
+.help .chip:has(.cb:not(:checked)) .nm { text-decoration: line-through; }
 .u-legend tr.u-series { cursor: help; }
 
 #custom-add { display: flex; gap: 8px; margin-top: 16px; }

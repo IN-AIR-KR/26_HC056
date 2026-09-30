@@ -456,24 +456,23 @@ function fieldCol(tp, f) {
 }
 function seriesColor(s, i) { return s.color || PALETTE[i % PALETTE.length]; }
 
-/* 패널 위 수식표: 색 · 필드 · 수식. */
+/* 패널 위 필터 칩: [체크박스][필드명][수식] 을 작은 버튼으로 나열. 칩 클릭 = 선 켜기/끄기. */
 function makeHelp(p, { specs, multiTopic }) {
   const box = document.createElement("div");
   box.className = "help";
-  const tbl = document.createElement("table");
-  tbl.className = "gloss";
   specs.forEach((s, i) => {
-    const tr = document.createElement("tr");
-    const dash = s.dash ? "dashed" : "solid";
-    tr.innerHTML = `<td><input type="checkbox" class="cb"></td>
-      <td><i class="sw" style="border-top:3px ${dash} ${seriesColor(s, i)}"></i></td>
-      <td class="nm mono"></td><td class="ds mono"></td>`;
-    tr.querySelector(".cb").checked = seriesShown(p, s);
-    tr.querySelector(".nm").textContent = seriesName(s, multiTopic) + (s.scale === "y2" ? " (R)" : "");
-    tr.querySelector(".ds").textContent = (FIELD_INFO[s.f] ?? "") + (DERIVED[s.f] ? "   ← 뷰어 계산" : "");
-    tbl.appendChild(tr);
+    const color = seriesColor(s, i);
+    const chip = document.createElement("label");
+    chip.className = "chip";
+    chip.style.setProperty("--c", color);
+    if (s.dash) chip.classList.add("dashed");
+    chip.innerHTML = `<input type="checkbox" class="cb"><span class="nm mono"></span><span class="ds mono"></span>`;
+    chip.querySelector(".cb").checked = seriesShown(p, s);
+    chip.querySelector(".nm").textContent = seriesName(s, multiTopic) + (s.scale === "y2" ? " (R)" : "");
+    chip.querySelector(".ds").textContent = (FIELD_INFO[s.f] ?? "") + (DERIVED[s.f] ? " ⚙" : "");
+    chip.title = `${s.f} = ${FIELD_INFO[s.f] ?? ""}${DERIVED[s.f] ? "  (뷰어 계산)" : ""}`;
+    box.appendChild(chip);
   });
-  box.appendChild(tbl);
   return box;
 }
 
