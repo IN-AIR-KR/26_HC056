@@ -165,7 +165,7 @@ S_k=\mathbf H\mathbf P_k^-\mathbf H^T+\mathbf R_k
 최종 PN 입력은 물리 상한을 적용한다.
 
 ```math
-V_c=\operatorname{clamp}\left(-\hat{\dot R},0,V_{c,max}\right)
+V_c=\mathrm{clamp}\left(-\hat{\dot R},0,V_{c,max}\right)
 ```
 
 GT override가 활성화된 경우에는 이 추정값 대신 GT $V_c$가 PN에 입력된다. 거리 KF는 계속 실행되므로 같은 로그에서 추정값의 상태를 진단할 수 있다.

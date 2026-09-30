@@ -143,11 +143,11 @@ LOS ray를 구한다.
 필요하면 방위각과 고각으로도 표현할 수 있다.
 
 ```math
-\beta_{az}=\operatorname{atan2}(l_{C,x},l_{C,z})
+\beta_{az}=\mathrm{atan2}(l_{C,x},l_{C,z})
 ```
 
 ```math
-\beta_{el}=-\operatorname{atan2}
+\beta_{el}=-\mathrm{atan2}
 \left(l_{C,y},\sqrt{l_{C,x}^2+l_{C,z}^2}\right)
 ```
 
@@ -206,7 +206,7 @@ R_{BC}=R_{axes}R_{mount}
 ```
 
 ```math
-\theta=\operatorname{atan2}
+\theta=\mathrm{atan2}
 \left(\|\mathbf c\|,\mathbf l_{k-1}^T\mathbf l_k\right)
 ```
 
@@ -402,7 +402,7 @@ K_Ce
 a_{FOV}=
 \begin{cases}
 0,&|\beta|\le\beta_{soft}\\
--K_F\left(|\beta|-\beta_{soft}\right)\operatorname{sgn}(\beta),
+-K_F\left(|\beta|-\beta_{soft}\right)\mathrm{sgn}(\beta),
 &|\beta|>\beta_{soft}
 \end{cases}
 ```
@@ -573,7 +573,7 @@ yaw를 $\psi_d$로 래치한다. CH4는 yaw-rate 0을 지시하며 아래의 LOS
 가장 단순한 방식은 LOS의 수평 방위각을 yaw reference로 두고 LPF/rate limit를 적용하는 것이다.
 
 ```math
-\psi_d=\operatorname{atan2}(l_y,l_x)
+\psi_d=\mathrm{atan2}(l_y,l_x)
 ```
 
 다만 표적을 항상 광축 중앙에 두도록 roll/pitch까지 강제하면 중력 보상 thrust 방향과 충돌할
@@ -627,8 +627,8 @@ PN acceleration
 해석하므로 Jetson에서 별도 attitude outer loop를 돌리지 않는다.
 
 ```math
-u_r=\operatorname{sat}\left(\frac{\phi_d}{\phi_{max}},-1,1\right),\qquad
-u_p=\operatorname{sat}\left(\frac{-\theta_d}{\theta_{max}},-1,1\right)
+u_r=\mathrm{sat}\left(\frac{\phi_d}{\phi_{max}},-1,1\right),\qquad
+u_p=\mathrm{sat}\left(\frac{-\theta_d}{\theta_{max}},-1,1\right)
 ```
 
 pitch에만 음수가 붙는 이유는 좌표 convention 차이다. NED/FRD Euler pitch는
@@ -672,7 +672,7 @@ CRSF 풀스틱 rate로 정규화한다.
 ```math
 u_{CRSF,i}
 =
-\operatorname{clip}
+\mathrm{clip}
 \left(
 \frac{\omega_{d,i}}{\omega_{max,i}},-1,1
 \right)
@@ -711,7 +711,7 @@ attitude를 시간순 ring buffer에 저장하고, 검출 시각 $t_k$ 양쪽의
 $q(t_a),q(t_b)$를 SLERP한다.
 
 ```math
-q(t_k)=\operatorname{SLERP}
+q(t_k)=\mathrm{SLERP}
 \left(q(t_a),q(t_b),\frac{t_k-t_a}{t_b-t_a}\right)
 ```
 
@@ -921,7 +921,7 @@ terminal 전용 로직은 후속 단계로 미뤄다. 현재는 전 구간에 �
 ```math
 e_l=\cos^{-1}
 \left(
-\operatorname{clip}(\mathbf l_{est}^T\mathbf l_{GT},-1,1)
+\mathrm{clip}(\mathbf l_{est}^T\mathbf l_{GT},-1,1)
 \right)
 ```
 
