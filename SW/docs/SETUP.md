@@ -170,11 +170,11 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
 | `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |
 | `cv_debug`        | `false`                           | 검출 진단 패널(HSV+그래프) (A-4)          |
-| `auto_save`      | `false` — **`arms.launch.py`(실기체) 전용** | 비행 로그 자동 녹화(영상+검출 raw+CRSF 송·수신+상태). 자동모드 SEARCH 진입~ARM 스위치 OFF 를 `~/arms_flight_logs_ibvs/<일시>/` 에 bag(sqlite3) 저장 (kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
+| `auto_save`      | `false` — **`arms.launch.py`(실기체) / `arms_sitl.launch.py`** | 비행 로그 자동 녹화(영상+검출 raw+CRSF 송·수신+상태). ARM 스위치 ON~OFF 를 `~/arms_flight_logs_ibvs/<일시>/` 에 bag(sqlite3) 저장 (모드·kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
-> `auto_save` 는 `arms.launch.py`(실기체)에만 있는 인자입니다. 위 표의 나머지 인자는
+> `auto_save` 는 `arms.launch.py`(실기체)와 `arms_sitl.launch.py`(SITL, UI 영상 제외)에 있는 인자입니다. 위 표의 나머지 인자는
 > `arms_replay.launch.py` 기준이며, 실기체와 공유되는 것(`model`/`start_detection`/`crsf_port`/
 > `fullscreen`/`debug`/`cv_debug`)은 `arms.launch.py` 에서도 동일하게 씁니다.
 
@@ -507,15 +507,17 @@ storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
 필요: `ffmpeg`(영상), `matplotlib`·`pandas`(그래프). 자세한 옵션은
 `SW/scripts/bag_visualize/README.md` 참고.
 
-#### 4) 비행 자동 저장 모드 (`auto_save:=true`, 실기체)
+#### 4) 비행 자동 저장 모드 (`auto_save:=true`, 실기체 / SITL)
 
 실기체 비행 중 로그(영상+검출 raw+CRSF 송·수신+상태)를 **자동으로** 녹화한다.
 `arms.launch.py` 에 `auto_save:=true` 를 주면 `flight_recorder` 노드가 함께 떠서:
 
-- **시작**: 자동모드에서 상태머신이 **SEARCH 진입** 시 녹화 시작.
-- **종료**: 조종기 **ARM(=자동모드 search) 스위치를 내릴 때**(`/arms/command` buttons[1]→0).
-  - **kill 이 걸려도 계속 녹화**한다(kill 은 buttons[0], ARM 스위치와 무관). ARM 스위치를
-    내려야만 종료.
+- **시작**: 조종기 **ARM 스위치를 올릴 때**(`/arms/command` buttons[1] 0→1).
+- **종료**: **ARM 스위치를 내릴 때**(buttons[1]→0). 한 번 올림~내림 = 기록 폴더 하나.
+  - 모드(auto/manual)·상태머신·kill 과 무관하다. kill 이 걸려도 ARM 이 위면 계속 녹화.
+  - 녹화기가 뜰 때 이미 ARM 이 위였다면 한 번 내렸다 올려야 시작된다(상승엣지).
+- **SITL**: `arms_sitl.launch.py auto_save:=true` 도 같은 조건(가상 조종기 ARM 스위치).
+  폴더명이 `<일시>_sitl` 이고 UI 영상은 저장하지 않는다.
 - **저장 위치**: `~/arms_flight_logs_ibvs/<YYYYmmdd_HHMMSS>/` (비행 시작 일시 폴더). 이 폴더 안에
   `bag/`(rosbag) 과 `record.log`(녹화 프로세스 로그)가 함께 담긴다.
 

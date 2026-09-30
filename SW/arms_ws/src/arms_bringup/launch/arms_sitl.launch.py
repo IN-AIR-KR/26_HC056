@@ -4,6 +4,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
     ros2 launch arms_bringup arms_sitl.launch.py              # PX4+Gazebo 포함 전부
     ros2 launch arms_bringup arms_sitl.launch.py px4:=false   # PX4 가 이미 떠 있을 때 스택만
     ros2 launch arms_bringup arms_sitl.launch.py detection:=docker   # 검출을 컨테이너로
+    ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true     # 에피소드별 bag 녹화
 
 이거 하나로 다음을 전부 띄운다:
   - PX4 SITL + Gazebo       (arms_sim/px4_sitl.launch.py include, px4:=false 로 생략)  [arms_sim]
@@ -18,6 +19,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - arms_ui_node            (OpenCV 영상 오버레이)
   - sitl_viz + rviz2        (3D 궤적/기체/표적, rviz:=true 일 때만)      [arms_sim]
   - plotjuggler             (5초 뒤)
+  - flight_recorder         (auto_save:=true 일 때만. ~/arms_flight_logs_ibvs/<일시>_sitl/) [arms_ui]
 
 스택 노드들은 PX4 부팅을 기다리지 않는다 — sitl_bridge 는 heartbeat 올 때까지 재접속,
 referee 는 gz 준비 전 실패를 무시, 카메라 브리지는 gz 토픽이 생기면 붙는다.
@@ -169,6 +171,11 @@ def generate_launch_description():
                         "표기이며 host 모드에선 docker/models/x 로 자동 치환된다. "
                         "호스트 절대경로를 직접 줘도 된다."),
 
+        DeclareLaunchArgument("auto_save", default_value="false",
+                              description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "
+                                          "~/arms_flight_logs_ibvs/<일시>_sitl/ "
+                                          "에 bag(sqlite3) 저장. UI 영상은 제외."),
+
         # PX4 SITL + Gazebo — 시뮬레이터 쪽은 전부 arms_sim 담당
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(px4_launch)),
@@ -224,6 +231,26 @@ def generate_launch_description():
         Node(
             package="arms_ui", executable="arms_ui_node",
             name="arms_ui_node", output="screen",
+        ),
+        # 비행 로그 녹화기 (auto_save:=true 일 때만). 실기체와 같은 노드·같은 조건
+        #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 영상(ui_image)은 빼고 저장.
+        Node(
+            package="arms_ui", executable="flight_recorder",
+            name="flight_recorder", output="screen",
+            parameters=[{
+                "tag": "sitl",
+                "record_topics": [
+                    "/arms/detections_raw",
+                    "/arms/detections",
+                    "/arms/detector_status",
+                    "/arms/ibvs_debug",
+                    "/arms/crsf_tx",
+                    "/arms/crsf_rx",
+                    "/arms/mission_state",
+                    "/arms/command",
+                ],
+            }],
+            condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
         # 3D 시각화 (rviz:=true 일 때만). gz 진실값 → TF/궤적/마커.
         #   rviz 를 안 띄우면 발행할 이유도 없으므로 같은 인자로 묶는다.

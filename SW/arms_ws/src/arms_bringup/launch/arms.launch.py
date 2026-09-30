@@ -78,7 +78,7 @@ def generate_launch_description():
                               description="검출 진단 패널(HSV 미리보기+성능 그래프). "
                                           "true 면 hsv_debug_image 를 구독 → 검출 발행률↓."),
         DeclareLaunchArgument("auto_save", default_value="false",
-                              description="비행 로그 녹화. true 면 자동모드 SEARCH 진입~ARM 스위치 "
+                              description="비행 로그 녹화. true 면 ARM 스위치 ON~"
                                           "OFF 까지 영상(UI)+검출 raw+CRSF 송·수신+상태를 "
                                           "~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3)으로 저장(kill 되어도 유지)."),
     ]
@@ -150,7 +150,7 @@ def generate_launch_description():
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
-        # 비행 로그 녹화기 (auto_save:=true 일 때만). 자동모드 SEARCH 진입~ARM 스위치 OFF 까지
+        # 비행 로그 녹화기 (auto_save:=true 일 때만). ARM 스위치 ON~OFF 동안
         #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3) 저장(kill 무관).
         Node(
             package="arms_ui",
