@@ -8,7 +8,8 @@
 
 각 단계 값은 비행 중 `/arms/ibvs_debug` (`arms_msgs/IbvsDebug`) 로 전부 발행되고, auto_save 로
 녹화한 기록은 [`SW/scripts/ibvs_viewer`](../scripts/ibvs_viewer/README.md) 에서 그래프로 볼 수 있다.
-아래 각 절의 **📈** 는 그 값이 뷰어의 어느 필드인지 표시한 것이다.
+아래 각 절의 **📈** 는 그 값이 뷰어의 어느 필드인지 표시한 것이고, 그래프별로 선이 무엇이고
+각 필드의 수식은 [11. 뷰어 그래프별 필드 수식](#11-뷰어-그래프별-필드-수식) 에 정리했다.
 
 > 논문: Yang, Bai, She, Quan, *High-Speed Interception Multicopter Control by Image-based
 > Visual Servoing* (arXiv:2404.08296) 식 (12),(13) 을 우리 기체 기하에 맞게 단순화한 것.
@@ -391,3 +392,198 @@ $$
 | 표적을 살짝 지나침 | ⑤ τ, ⑦ `tau_ease` | `tau_ease_start` ↑, `tau_ease_min_scale` ↓ |
 | 움직이는 표적을 못 따라붙음 | ⑦ `thrust` 가 일찍 hover 로 | `tau_ease_start` ↓, `track_throttle` ↑ |
 | 가까이서 과민반응(오버슈트) | ⑤ `range_gain_scale` | `min_gain_scale` ↓, `near_size_start` ↓ |
+
+---
+
+## 11. 뷰어 그래프별 필드 수식
+
+`ibvs_viewer` 패널 순서 그대로다. 범례 이름 = 필드명. ⚙ = 기록에 없는 중간값을 뷰어가
+기록된 필드로 계산한 것(구 기록에도 나옴). 기호: `B = barrier`, `N = √(1+x_n²+y_n²)`,
+`ldx/ldy = los_rate_x/y`.
+
+roll 명령이 어떻게 쪼개지는지 (pitch 는 x→y):
+
+```
+roll_rate_out   = clamp(roll_sign · range_gain_scale · guidance_x, ±max_cmd_rate_dps)
+guidance_x      = aim_term_x + los_rate_term_x
+aim_term_x      = aim_gain · dir_x                    = barrier_term_x + center_term_x
+aim_gain        = gain_barrier + ibvs_center_gain
+gain_barrier    = ibvs_gain · barrier
+barrier         = z1 / (kb² − z1²)
+dir_x           = x_n / N
+los_rate_term_x = ibvs_los_rate_gain · los_rate_x     (los_rate_x = ldx)
+```
+
+| 보고 싶은 것 | 필드 | 패널 |
+|---|---|---|
+| `z1/(kb²−z1²)` | `barrier` | IBVS 항 원본값 |
+| `200·z1/(kb²−z1²)` | `gain_barrier` ⚙ | 게인 곱한 계수 |
+| `200·z1/(kb²−z1²) + 100` | `aim_gain` ⚙ | 게인 곱한 계수 |
+| `x_n/N` | `dir_x` | IBVS 항 원본값 |
+| `[200·z1/(kb²−z1²) + 100] · x_n/N` | `aim_term_x` ⚙ | Roll 항별 기여 |
+| `ldx` | `los_rate_x` | IBVS 항 원본값 |
+| `220·ldx` | `los_rate_term_x` | Roll 항별 기여 |
+| 두 항의 비중 | `aim_share_x`, `lead_share_x` ⚙ | 항별 비중 |
+
+### 오차
+
+_정규화 ±0.5_
+
+| 필드 | 수식 |
+|---|---|
+| `raw_err_x` | bbox_cx/W − 0.5 (±0.5 = 화면 끝) |
+| `filt_err_x` | α·raw_err_x + (1−α)·filt_err_x (α = error_lpf_alpha) |
+| `raw_err_y` | bbox_cy/H − 0.5 |
+| `filt_err_y` | α·raw_err_y + (1−α)·filt_err_y |
+
+### LOS각속도
+
+_[화면/s]_
+
+| 필드 | 수식 |
+|---|---|
+| `losf_x_dot` | alpha-beta 속도 추정 [화면/s], clamp ±3 |
+| `los_rate_x` | ldx = clamp(losf_x_dot, ±pn_los_clamp) |
+| `losf_y_dot` | alpha-beta 속도 추정 [화면/s], clamp ±3 |
+| `los_rate_y` | ldy = clamp(losf_y_dot, ±pn_los_clamp) |
+| `err_dot_x` | LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp (mode 0 전용) |
+| `err_dot_y` | LPF(Δfilt_err_y/dt), clamp ±err_dot_clamp (mode 0 전용) |
+
+### z1 / θ
+
+_왼축 z1 · 오른축 θ[deg]_
+
+| 필드 | 수식 |
+|---|---|
+| `z1_raw` | 1 − 1/N (= 1 − cos θ) |
+| `z1` | min(z1_raw, 0.995·kb) |
+| `kb` | ibvs_kb |
+| `theta_deg` (오른축) | acos(1/N) [deg] |
+
+### IBVS 항 원본값 (게인 전)
+
+_왼축 x_n/N · ldx · 오른축 B_
+
+| 필드 | 수식 |
+|---|---|
+| `dir_x` | x_n / N |
+| `dir_y` | y_n / N |
+| `los_rate_x` | ldx = clamp(losf_x_dot, ±pn_los_clamp) |
+| `los_rate_y` | ldy = clamp(losf_y_dot, ±pn_los_clamp) |
+| `barrier` (오른축) | B = z1 / (kb² − z1²) |
+
+### 게인 곱한 계수
+
+_[deg/s] · x_n/N 에 곱해지는 값_
+
+| 필드 | 수식 |
+|---|---|
+| `gain_barrier` ⚙ | ibvs_gain · B [deg/s] |
+| `aim_gain` ⚙ | ibvs_gain · B + ibvs_center_gain [deg/s] (= 대괄호 [ ]) |
+| `ibvs_center_gain` | control.ibvs_center_gain |
+
+### Roll 항별 기여
+
+_[deg/s] · guidance_x = aim_term_x + los_rate_term_x_
+
+| 필드 | 수식 |
+|---|---|
+| `aim_term_x` ⚙ | aim_gain · x_n/N = barrier_term_x + center_term_x [deg/s] |
+| `los_rate_term_x` | ibvs_los_rate_gain · ldx [deg/s] |
+| `barrier_term_x` | ibvs_gain · B · x_n/N [deg/s] |
+| `center_term_x` | ibvs_center_gain · x_n/N [deg/s] |
+| `guidance_x` | aim_term_x + los_rate_term_x [deg/s] |
+| `roll_rate_out` | clamp(roll_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
+
+### Pitch 항별 기여
+
+_[deg/s] · guidance_y = aim_term_y + los_rate_term_y_
+
+| 필드 | 수식 |
+|---|---|
+| `aim_term_y` ⚙ | aim_gain · y_n/N = barrier_term_y + center_term_y [deg/s] |
+| `los_rate_term_y` | ibvs_los_rate_gain · ldy [deg/s] |
+| `barrier_term_y` | ibvs_gain · B · y_n/N [deg/s] |
+| `center_term_y` | ibvs_center_gain · y_n/N [deg/s] |
+| `guidance_y` | aim_term_y + los_rate_term_y [deg/s] |
+| `pitch_rate_out` | clamp(pitch_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
+
+### 항별 비중
+
+_[%] · aim + lead = 100 (TRACK 에서만)_
+
+| 필드 | 수식 |
+|---|---|
+| `aim_share_x` ⚙ | \|aim_term_x\| / (\|aim_term_x\| + \|los_rate_term_x\|) · 100 [%] |
+| `lead_share_x` ⚙ | \|los_rate_term_x\| / (\|aim_term_x\| + \|los_rate_term_x\|) · 100 [%] |
+| `aim_share_y` ⚙ | \|aim_term_y\| / (\|aim_term_y\| + \|los_rate_term_y\|) · 100 [%] |
+| `lead_share_y` ⚙ | \|los_rate_term_y\| / (\|aim_term_y\| + \|los_rate_term_y\|) · 100 [%] |
+
+### 명령 vs 자세
+
+_왼축 [deg/s] · 오른축 CRSF 자세[deg]_
+
+| 필드 | 수식 |
+|---|---|
+| `roll_rate_cmd` | roll_sign · range_gain_scale · guidance_x [deg/s] |
+| `roll_rate_out` | clamp(roll_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
+| `pitch_rate_cmd` | pitch_sign · range_gain_scale · guidance_y [deg/s] |
+| `pitch_rate_out` | clamp(pitch_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
+| `crsf_rx.roll_deg` (오른축) | CRSF 텔레메트리 roll [deg] |
+| `crsf_rx.pitch_deg` (오른축) | CRSF 텔레메트리 pitch [deg] |
+
+### 스케줄링 배율
+
+_0~1_
+
+| 필드 | 수식 |
+|---|---|
+| `closeness` | clamp((loom_size − near_size_start)/(near_size_full − near_size_start), 0, 1) |
+| `range_gain_scale` | 1 − closeness·(1 − min_gain_scale) |
+| `range_throttle_scale` | 1 − closeness·(1 − min_throttle_scale) |
+| `tau_ease` | clamp((tau − tau_ease_full)/(tau_ease_start − tau_ease_full), tau_ease_min_scale, 1) |
+| `center_q` | clamp(1 − emag/pursuit_gate, 0, 1) (pursuit_center_boost=false → 1) |
+
+### Looming / τ
+
+_왼축 loom_size·loom_rate · 오른축 tau[s]_
+
+| 필드 | 수식 |
+|---|---|
+| `loom_size` | EMA(max(bbox_w, bbox_h), loom_size_alpha) |
+| `loom_rate` | EMA(Δloom_size/dt, loom_rate_alpha) |
+| `tau` (오른축) | loom_size / loom_rate [s] (loom_rate ≤ 0 → 9.99) |
+
+### 추력
+
+_0~1_
+
+| 필드 | 수식 |
+|---|---|
+| `thrust` | hover + (throttle_up − hover)·center_q·tau_ease |
+| `throttle_up` | hover + (track − hover)·range_throttle_scale |
+| `emag` | √(filt_err_x² + filt_err_y²) |
+
+### 플래그
+
+_0/1_
+
+| 필드 | 수식 |
+|---|---|
+| `cmd_active` | state ∈ {TRACK, FIRE} |
+| `filter_active` | state ∈ {LOCK, TRACK, FIRE} |
+| `detection_held` | 검출 끊김 → 마지막 오차 유지 |
+| `z1_clamped` | z1_raw > 0.995·kb |
+| `rate_saturated` | \|rate_cmd\| > max_cmd_rate_dps |
+| `manual_out` | 수동 모드 or RTL (스틱 passthrough) |
+
+### 게인 / dt
+
+_왼축 게인 · 오른축 dt[ms]_
+
+| 필드 | 수식 |
+|---|---|
+| `ibvs_gain` | control.ibvs_gain |
+| `ibvs_center_gain` | control.ibvs_center_gain |
+| `ibvs_los_rate_gain` | control.ibvs_los_rate_gain |
+| `dt` (오른축) | 제어 틱 간격 [ms] |

@@ -4,62 +4,162 @@
 const T = "/arms/ibvs_debug";
 const R = "/arms/crsf_rx";
 
+// ---------------------------------------------------------------- 필드 수식
+// 범례는 필드명 그대로. 수식은 패널 위 표와 범례 툴팁에 나온다.
+// 기호: B = barrier, N = √(1+x_n²+y_n²), ldx/ldy = los_rate_x/y.
+//   IBVS roll 명령 = [ ibvs_gain·B + ibvs_center_gain ] · x_n/N  +  ibvs_los_rate_gain · ldx
+const FIELD_INFO = {
+  raw_err_x: "bbox_cx/W − 0.5   (±0.5 = 화면 끝)",
+  raw_err_y: "bbox_cy/H − 0.5",
+  filt_err_x: "α·raw_err_x + (1−α)·filt_err_x   (α = error_lpf_alpha)",
+  filt_err_y: "α·raw_err_y + (1−α)·filt_err_y",
+  emag: "√(filt_err_x² + filt_err_y²)",
+  losf_x: "alpha-beta 위치 추정 (입력 filt_err_x)",
+  losf_y: "alpha-beta 위치 추정 (입력 filt_err_y)",
+  losf_x_dot: "alpha-beta 속도 추정 [화면/s], clamp ±3",
+  losf_y_dot: "alpha-beta 속도 추정 [화면/s], clamp ±3",
+  los_rate_x: "ldx = clamp(losf_x_dot, ±pn_los_clamp)",
+  los_rate_y: "ldy = clamp(losf_y_dot, ±pn_los_clamp)",
+  err_dot_x: "LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp   (mode 0 전용)",
+  err_dot_y: "LPF(Δfilt_err_y/dt), clamp ±err_dot_clamp   (mode 0 전용)",
+  x_n: "(u − cx)/fx, 왜곡 보정   (tan 좌표)",
+  y_n: "(v − cy)/fy, 왜곡 보정",
+  theta_deg: "acos(1/N)   [deg]",
+  z1_raw: "1 − 1/N   (= 1 − cos θ)",
+  z1: "min(z1_raw, 0.995·kb)",
+  kb: "ibvs_kb",
+  barrier: "B = z1 / (kb² − z1²)",
+  dir_x: "x_n / N",
+  dir_y: "y_n / N",
+  // ↓ 뷰어 계산값 (기록된 필드로 계산)
+  gain_barrier: "ibvs_gain · B   [deg/s]",
+  aim_gain: "ibvs_gain · B + ibvs_center_gain   [deg/s]   (= 대괄호 [ ])",
+  aim_term_x: "aim_gain · x_n/N = barrier_term_x + center_term_x   [deg/s]",
+  aim_term_y: "aim_gain · y_n/N = barrier_term_y + center_term_y   [deg/s]",
+  aim_share_x: "|aim_term_x| / (|aim_term_x| + |los_rate_term_x|) · 100   [%]",
+  lead_share_x: "|los_rate_term_x| / (|aim_term_x| + |los_rate_term_x|) · 100   [%]",
+  aim_share_y: "|aim_term_y| / (|aim_term_y| + |los_rate_term_y|) · 100   [%]",
+  lead_share_y: "|los_rate_term_y| / (|aim_term_y| + |los_rate_term_y|) · 100   [%]",
+  // ↑
+  barrier_term_x: "ibvs_gain · B · x_n/N   [deg/s]",
+  barrier_term_y: "ibvs_gain · B · y_n/N   [deg/s]",
+  center_term_x: "ibvs_center_gain · x_n/N   [deg/s]",
+  center_term_y: "ibvs_center_gain · y_n/N   [deg/s]",
+  los_rate_term_x: "ibvs_los_rate_gain · ldx   [deg/s]",
+  los_rate_term_y: "ibvs_los_rate_gain · ldy   [deg/s]",
+  guidance_x: "aim_term_x + los_rate_term_x   [deg/s]",
+  guidance_y: "aim_term_y + los_rate_term_y   [deg/s]",
+  roll_rate_cmd: "roll_sign · range_gain_scale · guidance_x   [deg/s]",
+  pitch_rate_cmd: "pitch_sign · range_gain_scale · guidance_y   [deg/s]",
+  roll_rate_out: "clamp(roll_rate_cmd, ±max_cmd_rate_dps)   [deg/s] = 송신값",
+  pitch_rate_out: "clamp(pitch_rate_cmd, ±max_cmd_rate_dps)   [deg/s] = 송신값",
+  closeness: "clamp((loom_size − near_size_start)/(near_size_full − near_size_start), 0, 1)",
+  range_gain_scale: "1 − closeness·(1 − min_gain_scale)",
+  range_throttle_scale: "1 − closeness·(1 − min_throttle_scale)",
+  tau_ease: "clamp((tau − tau_ease_full)/(tau_ease_start − tau_ease_full), tau_ease_min_scale, 1)",
+  center_q: "clamp(1 − emag/pursuit_gate, 0, 1)   (pursuit_center_boost=false → 1)",
+  loom_size: "EMA(max(bbox_w, bbox_h), loom_size_alpha)",
+  loom_rate: "EMA(Δloom_size/dt, loom_rate_alpha)",
+  tau: "loom_size / loom_rate   [s]   (loom_rate ≤ 0 → 9.99)",
+  throttle_up: "hover + (track − hover)·range_throttle_scale",
+  thrust: "hover + (throttle_up − hover)·center_q·tau_ease",
+  cmd_active: "state ∈ {TRACK, FIRE}",
+  filter_active: "state ∈ {LOCK, TRACK, FIRE}",
+  detection_held: "검출 끊김 → 마지막 오차 유지",
+  z1_clamped: "z1_raw > 0.995·kb",
+  rate_saturated: "|rate_cmd| > max_cmd_rate_dps",
+  manual_out: "수동 모드 or RTL (스틱 passthrough)",
+  ibvs_gain: "control.ibvs_gain",
+  ibvs_center_gain: "control.ibvs_center_gain",
+  ibvs_los_rate_gain: "control.ibvs_los_rate_gain",
+  dt: "제어 틱 간격 [ms]",
+  roll_deg: "CRSF 텔레메트리 roll [deg]",
+  pitch_deg: "CRSF 텔레메트리 pitch [deg]",
+  yaw_deg: "CRSF 텔레메트리 yaw [deg]",
+};
+
+// 기록에 없는 중간값은 기록된 필드로 계산한다(구 기록에도 적용). 입력 중 null 이면 null.
+const share = (a, l) => { const s = Math.abs(a) + Math.abs(l); return s > 1e-9 ? 100 * Math.abs(a) / s : null; };
+const DERIVED = {
+  gain_barrier: { deps: ["ibvs_gain", "barrier"], fn: (g, b) => g * b },
+  aim_gain: { deps: ["ibvs_gain", "barrier", "ibvs_center_gain"], fn: (g, b, c) => g * b + c },
+  aim_term_x: { deps: ["barrier_term_x", "center_term_x"], fn: (b, c) => b + c },
+  aim_term_y: { deps: ["barrier_term_y", "center_term_y"], fn: (b, c) => b + c },
+  aim_share_x: { deps: ["barrier_term_x", "center_term_x", "los_rate_term_x"], fn: (b, c, l) => share(b + c, l) },
+  lead_share_x: { deps: ["barrier_term_x", "center_term_x", "los_rate_term_x"], fn: (b, c, l) => share(l, b + c) },
+  aim_share_y: { deps: ["barrier_term_y", "center_term_y", "los_rate_term_y"], fn: (b, c, l) => share(b + c, l) },
+  lead_share_y: { deps: ["barrier_term_y", "center_term_y", "los_rate_term_y"], fn: (b, c, l) => share(l, b + c) },
+};
+
 // ---------------------------------------------------------------- 패널 정의
-// series: {t: 토픽(기본 T), f: 필드, label, scale: "y"|"y2", dash, width, step,
+// series: {t: 토픽(기본 T), f: 필드(또는 DERIVED 이름), scale: "y"|"y2", dash, width, step, show,
 //          mul/add: 표시용 변환(범례에는 원값 표시)}
 const PANELS = [
-  { title: "① 오차", note: "정규화 픽셀 ±0.5 · raw = 상태머신 원시, filt = LPF(IBVS 입력)",
+  { title: "오차", note: "정규화 ±0.5",
     series: [
       { f: "raw_err_x", dash: [4, 3], width: 1 }, { f: "filt_err_x" },
       { f: "raw_err_y", dash: [4, 3], width: 1 }, { f: "filt_err_y" },
     ] },
-  { title: "② LOS각속도", note: "[1/s] · losf_dot = alpha-beta, los_rate = pn_los_clamp 후(IBVS 입력)",
+  { title: "LOS각속도", note: "[화면/s]",
     series: [
       { f: "losf_x_dot" }, { f: "los_rate_x", dash: [4, 3] },
       { f: "losf_y_dot" }, { f: "los_rate_y", dash: [4, 3] },
       { f: "err_dot_x", width: 1, show: false }, { f: "err_dot_y", width: 1, show: false },
     ] },
-  { title: "③ 공선 오차 z1 / 이탈각", note: "z1 = 1−cos θ · kb 에 닿으면 배리어 발산 · 오른축 θ[deg]",
+  { title: "z1 / θ", note: "왼축 z1 · 오른축 θ[deg]",
     series: [
       { f: "z1_raw", dash: [4, 3], width: 1 }, { f: "z1" }, { f: "kb", dash: [2, 4], width: 1 },
       { f: "theta_deg", scale: "y2" },
     ] },
-  { title: "③ 배리어", note: "z1 / (kb² − z1²)",
-    series: [{ f: "barrier" }] },
-  { title: "④ Roll 항별 기여", note: "[deg/s] · 부호·스케줄링 전 항 → guidance → cmd(스케줄 후) → out(clamp 후 송신값)",
+  { title: "IBVS 항 원본값 (게인 전)", note: "왼축 x_n/N · ldx · 오른축 B",
     series: [
-      { f: "barrier_term_x", width: 1 }, { f: "center_term_x", width: 1 }, { f: "los_rate_term_x", width: 1 },
-      { f: "guidance_x", width: 2 }, { f: "roll_rate_cmd", dash: [4, 3] }, { f: "roll_rate_out", width: 2 },
+      { f: "dir_x" }, { f: "dir_y" }, { f: "los_rate_x" }, { f: "los_rate_y" },
+      { f: "barrier", scale: "y2", width: 2 },
     ] },
-  { title: "④ Pitch 항별 기여", note: "[deg/s]",
+  { title: "게인 곱한 계수", note: "[deg/s] · x_n/N 에 곱해지는 값",
+    series: [{ f: "gain_barrier" }, { f: "aim_gain", width: 2 }, { f: "ibvs_center_gain", dash: [2, 4], width: 1 }] },
+  { title: "Roll 항별 기여", note: "[deg/s] · guidance_x = aim_term_x + los_rate_term_x",
     series: [
-      { f: "barrier_term_y", width: 1 }, { f: "center_term_y", width: 1 }, { f: "los_rate_term_y", width: 1 },
-      { f: "guidance_y", width: 2 }, { f: "pitch_rate_cmd", dash: [4, 3] }, { f: "pitch_rate_out", width: 2 },
+      { f: "aim_term_x", width: 2 }, { f: "los_rate_term_x", width: 2 },
+      { f: "barrier_term_x", width: 1, show: false }, { f: "center_term_x", width: 1, show: false },
+      { f: "guidance_x", width: 1.5, dash: [6, 3] }, { f: "roll_rate_out", width: 1 },
     ] },
-  { title: "⑥ 명령 vs 기체 자세", note: "왼축 = 송신 각속도[deg/s] · 오른축 = CRSF 텔레메트리 자세[deg]",
+  { title: "Pitch 항별 기여", note: "[deg/s] · guidance_y = aim_term_y + los_rate_term_y",
     series: [
-      { f: "roll_rate_out" }, { f: "pitch_rate_out" },
-      { t: R, f: "roll_deg", scale: "y2", dash: [4, 3] }, { t: R, f: "pitch_deg", scale: "y2", dash: [4, 3] },
+      { f: "aim_term_y", width: 2 }, { f: "los_rate_term_y", width: 2 },
+      { f: "barrier_term_y", width: 1, show: false }, { f: "center_term_y", width: 1, show: false },
+      { f: "guidance_y", width: 1.5, dash: [6, 3] }, { f: "pitch_rate_out", width: 1 },
     ] },
-  { title: "⑤ 스케줄링 배율", note: "0~1",
+  { title: "항별 비중", note: "[%] · aim + lead = 100 (TRACK 에서만)",
+    series: [
+      { f: "aim_share_x" }, { f: "lead_share_x", dash: [4, 3] },
+      { f: "aim_share_y" }, { f: "lead_share_y", dash: [4, 3] },
+    ] },
+  { title: "명령 vs 자세", note: "왼축 [deg/s] · 오른축 CRSF 자세[deg]",
+    series: [
+      { f: "roll_rate_cmd", dash: [4, 3], width: 1 }, { f: "roll_rate_out" },
+      { f: "pitch_rate_cmd", dash: [4, 3], width: 1 }, { f: "pitch_rate_out" },
+      { t: R, f: "roll_deg", scale: "y2", dash: [2, 3] }, { t: R, f: "pitch_deg", scale: "y2", dash: [2, 3] },
+    ] },
+  { title: "스케줄링 배율", note: "0~1",
     series: [
       { f: "closeness" }, { f: "range_gain_scale" }, { f: "range_throttle_scale" },
       { f: "tau_ease" }, { f: "center_q" },
     ] },
-  { title: "⑤ Looming / τ", note: "왼축 = bbox 크기·팽창률 · 오른축 = τ[s] (9.99 = 미접근)",
+  { title: "Looming / τ", note: "왼축 loom_size·loom_rate · 오른축 tau[s]",
     series: [
       { f: "loom_size" }, { f: "loom_rate" },
       { f: "tau", scale: "y2" },
     ] },
-  { title: "⑦ 추력", note: "0~1 · emag = |filt_err|",
+  { title: "추력", note: "0~1",
     series: [{ f: "thrust", width: 2 }, { f: "throttle_up", dash: [4, 3] }, { f: "emag", width: 1 }] },
-  { title: "플래그", note: "각 줄 = 0/1 (위로 올라가면 1)", flags: true,
+  { title: "플래그", note: "0/1", flags: true,
     series: ["cmd_active", "filter_active", "detection_held", "z1_clamped", "rate_saturated", "manual_out"]
       .map((f, i) => ({ f, step: true, mul: 0.8, add: i })) },
-  { title: "게인 / 틱 간격", note: "왼축 = 게인 · 오른축 = dt[ms]",
+  { title: "게인 / dt", note: "왼축 게인 · 오른축 dt[ms]",
     series: [
       { f: "ibvs_gain" }, { f: "ibvs_center_gain" }, { f: "ibvs_los_rate_gain" },
-      { f: "dt", label: "dt[ms]", scale: "y2", mul: 1000, width: 1 },
+      { f: "dt", scale: "y2", mul: 1000, width: 1 },
     ] },
 ];
 
@@ -81,6 +181,7 @@ let syncing = false;       // 줌 전파 재진입 방지
 let records = [];
 let currentId = null;
 let customPanels = loadLS("ibvs_viewer.custom", []);
+let showHelp = loadLS("ibvs_viewer.help", true);   // 패널별 "보는 법" 표시
 
 const $ = (id) => document.getElementById(id);
 
@@ -269,7 +370,8 @@ function fillFieldList() {
   const dl = $("field-list");
   dl.innerHTML = "";
   for (const [tp, d] of Object.entries(rec.topics)) {
-    for (const f of Object.keys(d.fields)) {
+    const extra = tp === T ? Object.keys(DERIVED) : [];
+    for (const f of [...Object.keys(d.fields), ...extra]) {
       const o = document.createElement("option");
       o.value = `${tp} ${f}`;
       dl.appendChild(o);
@@ -323,7 +425,12 @@ function makePanel(p) {
     body.innerHTML = '<div class="missing">이 기록에 해당 필드가 없음</div>';
     return det;
   }
-  const chart = makeChart(p, built, body);
+  const help = makeHelp(p, built);
+  body.appendChild(help);
+  const chartEl = document.createElement("div");
+  body.appendChild(chartEl);
+  const chart = makeChart(p, built, chartEl);
+  bindToggles(p, built.specs, help, chart);
   det.addEventListener("toggle", () => {
     saveLS(closedKey, !det.open);
     if (det.open) chart.setSize({ width: chartWidth(), height: CHART_H });
@@ -331,13 +438,69 @@ function makePanel(p) {
   return det;
 }
 
+function seriesName(s, multiTopic) {
+  if (s.label) return s.label;
+  return multiTopic && s.t !== T ? `${s.t.split("/").pop()}.${s.f}` : s.f;
+}
+function fieldCol(tp, f) {
+  const d = rec.topics[tp];
+  if (!d) return null;
+  if (d.fields[f]) return d.fields[f];
+  const dv = DERIVED[f];
+  if (!dv || dv.deps.some((k) => !d.fields[k])) return null;
+  const cols = dv.deps.map((k) => d.fields[k]);
+  return d.t.map((_, i) => {
+    const args = cols.map((c) => c[i]);
+    return args.some((v) => v == null) ? null : dv.fn(...args);
+  });
+}
+function seriesColor(s, i) { return s.color || PALETTE[i % PALETTE.length]; }
+
+/* 패널 위 수식표: 색 · 필드 · 수식. */
+function makeHelp(p, { specs, multiTopic }) {
+  const box = document.createElement("div");
+  box.className = "help";
+  const tbl = document.createElement("table");
+  tbl.className = "gloss";
+  specs.forEach((s, i) => {
+    const tr = document.createElement("tr");
+    const dash = s.dash ? "dashed" : "solid";
+    tr.innerHTML = `<td><input type="checkbox" class="cb"></td>
+      <td><i class="sw" style="border-top:3px ${dash} ${seriesColor(s, i)}"></i></td>
+      <td class="nm mono"></td><td class="ds mono"></td>`;
+    tr.querySelector(".cb").checked = seriesShown(p, s);
+    tr.querySelector(".nm").textContent = seriesName(s, multiTopic) + (s.scale === "y2" ? " (R)" : "");
+    tr.querySelector(".ds").textContent = (FIELD_INFO[s.f] ?? "") + (DERIVED[s.f] ? "   ← 뷰어 계산" : "");
+    tbl.appendChild(tr);
+  });
+  box.appendChild(tbl);
+  return box;
+}
+
+/* 선 표시 여부 — 패널·필드별로 브라우저에 기억. 기본은 패널 정의의 show(없으면 켬). */
+const showKey = (p, s) => `ibvs_viewer.show.${p.title}.${s.t || T}.${s.f}`;
+function seriesShown(p, s) { return loadLS(showKey(p, s), s.show ?? true); }
+
+/* 수식표 체크박스 ↔ 차트 선 표시 연동 (범례 클릭으로 바꿔도 체크박스가 따라간다). */
+function bindToggles(p, specs, box, u) {
+  const cbs = box.querySelectorAll(".cb");
+  cbs.forEach((cb, i) => {
+    cb.onchange = () => u.setSeries(i + 1, { show: cb.checked });
+  });
+  u.hooks.setSeries = u.hooks.setSeries || [];
+  u.hooks.setSeries.push((u, idx, opts) => {
+    if (idx == null || opts.show == null || !cbs[idx - 1]) return;
+    cbs[idx - 1].checked = opts.show;
+    saveLS(showKey(p, specs[idx - 1]), opts.show);
+  });
+}
+
 /* 패널의 시리즈들을 하나의 x축으로 정렬. 토픽이 여러 개면 uPlot.join 으로 합친다. */
 function buildData(p) {
   const groups = new Map();   // topic → [spec]
   for (const s of p.series) {
     const tp = s.t || T;
-    const col = rec.topics[tp]?.fields?.[s.f];
-    if (!col) continue;
+    if (!fieldCol(tp, s.f)) continue;
     if (!groups.has(tp)) groups.set(tp, []);
     groups.get(tp).push(s);
   }
@@ -346,7 +509,7 @@ function buildData(p) {
   for (const [tp, ss] of groups) {
     const d = rec.topics[tp];
     const cols = ss.map((s) => {
-      const src = d.fields[s.f];
+      const src = fieldCol(tp, s.f);
       if (s.mul == null && s.add == null) return src;
       const mul = s.mul ?? 1, add = s.add ?? 0;
       return src.map((v) => (v == null ? null : v * mul + add));
@@ -370,14 +533,13 @@ function makeChart(p, { data, specs, multiTopic }, el) {
   const series = [{ label: "t[s]", value: (u, v) => (v == null ? "—" : v.toFixed(3)) }];
   specs.forEach((s, i) => {
     const mul = s.mul ?? 1, add = s.add ?? 0;
-    const name = s.label || (multiTopic && s.t !== T ? `${s.t.split("/").pop()}.${s.f}` : s.f);
     series.push({
-      label: name,
+      label: seriesName(s, multiTopic),
       scale: s.scale || "y",
-      stroke: s.color || PALETTE[i % PALETTE.length],
+      stroke: seriesColor(s, i),
       width: s.width ?? 1.5,
       dash: s.dash,
-      show: s.show ?? true,
+      show: seriesShown(p, s),
       spanGaps: multiTopic,
       paths: s.step ? uPlot.paths.stepped({ align: 1 }) : undefined,
       points: { show: false },
@@ -390,7 +552,7 @@ function makeChart(p, { data, specs, multiTopic }, el) {
     p.flags
       ? { stroke: axisStroke, grid: { show: false }, ticks: { show: false }, size: 110,
           splits: () => specs.map((s) => (s.add ?? 0) + 0.4),   // 각 플래그 줄 가운데에 이름
-          values: () => specs.map((s) => s.f) }
+          values: () => specs.map((s) => seriesName(s, false)) }
       : { stroke: axisStroke, grid: { stroke: grid }, ticks: { stroke: grid }, size: 60 },
   ];
   if (hasY2) axes.push({ scale: "y2", side: 1, stroke: axisStroke, grid: { show: false }, size: 50 });
@@ -430,6 +592,11 @@ function makeChart(p, { data, specs, multiTopic }, el) {
     },
   };
   const u = new uPlot(opts, data, el);
+  // 범례 이름에 마우스를 올리면 설명이 뜨게 한다
+  u.root.querySelectorAll(".u-legend tr.u-series").forEach((tr, i) => {
+    const s = specs[i - 1];
+    if (s) tr.title = `${s.f} = ${FIELD_INFO[s.f] ?? ""}`;
+  });
   u.setScale("x", { min: 0, max: dur });
   // 방금 만든 차트를 다른 차트들의 현재 줌에 맞춘다
   if (charts.length) {
@@ -479,7 +646,7 @@ function addCustom() {
     const bits = part.trim().split(/\s+/);
     if (!bits[0]) continue;
     const [tp, f] = bits.length >= 2 ? bits : [T, bits[0]];
-    if (!rec.topics[tp]?.fields?.[f]) {
+    if (!fieldCol(tp, f)) {
       alert(`필드 없음: ${tp} ${f}`);
       return;
     }
@@ -499,6 +666,12 @@ function bind() {
   $("btn-refresh").onclick = () => loadRecords();
   $("rec-filter").oninput = renderRecords;
   $("btn-reset").onclick = resetZoom;
+  const applyHelp = () => {
+    document.body.classList.toggle("hide-help", !showHelp);
+    $("btn-help").textContent = showHelp ? "수식 숨기기" : "수식 보기";
+  };
+  $("btn-help").onclick = () => { showHelp = !showHelp; saveLS("ibvs_viewer.help", showHelp); applyHelp(); };
+  applyHelp();
   $("btn-custom").onclick = addCustom;
   $("custom-input").onkeydown = (e) => { if (e.key === "Enter") addCustom(); };
   $("pk-go").onclick = () => browse($("pk-path").value);
