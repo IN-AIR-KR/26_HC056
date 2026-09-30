@@ -26,7 +26,7 @@ from _common import resolve_bag  # noqa: E402
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("bag", help="bag 디렉토리 (예: ~/arms_flight_log/20260907_1530)")
+    ap.add_argument("bag", help="bag 디렉토리 (예: ~/arms_flight_logs_ibvs/20260907_1530)")
     ap.add_argument("--outdir", default="", help="결과 폴더 (기본: <bag>_viz)")
     ap.add_argument("--storage", default="", help="mcap | sqlite3 (기본: 자동감지)")
     ap.add_argument("--video-topic", default="/arms/ui_image/compressed")

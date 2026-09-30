@@ -1,12 +1,12 @@
 # bag_visualize
 
 비행 로그 rosbag 을 **CSV + 오버뷰 그래프 + mp4 영상**으로 한 번에 변환하는 도구.
-(`auto_save:=true` 로 녹화한 `~/arms_flight_log/<일시>/` bag 을 분석/시각화)
+(`auto_save:=true` 로 녹화한 `~/arms_flight_logs_ibvs/<일시>/` bag 을 분석/시각화)
 
 ## 한 방에 (마스터 스크립트)
 
 ```bash
-python3 SW/scripts/bag_visualize/bag_visualize.py ~/arms_flight_log/20260907_1530
+python3 SW/scripts/bag_visualize/bag_visualize.py ~/arms_flight_logs_ibvs/20260907_1530
 ```
 
 결과가 `<bag>_viz/` 아래에 모인다:

@@ -39,22 +39,45 @@ arms_control_node:
       looming_fire_enabled: false
 
     control:
-      # ── IBVS 공선유도 카메라 스펙 (mode 2, 실기체 미측정) ────────────────
-      # control_params.yaml 의 기본값은 SITL 기체 SDF 의 upward_camera 스펙
-      # (hfov 2.0rad = 114.59deg, 720x480)이다. 실기체 FPV 카메라 화각이 다르면
-      # 픽셀→각도 환산이 통째로 어긋나 ibvs_gain/kb 가 전부 무의미해진다.
+      # ── IBVS 카메라 캘리브레이션 (mode 2, 실기체 미측정) ─────────────────
+      # 픽셀오차 → 각도(tan 단위 x_n, y_n) 환산에 쓴다. 틀리면 ibvs_gain/kb 가
+      # 전부 어긋난다. calibrated=true 면 ibvs_hfov_deg/ibvs_aspect 는 무시된다.
       #
-      # ★ 실기체 비행 전에 반드시 할 것:
-      #   1) 카메라 데이터시트의 수평 화각을 확인하거나,
-      #      `ros2 run camera_calibration cameracalibrator` 로 fx 를 구해
-      #      hfov = 2*atan(width/(2*fx)) 로 환산한다.
-      #   2) 광축이 정말 기체 +Z(수직 상방)인지 확인한다. 앞으로 기울어 달려
-      #      있으면 mode 2 의 전제(광축=추력축)가 깨진다.
-      #   3) 기체를 손으로 들고 롤/피치를 줘서 화면 속 표적이 예상대로
-      #      움직이는지 확인한다(어긋나면 roll_sign/pitch_sign 으로 교정).
-      # 확인되면 아래 주석을 풀고 값을 채울 것.
-      # ibvs_hfov_deg: 114.5916
-      # ibvs_aspect: 0.6666667
+      # ★ 지금 값은 "기본값" = SITL upward_camera 와 같은 이상적 핀홀
+      #   (720x480, hfov 2.0rad → fx = 360/tan(1.0) = 231.15, 왜곡 0).
+      #   즉 체커보드 캘리 전에는 SITL 과 똑같이 동작한다.
+      #
+      # 채우는 법 — 체커보드 캘리 결과(ost.yaml / camera_info)를 그대로 옮긴다:
+      #   ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
+      #       --ros-args -r image:=<카메라 토픽>
+      #   (FPV 광각이 plumb_bob 으로 가장자리가 안 맞으면 --fisheye-* 옵션으로
+      #    다시 돌리고 distortion_model 을 equidistant 로)
+      #   image_width/height  ← image_width, image_height
+      #   fx, fy, cx, cy      ← camera_matrix  [fx 0 cx; 0 fy cy; 0 0 1]
+      #   distortion_model    ← distortion_model
+      #   distortion          ← distortion_coefficients (plumb_bob 4~5개 / equidistant 4개)
+      # ※ 반드시 detection 노드가 받는 영상과 같은 화면(크롭/레터박스 없이 같은
+      #   종횡비)으로 캘리할 것. 해상도는 달라도 되지만 그땐 여기 적은 해상도 기준.
+      # ※ fx/fy/cx/cy/distortion 은 실수형이다. 정수로 떨어져도 360.0, 0.0 처럼
+      #   .0 을 붙일 것(안 붙이면 ROS 파라미터 타입 불일치로 노드가 기동 실패).
+      # ※ 기동 로그에 "카메라 캘리 적용: ..." 이 찍히는지 확인. 값이 잘못되면
+      #   "카메라 캘리 무효 → hfov 근사로 대체" ERROR 가 뜬다.
+      #
+      # 캘리와 별개로 비행 전 확인:
+      #   1) 광축이 정말 기체 +Z(수직 상방)인지. 기울게 달려 있으면 mode 2 의
+      #      전제(광축=추력축)가 깨져 조준점이 편향된다(캘리로는 안 잡힘).
+      #   2) 기체를 손으로 들고 롤/피치를 줘서 화면 속 표적이 예상대로
+      #      움직이는지(어긋나면 roll_sign/pitch_sign 으로 교정).
+      camera:
+        calibrated: true
+        image_width: 720
+        image_height: 480
+        fx: 231.1545
+        fy: 231.1545
+        cx: 360.0
+        cy: 240.0
+        distortion_model: "plumb_bob"
+        distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
 
       # ── 실기체 PID (미측정) ──────────────────────────────────────────────
       # 단위: 정규화 픽셀오차 → 각속도[deg/s]. 각도 단계는 없다(ACRO 고정).

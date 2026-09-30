@@ -189,7 +189,7 @@ arms_control_node:
       # 카메라 화각/종횡비 — 픽셀오차를 각도로 바꾸는 데 필요.
       #   SITL 값은 arms_sim 기체 SDF 의 upward_camera 스펙과 일치시킨 것:
       #   <horizontal_fov>2.0</horizontal_fov> rad = 114.5916 deg, 720x480.
-      #   ★ 실기체 FPV 카메라 화각이 다르면 hw_overrides.yaml 에서 덮어쓸 것.
+      #   ★ 실기체는 hw_overrides.yaml 의 control.camera.* (체커보드 캘리)가 이 근사를 대체한다.
       #      틀리면 각도 환산이 통째로 어긋나 게인이 전부 어긋난다.
       ibvs_hfov_deg: 114.5916
       ibvs_aspect: 0.6666667   # 세로/가로 = 480/720

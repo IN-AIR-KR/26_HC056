@@ -16,6 +16,7 @@
 #include "arms_control/state_machine.hpp"
 #include "arms_msgs/msg/crsf_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
+#include "arms_msgs/msg/ibvs_debug.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -154,9 +155,25 @@ class ArmsControlNode : public rclcpp::Node {
     // 픽셀오차(정규화 ±0.5) → tan 단위 이미지좌표 변환에 화각이 필요하다.
     //   x_n = 2*tan(hfov/2) * error_x,   y_n = 2*tan(hfov/2)*aspect * error_y
     // SITL 기본값은 arms_sim 기체 SDF 의 upward_camera 스펙(hfov 2.0rad, 720x480).
-    // ★ 실기체 FPV 카메라 화각이 다르면 hw_overrides.yaml 에서 덮어쓸 것.
+    // ★ 실기체는 hw_overrides.yaml 의 control.camera.* (체커보드 캘리)가 이 근사를 대체한다.
     declare_parameter("control.ibvs_hfov_deg", 114.5916);  // 수평 화각[deg] (=2.0 rad)
     declare_parameter("control.ibvs_aspect", 0.6666667);   // 세로/가로 = 480/720
+    // 카메라 내부파라미터(체커보드 캘리). calibrated=true 면 위 hfov/aspect 근사 대신
+    //   fx,fy,cx,cy + 왜곡 역보정으로 x_n,y_n 을 구한다. 실기체 전용 — hw_overrides.yaml.
+    //   값은 image_width x image_height 해상도 기준 픽셀 단위(ROS camera_calibration 출력 그대로).
+    //   기본값은 SITL upward_camera 와 동일한 이상적 핀홀(fx = 360/tan(1.0), 왜곡 0).
+    //   ※ 기동 시 1회만 읽는다(런타임 변경 미지원).
+    declare_parameter("control.camera.calibrated", false);
+    declare_parameter("control.camera.image_width", 720);
+    declare_parameter("control.camera.image_height", 480);
+    declare_parameter("control.camera.fx", 231.1545);
+    declare_parameter("control.camera.fy", 231.1545);
+    declare_parameter("control.camera.cx", 360.0);
+    declare_parameter("control.camera.cy", 240.0);
+    // "plumb_bob"(k1,k2,p1,p2[,k3]) | "equidistant"(fisheye k1,k2,k3,k4)
+    declare_parameter("control.camera.distortion_model", std::string("plumb_bob"));
+    declare_parameter("control.camera.distortion",
+                      std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
     // 배리어 kb: z1 이 이 값에 닿으면 게인이 발산한다 = "여기는 못 넘어간다".
     //   z1 = 1 - cos(theta) 이므로 kb 는 허용 최대 이탈각으로 환산된다.
     //   화면 모서리의 z1 = 0.529 (hfov 115°, 3:2) 이므로 그보다 약간 크게 잡는다.
@@ -320,6 +337,7 @@ class ArmsControlNode : public rclcpp::Node {
     ibvs_gain_ = get_parameter("control.ibvs_gain").as_double();
     ibvs_center_gain_ = get_parameter("control.ibvs_center_gain").as_double();
     ibvs_los_rate_gain_ = get_parameter("control.ibvs_los_rate_gain").as_double();
+    load_camera_params();
     update_ibvs_scale();
     near_size_start_ = get_parameter("control.near_size_start").as_double();
     near_size_full_ = get_parameter("control.near_size_full").as_double();
@@ -480,6 +498,9 @@ class ArmsControlNode : public rclcpp::Node {
     pub_dbg_  = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
     // looming 튜닝용: x=τ[s](미접근/무한대는 9.99로 캡), y=bbox크기(EMA), z=크기변화율 ṡ
     pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/debug_looming", 10);
+    // IBVS 튜닝/디버깅: 유도 각 항(오차→LOS각속도→z1/배리어→항별 기여→스케줄링→명령/추력)을
+    //   한 메시지로 매 틱 발행(구독자 있을 때만). auto_save 녹화 대상.
+    pub_ibvs_dbg_ = create_publisher<arms_msgs::msg::IbvsDebug>("/arms/ibvs_debug", 10);
     // CRSF 배터리 텔레메트리(0x08)를 UI 등에서 쓰도록 표준 메시지로 재발행한다.
     // CRSF 수신(RX) 텔레메트리 통합 발행: 배터리/자세(RPY)/수직속도/비행모드/링크통계 → /arms/crsf_rx.
     //   (배터리는 별도 /arms/battery 없이 이 토픽으로만 나간다. UI 도 이걸 구독.)
@@ -673,13 +694,103 @@ class ArmsControlNode : public rclcpp::Node {
     const double t = std::tan(std::clamp(half, 1e-3, 1.5533));  // <89°로 제한(tan 발산 방지)
     ibvs_kx_ = 2.0 * t;
     ibvs_ky_ = 2.0 * t * ibvs_aspect_;
+    double cxn = 0.0, cyn = 0.0;
+    error_to_tan(0.5, 0.5, cxn, cyn);   // 화면 모서리
     RCLCPP_INFO(get_logger(),
-                "IBVS 스케일: hfov=%.1fdeg aspect=%.3f → kx=%.3f ky=%.3f "
+                "IBVS 스케일: %s hfov=%.1fdeg aspect=%.3f → kx=%.3f ky=%.3f "
                 "(화면 모서리 z1=%.3f, kb=%.3f)",
+                cam_calibrated_ ? "[캘리 사용 — hfov/aspect 무시]" : "[hfov 근사]",
                 ibvs_hfov_deg_, ibvs_aspect_, ibvs_kx_, ibvs_ky_,
-                1.0 - 1.0 / std::sqrt(1.0 + 0.25 * (ibvs_kx_ * ibvs_kx_ +
-                                                    ibvs_ky_ * ibvs_ky_)),
-                ibvs_kb_);
+                1.0 - 1.0 / std::sqrt(1.0 + cxn * cxn + cyn * cyn), ibvs_kb_);
+  }
+
+  /* 카메라 캘리 파라미터 로드 + 검증. 값이 이상하면 hfov 근사로 되돌린다
+     (틀린 캘리로 나는 것보다 근사로 나는 게 안전). */
+  void load_camera_params() {
+    cam_calibrated_ = get_parameter("control.camera.calibrated").as_bool();
+    cam_width_  = static_cast<double>(get_parameter("control.camera.image_width").as_int());
+    cam_height_ = static_cast<double>(get_parameter("control.camera.image_height").as_int());
+    cam_fx_ = get_parameter("control.camera.fx").as_double();
+    cam_fy_ = get_parameter("control.camera.fy").as_double();
+    cam_cx_ = get_parameter("control.camera.cx").as_double();
+    cam_cy_ = get_parameter("control.camera.cy").as_double();
+    const std::string model = get_parameter("control.camera.distortion_model").as_string();
+    const auto d = get_parameter("control.camera.distortion").as_double_array();
+    if (!cam_calibrated_) return;
+
+    cam_fisheye_ = (model == "equidistant");
+    const std::size_t need_max = cam_fisheye_ ? 4 : 5;
+    std::string why;
+    if (model != "plumb_bob" && model != "equidistant")
+      why = "distortion_model 은 plumb_bob|equidistant 여야 함: " + model;
+    else if (d.size() < 4 || d.size() > need_max)
+      why = "distortion 계수 개수 " + std::to_string(d.size()) + " (" + model +
+            (cam_fisheye_ ? " 는 4개)" : " 는 4~5개)");
+    else if (cam_fx_ <= 0.0 || cam_fy_ <= 0.0 || cam_width_ <= 0.0 || cam_height_ <= 0.0)
+      why = "fx/fy/image_width/image_height 는 양수여야 함";
+    if (!why.empty()) {
+      RCLCPP_ERROR(get_logger(), "카메라 캘리 무효 → hfov 근사로 대체: %s", why.c_str());
+      cam_calibrated_ = false;
+      return;
+    }
+    cam_dist_.fill(0.0);
+    std::copy(d.begin(), d.end(), cam_dist_.begin());
+    RCLCPP_INFO(get_logger(),
+                "카메라 캘리 적용: %.0fx%.0f fx=%.2f fy=%.2f cx=%.2f cy=%.2f %s "
+                "D=[%.4f %.4f %.4f %.4f %.4f]",
+                cam_width_, cam_height_, cam_fx_, cam_fy_, cam_cx_, cam_cy_, model.c_str(),
+                cam_dist_[0], cam_dist_[1], cam_dist_[2], cam_dist_[3], cam_dist_[4]);
+  }
+
+  /* 정규화 픽셀오차(error = bbox중심/화면 - 0.5, ±0.5) → tan 단위 이미지좌표 (x_n, y_n).
+       calibrated=false: 이상적 핀홀 + 화면중앙 = 광축 (hfov/aspect 근사, SITL).
+       calibrated=true : 픽셀 복원 → (u-cx)/fx → 렌즈 왜곡 역보정.
+     detection 좌표는 해상도 무관 정규화값이라 캘리 해상도와 종횡비만 같으면 된다
+     (크롭/레터박스가 들어가면 안 됨). */
+  void error_to_tan(double ex, double ey, double& xn, double& yn) const {
+    if (!cam_calibrated_) {
+      xn = ibvs_kx_ * ex;
+      yn = ibvs_ky_ * ey;
+      return;
+    }
+    const double xd = ((ex + 0.5) * cam_width_  - cam_cx_) / cam_fx_;
+    const double yd = ((ey + 0.5) * cam_height_ - cam_cy_) / cam_fy_;
+    undistort_normalized(xd, yd, xn, yn);
+  }
+
+  /* 왜곡된 정규화좌표 (xd, yd) → 이상적 핀홀 좌표 (x, y). OpenCV undistortPoints 와 같은 모델. */
+  void undistort_normalized(double xd, double yd, double& x, double& y) const {
+    const auto& D = cam_dist_;
+    if (cam_fisheye_) {
+      // equidistant: theta_d = theta*(1 + k1 th^2 + k2 th^4 + k3 th^6 + k4 th^8) 를 뉴턴법으로 푼다.
+      const double rd = std::hypot(xd, yd);
+      if (rd < 1e-9) { x = xd; y = yd; return; }
+      double th = rd;
+      for (int i = 0; i < 10; ++i) {
+        const double t2 = th * th, t4 = t2 * t2, t6 = t4 * t2, t8 = t4 * t4;
+        const double f  = th * (1.0 + D[0] * t2 + D[1] * t4 + D[2] * t6 + D[3] * t8) - rd;
+        const double df = 1.0 + 3.0 * D[0] * t2 + 5.0 * D[1] * t4 + 7.0 * D[2] * t6 + 9.0 * D[3] * t8;
+        if (std::abs(df) < 1e-9) break;
+        th -= f / df;
+      }
+      th = std::clamp(th, 0.0, 1.5533);   // <89° (tan 발산 방지)
+      const double s = std::tan(th) / rd;
+      x = xd * s;
+      y = yd * s;
+    } else {
+      // plumb_bob (k1,k2,p1,p2,k3): 고정점 반복.
+      x = xd;
+      y = yd;
+      for (int i = 0; i < 20; ++i) {
+        const double r2 = x * x + y * y;
+        const double rad = 1.0 + ((D[4] * r2 + D[1]) * r2 + D[0]) * r2;
+        if (rad < 0.1) break;   // 캘리 유효범위 밖(강한 음의 k 로 모델이 꺾임) — 직전 값 유지
+        const double dx = 2.0 * D[2] * x * y + D[3] * (r2 + 2.0 * x * x);
+        const double dy = D[2] * (r2 + 2.0 * y * y) + 2.0 * D[3] * x * y;
+        x = (xd - dx) / rad;
+        y = (yd - dy) / rad;
+      }
+    }
   }
 
   static double apply_deadzone(double e, double dz) {
@@ -841,6 +952,20 @@ class ArmsControlNode : public rclcpp::Node {
     double pitch_rate_cmd = 0.0;
     float thrust = 0.f;
 
+    // IBVS 디버그 스냅샷 — 아래 계산 단계마다 채우고 틱 끝에 발행한다.
+    arms_msgs::msg::IbvsDebug idbg;
+    idbg.header.stamp = now_t;
+    idbg.state = to_string(state);
+    idbg.guidance_mode = guidance_mode_;
+    idbg.dt = dt;
+    idbg.kb = ibvs_kb_;
+    idbg.ibvs_gain = ibvs_gain_;
+    idbg.ibvs_center_gain = ibvs_center_gain_;
+    idbg.ibvs_los_rate_gain = ibvs_los_rate_gain_;
+    idbg.range_gain_scale = 1.0;
+    idbg.range_throttle_scale = 1.0;
+    idbg.tau_ease = 1.0;
+
     // LOCK 단계부터 필터(LOS/오차미분/alpha-beta 추정)를 미리 갱신해둔다.
     // 실제 회전/추력 명령은 여전히 TRACK/FIRE 에서만 나가지만(아래 안쪽 if),
     // 발사(TRACK 진입) 순간 filt_err_x_/y_ 등이 0부터 다시 시작하는 콜드스타트를 없애기 위함.
@@ -875,6 +1000,14 @@ class ArmsControlNode : public rclcpp::Node {
       prev_err_y_ = los_y;
 
       bool held = sm_->is_detection_held();
+      idbg.filter_active = true;
+      idbg.raw_err_x = raw_ex;
+      idbg.raw_err_y = raw_ey;
+      idbg.filt_err_x = filt_err_x_;
+      idbg.filt_err_y = filt_err_y_;
+      idbg.detection_held = held;
+      idbg.err_dot_x = err_dot_x_;
+      idbg.err_dot_y = err_dot_y_;
       pid_roll_->set_integral_frozen(held);
       pid_pitch_->set_integral_frozen(held);
 
@@ -898,6 +1031,10 @@ class ArmsControlNode : public rclcpp::Node {
         losf_x_dot_ = std::clamp(losf_x_dot_, -3.0, 3.0);
         losf_y_dot_ = std::clamp(losf_y_dot_, -3.0, 3.0);
       }
+      idbg.losf_x = losf_x_;
+      idbg.losf_y = losf_y_;
+      idbg.losf_x_dot = losf_x_dot_;
+      idbg.losf_y_dot = losf_y_dot_;
 
       // ---- LOCK 프리웜 디버그: filt_err_x/y_ 가 실제로 수렴해가는지 눈으로 확인용 ----
       //   TRACK 진입 순간 이 값이 이미 실제 오차 근처여야 콜드스타트 수정이 제대로 먹은 것.
@@ -908,6 +1045,7 @@ class ArmsControlNode : public rclcpp::Node {
 
       // ---- 여기부터 실제 회전/추력 명령을 만든다: TRACK/FIRE(발사 이후)에서만 ----
       if(state == State::TRACK || state == State::FIRE) {
+      idbg.cmd_active = true;
       if (guidance_mode_ == 2) {
         // ===== IBVS 공선유도 (배리어 Lyapunov) =====
         //   논문 식 (12),(13) 을 우리 기하(광축 = 추력축 = 기체 +Z)에 적용한 것.
@@ -915,12 +1053,17 @@ class ArmsControlNode : public rclcpp::Node {
         //   자세/거리/속도 없이 픽셀과 화각만으로 계산된다 (자세 R_b^e 가 상쇄됨).
 
         // ① 픽셀오차 → tan 단위 정규화 이미지좌표. error=±0.5 가 화면 가장자리.
-        const double x_n = ibvs_kx_ * los_x;
-        const double y_n = ibvs_ky_ * los_y;
+        //    실기체는 캘리(fx,fy,cx,cy,왜곡)로, SITL 은 hfov 근사로 환산한다.
+        double x_n = 0.0, y_n = 0.0;
+        error_to_tan(los_x, los_y, x_n, y_n);
         const double Nn  = std::sqrt(1.0 + x_n * x_n + y_n * y_n);
 
         // ② 공선 오차 z1 = 1 - cos(theta). theta = 광축에서 벗어난 각도.
         double z1 = 1.0 - 1.0 / Nn;
+        idbg.x_n = x_n;
+        idbg.y_n = y_n;
+        idbg.theta_deg = std::acos(1.0 / Nn) * 180.0 / M_PI;
+        idbg.z1_raw = z1;
         // 배리어 안쪽으로 강제한다. kb 를 화면보다 작게 잡았거나 검출이 튀어
         //   z1 >= kb 가 되면 분모가 음수로 넘어가 명령 부호가 뒤집힌다 — 그러면
         //   드론이 표적 반대로 돌아버린다. 여기서 반드시 막아야 한다.
@@ -929,6 +1072,9 @@ class ArmsControlNode : public rclcpp::Node {
         const double denom   = std::max(ibvs_kb_ * ibvs_kb_ - z1 * z1, 1e-6);
         const double barrier = z1 / denom;   // 중앙에선 ~0, 가장자리에서 발산
         ibvs_z1_dbg_ = z1;
+        idbg.z1 = z1;
+        idbg.z1_clamped = (idbg.z1_raw > z1_max);
+        idbg.barrier = barrier;
 
         // ③ 회전축 = e3 x (표적 방향). 기체좌표계에서 (x_n, y_n, 0)/N 이 된다.
         //    크기는 sin(theta), yaw(z) 성분은 구조적으로 0 — 상방 카메라 기하 덕분.
@@ -950,6 +1096,18 @@ class ArmsControlNode : public rclcpp::Node {
                           + ibvs_los_rate_gain_ * ldx;
         const double pc = (ibvs_gain_ * barrier + ibvs_center_gain_) * dir_y
                           + ibvs_los_rate_gain_ * ldy;
+        idbg.dir_x = dir_x;
+        idbg.dir_y = dir_y;
+        idbg.los_rate_x = ldx;
+        idbg.los_rate_y = ldy;
+        idbg.barrier_term_x = ibvs_gain_ * barrier * dir_x;
+        idbg.barrier_term_y = ibvs_gain_ * barrier * dir_y;
+        idbg.center_term_x = ibvs_center_gain_ * dir_x;
+        idbg.center_term_y = ibvs_center_gain_ * dir_y;
+        idbg.los_rate_term_x = ibvs_los_rate_gain_ * ldx;
+        idbg.los_rate_term_y = ibvs_los_rate_gain_ * ldy;
+        idbg.guidance_x = rc;
+        idbg.guidance_y = pc;
         roll_rate_cmd  = roll_sign_  * rc;
         pitch_rate_cmd = pitch_sign_ * pc;
       } else if (guidance_mode_ == 1) {
@@ -965,6 +1123,10 @@ class ArmsControlNode : public rclcpp::Node {
         }
         double rc = pn_nav_gain_ * ldx + pn_center_gain_ * los_x;
         double pc = pn_nav_gain_ * ldy + pn_center_gain_ * los_y;
+        idbg.los_rate_x = ldx;
+        idbg.los_rate_y = ldy;
+        idbg.guidance_x = rc;
+        idbg.guidance_y = pc;
         roll_rate_cmd  = roll_sign_  * rc;
         pitch_rate_cmd = pitch_sign_ * pc;
       } else {
@@ -990,6 +1152,8 @@ class ArmsControlNode : public rclcpp::Node {
           else if (fabs(ex) > 0.06) pitch_scale = 0.9;
         }
         pitch_rate_cmd = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
+        idbg.guidance_x = roll_sign_ * roll_rate_cmd;    // 부호 전 값으로 되돌려 기록
+        idbg.guidance_y = pitch_sign_ * pitch_rate_cmd;
       }
 
       // ---- 근접도(closeness) 기반 회전 게인 스케줄링 ----
@@ -1005,6 +1169,8 @@ class ArmsControlNode : public rclcpp::Node {
         double range_gain_scale = 1.0 - closeness * (1.0 - min_gain_scale_);
         roll_rate_cmd  *= range_gain_scale;
         pitch_rate_cmd *= range_gain_scale;
+        idbg.closeness = closeness;
+        idbg.range_gain_scale = range_gain_scale;
       }
 
       // ---- 추격 궤적(Pursuit): 조준하며 처음부터 상승 ----
@@ -1043,10 +1209,16 @@ class ArmsControlNode : public rclcpp::Node {
           double center_q =
               std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
           thrust = static_cast<float>(hover + (up - hover) * center_q * tau_ease);
+          idbg.center_q = center_q;
         } else {
           // 비활성화: 정렬 정도와 무관하게 상수 추력(track_throttle) 유지 (τ 감속만 적용).
           thrust = static_cast<float>(hover + (up - hover) * tau_ease);
+          idbg.center_q = 1.0;
         }
+        idbg.range_throttle_scale = range_throttle_scale;
+        idbg.throttle_up = up;
+        idbg.emag = emag;
+        idbg.tau_ease = tau_ease;
 
         if (!align_locked_ && emag < 0.15) {
           align_locked_ = true;
@@ -1245,6 +1417,22 @@ class ArmsControlNode : public rclcpp::Node {
       }
     }
 
+    // ---- IBVS 디버그 발행 — 구독자 있을 때만 (auto_save 녹화기가 구독) ----
+    if (pub_ibvs_dbg_->get_subscription_count() > 0) {
+      idbg.manual_out = manual_out;
+      idbg.loom_size = loom_s_ema_;
+      idbg.loom_rate = loom_rate_ema_;
+      idbg.tau = std::isfinite(tau_sec_) ? std::min(tau_sec_, 9.99) : 9.99;
+      idbg.roll_rate_cmd = roll_rate_cmd;
+      idbg.pitch_rate_cmd = pitch_rate_cmd;
+      idbg.roll_rate_out = std::clamp(roll_rate_cmd, -max_cmd_rate_dps_, max_cmd_rate_dps_);
+      idbg.pitch_rate_out = std::clamp(pitch_rate_cmd, -max_cmd_rate_dps_, max_cmd_rate_dps_);
+      idbg.rate_saturated = std::abs(roll_rate_cmd) > max_cmd_rate_dps_ ||
+                            std::abs(pitch_rate_cmd) > max_cmd_rate_dps_;
+      idbg.thrust = thrust;
+      pub_ibvs_dbg_->publish(idbg);
+    }
+
     // ---- Debug publish (UI 화살표용) — 구독자 있을 때만 ----
     if (pub_dbg_->get_subscription_count() > 0) {
       geometry_msgs::msg::Vector3 dbg;
@@ -1426,6 +1614,13 @@ class ArmsControlNode : public rclcpp::Node {
   double ibvs_aspect_{0.6666667};    // 세로/가로
   double ibvs_kx_{3.1148};           // = 2*tan(hfov/2)         (update_ibvs_scale 가 계산)
   double ibvs_ky_{2.0765};           // = 2*tan(hfov/2)*aspect
+  // 카메라 캘리 (control.camera.*) — calibrated=true 면 위 kx/ky 대신 사용
+  bool   cam_calibrated_{false};
+  bool   cam_fisheye_{false};        // distortion_model == "equidistant"
+  double cam_width_{720.0}, cam_height_{480.0};
+  double cam_fx_{231.1545}, cam_fy_{231.1545};
+  double cam_cx_{360.0}, cam_cy_{240.0};
+  std::array<double, 5> cam_dist_{};  // plumb_bob: k1,k2,p1,p2,k3 / equidistant: k1..k4
   double ibvs_kb_{0.55};             // 배리어 한계 (z1 = 1-cos(theta) 기준)
   double ibvs_gain_{200.0};          // 배리어항 계수[deg/s]
   double ibvs_center_gain_{100.0};   // 선형항 계수[deg/s] (중앙 근처 권한 보강)
@@ -1458,6 +1653,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
+  rclcpp::Publisher<arms_msgs::msg::IbvsDebug>::SharedPtr pub_ibvs_dbg_;      // IBVS 디버그 → /arms/ibvs_debug
   rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_rx_;   // CRSF 수신 텔레메트리 → /arms/crsf_rx
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_crsf_tx_;  // CRSF 송신 채널 로그 → /arms/crsf_tx
   int battery_detected_cells_{0};    // 전압으로 자동 감지한 셀 수(첫 유효 전압에서 1회 감지 후 래치)

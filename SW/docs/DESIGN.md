@@ -143,7 +143,7 @@ graph TD
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
 | `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>CRSF serial |
+| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>CRSF serial |
 | `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)                                                                 | MAVLink RC_CHANNELS_OVERRIDE → PX4                                                        |
 | `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                                                         |
 
@@ -576,6 +576,7 @@ arms_control_node
   |     /arms/mission_state   (MissionState, 30Hz)
   |     /arms/control_debug   (Vector3 — UI 화살표용. x,y = 각속도[deg/s], z = throttle)
   |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용, 구독 중에만 발행)
+  |     /arms/ibvs_debug      (IbvsDebug — IBVS 유도 각 항/스케줄링/명령·추력 스냅샷, 구독 중에만 발행)
   |
   +-- [Serial Output]
   |     CRSF frames → crsf.port (30Hz)
