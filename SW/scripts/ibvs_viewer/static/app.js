@@ -461,11 +461,8 @@ function makeHelp(p, { specs, multiTopic }) {
   const box = document.createElement("div");
   box.className = "help";
   specs.forEach((s, i) => {
-    const color = seriesColor(s, i);
     const chip = document.createElement("label");
     chip.className = "chip";
-    chip.style.setProperty("--c", color);
-    if (s.dash) chip.classList.add("dashed");
     chip.innerHTML = `<input type="checkbox" class="cb"><span class="nm mono"></span><span class="ds mono"></span>`;
     chip.querySelector(".cb").checked = seriesShown(p, s);
     chip.querySelector(".nm").textContent = seriesName(s, multiTopic) + (s.scale === "y2" ? " (R)" : "");
