@@ -24,7 +24,9 @@ const FIELD_INFO = {
   err_dot_y: "LPF(Δfilt_err_y/dt), clamp ±err_dot_clamp   (mode 0 전용)",
   x_n: "(u − cx)/fx, 왜곡 보정   (tan 좌표)",
   y_n: "(v − cy)/fy, 왜곡 보정",
-  theta_deg: "acos(1/N)   [deg]",
+  theta_deg: "acos(1/N)   [deg]   (전체 이탈각)",
+  err_angle_x: "atan(x_n) · 180/π   [deg]   (좌우 오차각, + = 오른쪽)",
+  err_angle_y: "atan(y_n) · 180/π   [deg]   (상하 오차각, + = 아래)",
   z1_raw: "1 − 1/N   (= 1 − cos θ)",
   z1: "min(z1_raw, 0.995·kb)",
   kb: "ibvs_kb",
@@ -81,6 +83,8 @@ const FIELD_INFO = {
 // 기록에 없는 중간값은 기록된 필드로 계산한다(구 기록에도 적용). 입력 중 null 이면 null.
 const share = (a, l) => { const s = Math.abs(a) + Math.abs(l); return s > 1e-9 ? 100 * Math.abs(a) / s : null; };
 const DERIVED = {
+  err_angle_x: { deps: ["x_n"], fn: (x) => Math.atan(x) * 180 / Math.PI },
+  err_angle_y: { deps: ["y_n"], fn: (y) => Math.atan(y) * 180 / Math.PI },
   gain_barrier: { deps: ["ibvs_gain", "barrier"], fn: (g, b) => g * b },
   aim_gain: { deps: ["ibvs_gain", "barrier", "ibvs_center_gain"], fn: (g, b, c) => g * b + c },
   aim_term_x: { deps: ["barrier_term_x", "center_term_x"], fn: (b, c) => b + c },
@@ -100,6 +104,8 @@ const PANELS = [
       { f: "raw_err_x", dash: [4, 3], width: 1 }, { f: "filt_err_x" },
       { f: "raw_err_y", dash: [4, 3], width: 1 }, { f: "filt_err_y" },
     ] },
+  { title: "오차 각도", note: "[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)",
+    series: [{ f: "err_angle_x" }, { f: "err_angle_y" }, { f: "theta_deg", width: 2 }] },
   { title: "LOS각속도", note: "[화면/s]",
     series: [
       { f: "losf_x_dot" }, { f: "los_rate_x", dash: [4, 3] },
