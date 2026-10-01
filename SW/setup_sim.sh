@@ -8,6 +8,14 @@
 #        PX4-Autopilot 이 ~/PX4-Autopilot 에 clone 돼 있음.
 #        (PX4 위치 다르면:  PX4_DIR=<경로> ./setup_sim.sh)
 # =============================================================================
+
+# source 로 실행하면 아래 set -e / exit 가 현재 셸에 걸려 실패 순간 터미널이 닫힌다.
+#   ($0 도 셸 이름이 되어 경로 계산부터 틀어진다.) → 반드시 ./setup_sim.sh 로 실행.
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  echo "!! source 하지 말고 실행하세요:  ./setup_sim.sh   (또는 bash setup_sim.sh)"
+  return 1
+fi
+
 set -e
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"

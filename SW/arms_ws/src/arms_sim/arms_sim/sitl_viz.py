@@ -100,7 +100,7 @@ class SitlViz(Node):
         self.declare_parameter("path_max_points", 3000)  # 링버퍼 길이
         self.declare_parameter("path_min_dist", 0.25)    # 이만큼 움직여야 점 추가 [m]
         # 조준 보조선: 기체 yaw축(= body +Z = 상방 카메라 보어사이트) 방향으로 뻗는 선.
-        # 표적 고도(기본 42m)보다 넉넉히 길어야 '겨냥했는지'가 눈에 보인다. 0 이면 끔.
+        # 표적 고도(기본 30m)보다 넉넉히 길어야 '겨냥했는지'가 눈에 보인다. 0 이면 끔.
         self.declare_parameter("aim_line_m", 60.0)
 
         self._frame = self.get_parameter("frame_id").value
@@ -316,7 +316,7 @@ class SitlViz(Node):
         m.pose.position.x, m.pose.position.y, m.pose.position.z = pos
         if name == MODEL_BALLOON:
             m.type = Marker.SPHERE
-            m.scale.x = m.scale.y = m.scale.z = 2.0   # world sdf 의 radius 1.0 → 지름 2
+            m.scale.x = m.scale.y = m.scale.z = 0.5   # world sdf 의 radius 0.25 → 지름 0.5
             m.color.r, m.color.g, m.color.b = 0.9, 0.1, 0.1
         else:
             m.type = Marker.CUBE

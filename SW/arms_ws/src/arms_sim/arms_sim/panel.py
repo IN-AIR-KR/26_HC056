@@ -263,7 +263,7 @@ class PanelGUI:
         self.alt = tk.Scale(g_tgt, from_=5, to=100, resolution=1, orient="horizontal",
                             length=180, bg="#1e1e1e", fg="white", label="타겟 고도 [m]",
                             highlightthickness=0, troughcolor="#444")
-        self.alt.set(42)
+        self.alt.set(30)
         self.alt.pack(pady=(2, 0))
         self._track(REFEREE_NODE, "alt",
                     lambda v: self.alt.set(float(v)))
