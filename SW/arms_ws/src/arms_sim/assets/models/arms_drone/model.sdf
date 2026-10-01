@@ -277,6 +277,9 @@
 
     <!-- ================================================================
          Motor plugins (from x500)
+         추력 = motorConstant · ω²,  ω_max = maxRotVelocity(1000 rad/s)
+         motorConstant 1.4715e-05 → 모터당 최대 1.5 kgf (14.7 N), 4개 6.0 kgf, AUW 1.05kg → TWR≈5.71
+         PX4 출력 u(0~1) → ω = 150 + 850·u (airframe SIM_GZ_EC_MIN/MAX) → 호버 u≈0.316
          ================================================================ -->
     <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
       <jointName>rotor_0_joint</jointName>
@@ -285,7 +288,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>0</motorNumber>
@@ -301,7 +304,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>1</motorNumber>
@@ -317,7 +320,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>2</motorNumber>
@@ -333,7 +336,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>9.81e-06</motorConstant>
+      <motorConstant>1.4715e-05</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>3</motorNumber>

@@ -263,9 +263,12 @@ arms_control_node:
       # ── 추력 ──────────────────────────────────────────────────────────
       # TRACK 추력은 hover_throttle ↔ track_throttle 보간이 전부다. 겨냥이 좋을수록
       # (오차 < pursuit_gate) track 쪽으로, 빗나가면 hover 쪽으로 붙는다.
-      #   물리량 AUW 1.05kg · 추력 4kgf · TWR≈3.81 · 호버≈0.51 기준.
-      hover_throttle: 0.51    # 빗나갔을 때 최소 상승(재조준). MPC_THR_HOVER 와 일치
-      track_throttle: 0.85    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑
+      #   SITL 기체: AUW 1.05kg · 모터당 1.5kgf(총 6kgf) · TWR≈5.71.
+      #   스로틀 u → 모터 ω = 150 + 850·u (PX4 SIM_GZ_EC_MIN/MAX) → 추력 ∝ ω².
+      #     u=0.32 → 추력/무게 1.0(호버) · u=0.66 → 2.9 (예전 1kgf 모터의 0.85 와 같은 추력)
+      #   ★ 실기체는 hw_overrides.yaml 이 hover/track 을 따로 덮어쓴다.
+      hover_throttle: 0.32    # 빗나갔을 때 최소 추력(재조준). = 호버. MPC_THR_HOVER 와 일치
+      track_throttle: 0.66    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑ (최대 1.0 = 추력/무게 5.7)
       pursuit_gate: 0.25      # 오차 이 이하면 full 상승 (pursuit_center_boost=true 일 때만 의미)
       # 중앙 정렬될수록 추력 세지는 로직 on/off. false=정렬 무관 상수 추력(track_throttle 고정).
       pursuit_center_boost: false   # ★ 비활성화(요청). true 면 기존처럼 center_q 로 hover↔track 보간

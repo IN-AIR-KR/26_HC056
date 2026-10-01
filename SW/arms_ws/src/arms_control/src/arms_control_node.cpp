@@ -51,7 +51,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pitch_pid.kp", 455.0);
     declare_parameter("control.pitch_pid.ki", 0.0);
     declare_parameter("control.pitch_pid.kd", 3.5);
-    declare_parameter("control.track_throttle", 0.85);
+    declare_parameter("control.track_throttle", 0.66);
     declare_parameter("control.lead_gain", 0.0);
     declare_parameter("control.roll_sign", 1.0);
     declare_parameter("control.pitch_sign", 1.0);
@@ -106,7 +106,7 @@ class ArmsControlNode : public rclcpp::Node {
     // autonomous_acro 도 같이 없앴다(CH6 low = ACRO 고정).
     declare_parameter("control.max_rate_dps", 400.0);  // 풀스틱 각속도[deg/s], PX4 MC_ACRO_*_MAX 와 일치
     // 추격 궤적(Pursuit): 정렬 기다리지 않고 조준하며 처음부터 상승.
-    declare_parameter("control.hover_throttle", 0.51);  // 겨냥 안 될 때 최소 상승(호버)
+    declare_parameter("control.hover_throttle", 0.32);  // 겨냥 안 될 때 최소 상승(호버)
     declare_parameter("control.pursuit_gate", 0.25);    // 오차 이 이하면 full 상승(공쪽으로 돌진)
     // pursuit_center_boost: true=중앙 정렬될수록 추력↑(center_q 스케일, 기존동작).
     //                       false=정렬 무관 상수 추력(track_throttle 고정) → "정렬시 추력증가" 비활성.
@@ -1523,7 +1523,7 @@ class ArmsControlNode : public rclcpp::Node {
   State servo_prev_state_{State::IDLE};
   bool  servo_init_{false};
 
-  double track_throttle_{0.85};
+  double track_throttle_{0.66};
   double lead_gain_{0.0};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
@@ -1600,7 +1600,7 @@ class ArmsControlNode : public rclcpp::Node {
   std::size_t crsf_rx_framing_errors_{0};                        // 길이 오류 프레임 수를 센다.
   // 자동요격 제어(ACRO 각속도 + 유도). 각도 단계 없음.
   double max_rate_dps_{400.0};
-  double hover_throttle_{0.51};
+  double hover_throttle_{0.32};
   double pursuit_gate_{0.25};
   bool   pursuit_center_boost_{true};   // 중앙 정렬시 추력증가 on/off (config)
   double err_dot_alpha_{0.2};

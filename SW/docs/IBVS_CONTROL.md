@@ -361,8 +361,8 @@ $$
 
 | 파라미터 | 현재값 | 수식 기호 | 역할 · 튜닝 |
 |---|---|---|---|
-| `control.hover_throttle` | 0.51 | $h$ | 추력 하한(호버). PX4 `MPC_THR_HOVER` 와 일치 |
-| `control.track_throttle` | 0.85 (**실기체 0.70**) | $t$ | 추력 상한(돌진). 못 쫓으면 ↑ |
+| `control.hover_throttle` | 0.32 (**실기체 0.51**) | $h$ | 추력 하한(호버). PX4 `MPC_THR_HOVER` 와 일치 |
+| `control.track_throttle` | 0.66 (**실기체 0.70**) | $t$ | 추력 상한(돌진). 못 쫓으면 ↑ |
 | `control.min_throttle_scale` | 0.6 | $g_{min,thr}$ | 최근접 추력 상한 배율(1.0 = 끔) |
 | `control.pursuit_center_boost` | false | — | true 면 정렬 품질 $q_{center}$ 적용 |
 | `control.pursuit_gate` | 0.25 | — | $q_{center}$=0 이 되는 오차 크기(boost on 일 때만) |

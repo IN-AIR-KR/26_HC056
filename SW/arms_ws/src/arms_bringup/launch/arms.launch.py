@@ -6,7 +6,7 @@ Full real-hardware launch: arms_video + arms_command + arms_detection + arms_con
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
   로드할 가중치는 model:= 로 고른다 (기본 balloon_nano_v9.engine):
-    ros2 launch arms_bringup arms.launch.py                                     # balloon nano v8(기본)
+    ros2 launch arms_bringup arms.launch.py                                     # balloon nano v9(기본)
     ros2 launch arms_bringup arms.launch.py model:=/models/drone_small.engine   # 드론 추적
 """
 
