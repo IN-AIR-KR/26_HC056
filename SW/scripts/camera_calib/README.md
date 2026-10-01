@@ -15,7 +15,7 @@ python3 SW/scripts/camera_calib/calibrate.py
 - 기본 카메라는 실기체 캡처 동글(`/dev/v4l/by-id/usb-MACROSIL_AV_TO_USB2.0-video-index0`), 720x480.
   **스택(arms_video)이 카메라를 쓰고 있으면 안 열린다** — 스택을 내리고 실행.
 - 다른 카메라: `--device 0`. 해상도: `--width/--height` (실기체 검출 해상도와 같게 둘 것).
-- 체커보드: `--cols/--rows` = **안쪽 코너 수**(칸이 10x7 이면 9x6, 기본), `--square` 칸 크기[m].
+- 체커보드: `--cols/--rows` = **안쪽 코너 수** = 칸 수 − 1 (기본 8x5 = 칸 9x6 보드). `--square` 칸 크기[m].
 
 | 옵션 | 용도 |
 |---|---|

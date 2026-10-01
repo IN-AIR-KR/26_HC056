@@ -5,7 +5,7 @@
 저장한다. IBVS(mode 2)가 픽셀 → tan 좌표 변환에 이 값을 쓴다.
 
 사용:
-    python3 calibrate.py                         # 실기체 캡처 동글(by-id), 720x480, 9x6 체커보드
+    python3 calibrate.py                         # 실기체 캡처 동글(by-id), 720x480, 칸 9x6 체커보드(안쪽 코너 8x5)
     python3 calibrate.py --device 0 --cols 8 --rows 5 --square 0.03
     python3 calibrate.py --model fisheye         # 광각이 심하면 equidistant(fisheye) 모델
     python3 calibrate.py --load SW/arms_ws/src/arms_control/config/hw_overrides.yaml   # 현재 적용값 보기
@@ -19,7 +19,7 @@
     g      격자선 ON/OFF (보정 후 직선이 곧게 펴지는지 확인)
     q/ESC  종료
 
-※ 체커보드 cols/rows 는 '안쪽 코너' 개수다(칸이 10x7 이면 9x6).
+※ 체커보드 cols/rows 는 '안쪽 코너' 개수다 = 칸 수 − 1 (칸 9x6 보드 → 8x5, 기본).
 ※ 스택(arms_video)이 카메라를 쓰고 있으면 열리지 않는다 — 스택을 내리고 실행.
 """
 import argparse
@@ -333,8 +333,8 @@ def main():
     ap.add_argument("--device", default=DEFAULT_DEVICE, help="카메라 (인덱스 또는 경로)")
     ap.add_argument("--width", type=int, default=720)
     ap.add_argument("--height", type=int, default=480)
-    ap.add_argument("--cols", type=int, default=9, help="체커보드 안쪽 코너 가로 개수")
-    ap.add_argument("--rows", type=int, default=6, help="체커보드 안쪽 코너 세로 개수")
+    ap.add_argument("--cols", type=int, default=8, help="체커보드 안쪽 코너 가로 개수 (칸 수 − 1)")
+    ap.add_argument("--rows", type=int, default=5, help="체커보드 안쪽 코너 세로 개수 (칸 수 − 1)")
     ap.add_argument("--square", type=float, default=0.025, help="칸 한 변 [m] (내부파라미터엔 영향 없음)")
     ap.add_argument("--model", choices=["plumb_bob", "fisheye"], default="plumb_bob")
     ap.add_argument("--out", default=OUT_DIR, help="저장 상위 폴더 (<일시>/ 하위에 저장, 기본 이 스크립트 옆 output/)")
