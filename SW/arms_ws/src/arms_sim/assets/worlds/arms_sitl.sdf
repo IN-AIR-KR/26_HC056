@@ -75,7 +75,7 @@
       </link>
     </model>
 
-    <!-- 날아다니는 풍선 (referee가 움직임). 시작 고도 12m -->
+    <!-- 날아다니는 풍선 (referee가 움직임). 기본 고도 30m (referee ALT) -->
     <!-- 표적 2종: referee가 UI 선택(target 파라미터)에 따라 하나만 비행시키고 나머진 HIDE_Z(지하)로 숨김.
          둘 다 z=-100(숨김)으로 스폰. 명중은 거리기반이라 어느 쪽이든 무손상. -->
 
@@ -84,6 +84,7 @@
       <static>false</static>
       <pose>0 0 -100 0 0 0</pose>
       <link name="link">
+        <!-- 지름 0.5 m (collision·visual 반지름 0.25 를 같이 바꿀 것. sitl_viz 마커 지름도) -->
         <gravity>false</gravity>
         <kinematic>true</kinematic>
         <inertial>
@@ -91,7 +92,7 @@
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
         </inertial>
         <collision name="collision">
-          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <geometry><sphere><radius>0.25</radius></sphere></geometry>
         </collision>
         <!-- 실제 접촉 판정. referee 가 이 토픽을 구독해 명중을 보고한다
              (거리 임계값 방식은 폐기: hit_radius 는 임의 상수였다). -->
@@ -103,7 +104,7 @@
           </contact>
         </sensor>
         <visual name="visual">
-          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <geometry><sphere><radius>0.25</radius></sphere></geometry>
           <material>
             <ambient>1 0 0 1</ambient>
             <diffuse>1 0 0 1</diffuse>
