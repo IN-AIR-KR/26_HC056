@@ -147,8 +147,9 @@ arms_control_node:
       #   기체는 더 가볍고 응답이 빨라 SITL 재검증이 필요하다.
       #   빠른 표적 못 잡으면 pn_nav_gain ↑ / 떨리면 pn_nav_gain ↓ 또는 alpha·beta ↓
       #   과조향·발진이면 pn_nav_gain 과 kp 부터 낮춘다.
-      pn_nav_gain: 175.0      # = 옛 50 x att_p 3.5. LOS각속도 → 각속도 명령
-      pn_center_gain: 52.5    # = 옛 15 x att_p 3.5. err→0 정면조준. 정지표적은 ↑
+      pn_nav_gain: 250.0      # = 옛 50 x att_p 3.5. LOS각속도 → 각속도 명령
+      pn_center_gain: 300.0  # = 옛 15 x att_p 3.5. err→0 정면조준. 정지표적은 ↑
+                             #   (double 선언 파라미터 — 맨정수로 쓰면 노드가 기동 즉시 abort)
       pn_alpha: 0.35          # alpha-beta 위치이득 (표적 상태추정)
       pn_beta: 0.02           # alpha-beta 속도이득 (LOS각속도 추정). 낮추면 리드가 매끈해짐
       # LOS각속도 제한. 근거리 폭주(±2↑) 차단. 0=무제한.
@@ -268,7 +269,7 @@ arms_control_node:
       #     u=0.32 → 추력/무게 1.0(호버) · u=0.66 → 2.9 (예전 1kgf 모터의 0.85 와 같은 추력)
       #   ★ 실기체는 hw_overrides.yaml 이 hover/track 을 따로 덮어쓴다.
       hover_throttle: 0.32    # 빗나갔을 때 최소 추력(재조준). = 호버. MPC_THR_HOVER 와 일치
-      track_throttle: 0.66    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑ (최대 1.0 = 추력/무게 5.7)
+      track_throttle: 0.60    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑ (최대 1.0 = 추력/무게 5.7)
       pursuit_gate: 0.25      # 오차 이 이하면 full 상승 (pursuit_center_boost=true 일 때만 의미)
       # 중앙 정렬될수록 추력 세지는 로직 on/off. false=정렬 무관 상수 추력(track_throttle 고정).
       pursuit_center_boost: false   # ★ 비활성화(요청). true 면 기존처럼 center_q 로 hover↔track 보간
