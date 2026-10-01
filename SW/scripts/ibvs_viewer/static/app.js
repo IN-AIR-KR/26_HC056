@@ -99,14 +99,14 @@ const DERIVED = {
 // series: {t: 토픽(기본 T), f: 필드(또는 DERIVED 이름), scale: "y"|"y2", dash, width, step, show,
 //          mul/add: 표시용 변환(범례에는 원값 표시)}
 const PANELS = [
-  { title: "오차", note: "정규화 ±0.5",
+  { title: "Error", note: "정규화 ±0.5",
     series: [
       { f: "raw_err_x", dash: [4, 3], width: 1 }, { f: "filt_err_x" },
       { f: "raw_err_y", dash: [4, 3], width: 1 }, { f: "filt_err_y" },
     ] },
-  { title: "오차 각도", note: "[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)",
+  { title: "Error angle", note: "[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)",
     series: [{ f: "err_angle_x" }, { f: "err_angle_y" }, { f: "theta_deg", width: 2 }] },
-  { title: "LOS각속도", note: "[화면/s]",
+  { title: "LOS rate", note: "[화면/s]",
     series: [
       { f: "losf_x_dot" }, { f: "los_rate_x", dash: [4, 3] },
       { f: "losf_y_dot" }, { f: "los_rate_y", dash: [4, 3] },
@@ -117,37 +117,37 @@ const PANELS = [
       { f: "z1_raw", dash: [4, 3], width: 1 }, { f: "z1" }, { f: "kb", dash: [2, 4], width: 1 },
       { f: "theta_deg", scale: "y2" },
     ] },
-  { title: "IBVS 항 원본값 (게인 전)", note: "왼축 x_n/N · ldx · 오른축 B",
+  { title: "IBVS raw terms (before gain)", note: "왼축 x_n/N · ldx · 오른축 B",
     series: [
       { f: "dir_x" }, { f: "dir_y" }, { f: "los_rate_x" }, { f: "los_rate_y" },
       { f: "barrier", scale: "y2", width: 2 },
     ] },
-  { title: "게인 곱한 계수", note: "[deg/s] · x_n/N 에 곱해지는 값",
+  { title: "Gained coefficients", note: "[deg/s] · x_n/N 에 곱해지는 값",
     series: [{ f: "gain_barrier" }, { f: "aim_gain", width: 2 }, { f: "ibvs_center_gain", dash: [2, 4], width: 1 }] },
-  { title: "Roll 항별 기여", note: "[deg/s] · guidance_x = aim_term_x + los_rate_term_x",
+  { title: "Roll term contributions", note: "[deg/s] · guidance_x = aim_term_x + los_rate_term_x",
     series: [
       { f: "aim_term_x", width: 2 }, { f: "los_rate_term_x", width: 2 },
       { f: "barrier_term_x", width: 1, show: false }, { f: "center_term_x", width: 1, show: false },
       { f: "guidance_x", width: 1.5, dash: [6, 3] }, { f: "roll_rate_out", width: 1 },
     ] },
-  { title: "Pitch 항별 기여", note: "[deg/s] · guidance_y = aim_term_y + los_rate_term_y",
+  { title: "Pitch term contributions", note: "[deg/s] · guidance_y = aim_term_y + los_rate_term_y",
     series: [
       { f: "aim_term_y", width: 2 }, { f: "los_rate_term_y", width: 2 },
       { f: "barrier_term_y", width: 1, show: false }, { f: "center_term_y", width: 1, show: false },
       { f: "guidance_y", width: 1.5, dash: [6, 3] }, { f: "pitch_rate_out", width: 1 },
     ] },
-  { title: "항별 비중", note: "[%] · aim + lead = 100 (TRACK 에서만)",
+  { title: "Term share", note: "[%] · aim + lead = 100 (TRACK 에서만)",
     series: [
       { f: "aim_share_x" }, { f: "lead_share_x", dash: [4, 3] },
       { f: "aim_share_y" }, { f: "lead_share_y", dash: [4, 3] },
     ] },
-  { title: "명령 vs 자세", note: "왼축 [deg/s] · 오른축 CRSF 자세[deg]",
+  { title: "Command vs attitude", note: "왼축 [deg/s] · 오른축 CRSF 자세[deg]",
     series: [
       { f: "roll_rate_cmd", dash: [4, 3], width: 1 }, { f: "roll_rate_out" },
       { f: "pitch_rate_cmd", dash: [4, 3], width: 1 }, { f: "pitch_rate_out" },
       { t: R, f: "roll_deg", scale: "y2", dash: [2, 3] }, { t: R, f: "pitch_deg", scale: "y2", dash: [2, 3] },
     ] },
-  { title: "스케줄링 배율", note: "0~1",
+  { title: "Scheduling scales", note: "0~1",
     series: [
       { f: "closeness" }, { f: "range_gain_scale" }, { f: "range_throttle_scale" },
       { f: "tau_ease" }, { f: "center_q" },
@@ -157,25 +157,25 @@ const PANELS = [
       { f: "loom_size" }, { f: "loom_rate" },
       { f: "tau", scale: "y2" },
     ] },
-  { title: "추력", note: "0~1",
+  { title: "Thrust", note: "0~1",
     series: [{ f: "thrust", width: 2 }, { f: "throttle_up", dash: [4, 3] }, { f: "emag", width: 1 }] },
-  { title: "플래그", note: "0/1", flags: true,
+  { title: "Flags", note: "0/1", flags: true,
     series: ["cmd_active", "filter_active", "detection_held", "z1_clamped", "rate_saturated", "manual_out"]
       .map((f, i) => ({ f, step: true, mul: 0.8, add: i })) },
-  { title: "게인 / dt", note: "왼축 게인 · 오른축 dt[ms]",
+  { title: "Gains / dt", note: "왼축 게인 · 오른축 dt[ms]",
     series: [
       { f: "ibvs_gain" }, { f: "ibvs_center_gain" }, { f: "ibvs_los_rate_gain" },
       { f: "dt", scale: "y2", mul: 1000, width: 1 },
     ] },
 ];
 
-const PALETTE = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#db2777", "#65a30d"];
+const PALETTE = ["#60a5fa", "#f87171", "#4ade80", "#fbbf24", "#c084fc", "#22d3ee", "#f472b6", "#a3e635"];
 const STATE_COLORS = {
-  SEARCH: "rgba(148,163,184,0.14)",
-  LOCK: "rgba(234,179,8,0.16)",
-  TRACK: "rgba(34,197,94,0.14)",
-  FIRE: "rgba(239,68,68,0.20)",
-  RTL: "rgba(59,130,246,0.14)",
+  SEARCH: "rgba(148,163,184,0.10)",
+  LOCK: "rgba(234,179,8,0.13)",
+  TRACK: "rgba(34,197,94,0.11)",
+  FIRE: "rgba(239,68,68,0.18)",
+  RTL: "rgba(59,130,246,0.13)",
 };
 const CHART_H = 210;
 
@@ -187,7 +187,11 @@ let syncing = false;       // 줌 전파 재진입 방지
 let records = [];
 let currentId = null;
 let customPanels = loadLS("ibvs_viewer.custom", []);
-let showHelp = loadLS("ibvs_viewer.help", true);   // 패널별 "보는 법" 표시
+let showHelp = loadLS("ibvs_viewer.help", true);   // 필터 칩의 수식 표시
+let layout = loadLS("ibvs_viewer.layout", "graphs");  // "graphs" | "split"(영상 + 그래프)
+let vmode = loadLS("ibvs_viewer.vmode", "play");      // "play"(영상 재생) | "follow"(그래프 커서 따라감)
+// 영상 재생 상태
+const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false, lastTs: 0, lastCursor: 0 };
 
 const $ = (id) => document.getElementById(id);
 
@@ -333,6 +337,7 @@ async function openRecord(id) {
   renderStateLegend();
   fillFieldList();
   renderPanels();
+  resetVideo();
 }
 
 function buildStateSegs() {
@@ -590,6 +595,7 @@ function makeChart(p, { data, specs, multiTopic }, el) {
         const t = u.posToVal(left, "x");
         const st = stateAt(t);
         $("readout").textContent = `t = ${t.toFixed(3)} s${st ? "  ·  " + st : ""}`;
+        if (videoOn() && vmode === "follow") showFrameAt(t);
       }],
     },
   };
@@ -598,6 +604,13 @@ function makeChart(p, { data, specs, multiTopic }, el) {
   u.root.querySelectorAll(".u-legend tr.u-series").forEach((tr, i) => {
     const s = specs[i - 1];
     if (s) tr.title = `${s.f} = ${FIELD_INFO[s.f] ?? ""}`;
+  });
+  // Play 모드에서 그래프를 클릭하면 영상이 그 시각으로 이동한다(드래그 확대와는 별개).
+  let downX = null;
+  u.over.addEventListener("mousedown", (e) => { downX = e.clientX; });
+  u.over.addEventListener("mouseup", (e) => {
+    if (downX == null || Math.abs(e.clientX - downX) > 3) return;
+    if (videoOn() && vmode === "play" && u.cursor.left >= 0) seekVideo(u.posToVal(u.cursor.left, "x"));
   });
   u.setScale("x", { min: 0, max: dur });
   // 방금 만든 차트를 다른 차트들의 현재 줌에 맞춘다
@@ -655,15 +668,135 @@ function addCustom() {
     series.push({ t: tp, f });
   }
   if (!series.length) return;
-  customPanels.push({ title: "사용자 패널: " + series.map((s) => s.f).join(", "), series });
+  customPanels.push({ title: "Custom: " + series.map((s) => s.f).join(", "), series });
   saveLS("ibvs_viewer.custom", customPanels);
   $("custom-input").value = "";
   renderPanels();
   $("panels").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+// ---------------------------------------------------------------- 화면 영상
+const hasVideo = () => !!(rec && rec.video && rec.video.t.length);
+const videoOn = () => layout === "split" && hasVideo();
+
+function frameIndexAt(t) {          // t 이하인 마지막 프레임
+  const ts = rec.video.t;
+  let lo = 0, hi = ts.length - 1, ans = 0;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (ts[m] <= t) { ans = m; lo = m + 1; } else hi = m - 1;
+  }
+  return ans;
+}
+
+/* 프레임을 한 장씩 받아 바꾼다. 받는 중에 다른 요청이 오면 마지막 것만 남긴다(밀림 방지). */
+function showFrameAt(t) {
+  if (!hasVideo()) return;
+  V.want = frameIndexAt(t);
+  updateVideoInfo(t);
+  pumpFrame();
+}
+function pumpFrame() {
+  if (V.loading || V.want === V.shown || V.want < 0) return;
+  const i = V.want, id = currentId;
+  V.loading = true;
+  const img = new Image();
+  img.onload = () => {
+    V.loading = false;
+    if (id !== currentId) return;
+    $("v-img").src = img.src;
+    V.shown = i;
+    pumpFrame();
+  };
+  img.onerror = () => { V.loading = false; V.shown = i; pumpFrame(); };
+  img.src = `/api/frame?id=${encodeURIComponent(id)}&i=${i}`;
+}
+function updateVideoInfo(t) {
+  if (!hasVideo()) return;
+  const st = stateAt(t);
+  $("v-info").textContent =
+    `t = ${t.toFixed(2)} s · frame ${V.want + 1}/${rec.video.t.length}${st ? " · " + st : ""}`;
+}
+
+/* 재생 위치를 그래프 커서로 표시 (첫 차트에 커서를 두면 sync 로 전부 따라온다). */
+function cursorToTime(t) {
+  const u = charts[0];
+  if (!u) return;
+  const { min, max } = u.scales.x;
+  if (t < min || t > max) return;
+  u.setCursor({ left: u.valToPos(t, "x"), top: u.bbox.height / devicePixelRatio / 2 });
+}
+
+function seekVideo(t) {
+  if (!hasVideo()) return;
+  V.t = Math.min(Math.max(t, 0), rec.duration);
+  $("v-seek").value = V.t;
+  showFrameAt(V.t);
+  cursorToTime(V.t);
+}
+function setPlaying(on) {
+  V.playing = on && hasVideo();
+  $("v-play").textContent = V.playing ? "❚❚" : "▶";
+  if (V.playing) {
+    if (V.t >= rec.duration - 1e-3) V.t = 0;
+    V.lastTs = performance.now();
+    requestAnimationFrame(tick);
+  }
+}
+function tick(now) {
+  if (!V.playing || !videoOn() || vmode !== "play") { setPlaying(false); return; }
+  V.t += (now - V.lastTs) / 1000 * V.speed;
+  V.lastTs = now;
+  if (V.t >= rec.duration) { V.t = rec.duration; setPlaying(false); }
+  $("v-seek").value = V.t;
+  showFrameAt(V.t);
+  if (now - V.lastCursor > 50) { cursorToTime(V.t); V.lastCursor = now; }   // 그래프 커서는 20Hz
+  if (V.playing) requestAnimationFrame(tick);
+}
+
+function resetVideo() {
+  setPlaying(false);
+  V.t = 0; V.shown = -1; V.want = -1;
+  $("v-img").removeAttribute("src");
+  $("v-info").textContent = "";
+  const ok = hasVideo();
+  $("v-seek").max = rec ? (rec.duration || 1) : 1;
+  $("v-seek").value = 0;
+  $("v-empty").textContent = !rec ? "기록을 선택하세요"
+    : ok ? "" : "이 기록에는 화면 영상(/arms/ui_image/compressed)이 없습니다";
+  $("v-play").disabled = $("v-seek").disabled = !ok;
+  if (ok && layout === "split") showFrameAt(0);
+}
+
+function applyLayout() {
+  document.body.classList.toggle("split", layout === "split");
+  document.body.classList.toggle("follow", vmode === "follow");
+  $("video-pane").hidden = layout !== "split";
+  document.querySelectorAll("#layout button").forEach((b) => b.classList.toggle("on", b.dataset.l === layout));
+  document.querySelectorAll("#vmode button").forEach((b) => b.classList.toggle("on", b.dataset.m === vmode));
+  if (layout !== "split" || vmode !== "play") setPlaying(false);
+  if (videoOn() && V.shown < 0) showFrameAt(V.t);
+}
+
 // ---------------------------------------------------------------- 시작
 function bind() {
+  document.querySelectorAll("#layout button").forEach((b) => b.onclick = () => {
+    layout = b.dataset.l; saveLS("ibvs_viewer.layout", layout); applyLayout();
+  });
+  document.querySelectorAll("#vmode button").forEach((b) => b.onclick = () => {
+    vmode = b.dataset.m; saveLS("ibvs_viewer.vmode", vmode); applyLayout();
+  });
+  $("v-play").onclick = () => setPlaying(!V.playing);
+  $("v-seek").oninput = () => { setPlaying(false); seekVideo(parseFloat($("v-seek").value)); };
+  $("v-speed").onchange = () => { V.speed = parseFloat($("v-speed").value); };
+  document.addEventListener("keydown", (e) => {   // Space = 재생/일시정지 (입력창 밖에서만)
+    if (e.code !== "Space" || !videoOn() || vmode !== "play") return;
+    if (/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(document.activeElement?.tagName)) return;
+    e.preventDefault();
+    setPlaying(!V.playing);
+  });
+  applyLayout();
+  resetVideo();
   $("btn-change-root").onclick = () => openPicker($("root-path").textContent);
   $("btn-refresh").onclick = () => loadRecords();
   $("rec-filter").oninput = renderRecords;

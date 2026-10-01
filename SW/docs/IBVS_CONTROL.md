@@ -422,16 +422,16 @@ los_rate_term_x = ibvs_los_rate_gain · los_rate_x     (los_rate_x = ldx)
 
 | 보고 싶은 것 | 필드 | 패널 |
 |---|---|---|
-| `z1/(kb²−z1²)` | `barrier` | IBVS 항 원본값 |
-| `200·z1/(kb²−z1²)` | `gain_barrier` ⚙ | 게인 곱한 계수 |
-| `200·z1/(kb²−z1²) + 100` | `aim_gain` ⚙ | 게인 곱한 계수 |
-| `x_n/N` | `dir_x` | IBVS 항 원본값 |
-| `[200·z1/(kb²−z1²) + 100] · x_n/N` | `aim_term_x` ⚙ | Roll 항별 기여 |
-| `ldx` | `los_rate_x` | IBVS 항 원본값 |
-| `220·ldx` | `los_rate_term_x` | Roll 항별 기여 |
-| 두 항의 비중 | `aim_share_x`, `lead_share_x` ⚙ | 항별 비중 |
+| `z1/(kb²−z1²)` | `barrier` | IBVS raw terms (before gain) |
+| `200·z1/(kb²−z1²)` | `gain_barrier` ⚙ | Gained coefficients |
+| `200·z1/(kb²−z1²) + 100` | `aim_gain` ⚙ | Gained coefficients |
+| `x_n/N` | `dir_x` | IBVS raw terms (before gain) |
+| `[200·z1/(kb²−z1²) + 100] · x_n/N` | `aim_term_x` ⚙ | Roll term contributions |
+| `ldx` | `los_rate_x` | IBVS raw terms (before gain) |
+| `220·ldx` | `los_rate_term_x` | Roll term contributions |
+| 두 항의 비중 | `aim_share_x`, `lead_share_x` ⚙ | Term share |
 
-### 오차
+### Error
 
 _정규화 ±0.5_
 
@@ -442,7 +442,7 @@ _정규화 ±0.5_
 | `raw_err_y` | bbox_cy/H − 0.5 |
 | `filt_err_y` | α·raw_err_y + (1−α)·filt_err_y |
 
-### 오차 각도
+### Error angle
 
 _[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
 
@@ -452,7 +452,7 @@ _[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
 | `err_angle_y` ⚙ | atan(y_n) · 180/π [deg] (상하 오차각, + = 아래) |
 | `theta_deg` | acos(1/N) [deg] (전체 이탈각) |
 
-### LOS각속도
+### LOS rate
 
 _[화면/s]_
 
@@ -474,9 +474,9 @@ _왼축 z1 · 오른축 θ[deg]_
 | `z1_raw` | 1 − 1/N (= 1 − cos θ) |
 | `z1` | min(z1_raw, 0.995·kb) |
 | `kb` | ibvs_kb |
-| `theta_deg` (오른축) | acos(1/N) [deg] |
+| `theta_deg` (오른축) | acos(1/N) [deg] (전체 이탈각) |
 
-### IBVS 항 원본값 (게인 전)
+### IBVS raw terms (before gain)
 
 _왼축 x_n/N · ldx · 오른축 B_
 
@@ -488,7 +488,7 @@ _왼축 x_n/N · ldx · 오른축 B_
 | `los_rate_y` | ldy = clamp(losf_y_dot, ±pn_los_clamp) |
 | `barrier` (오른축) | B = z1 / (kb² − z1²) |
 
-### 게인 곱한 계수
+### Gained coefficients
 
 _[deg/s] · x_n/N 에 곱해지는 값_
 
@@ -498,7 +498,7 @@ _[deg/s] · x_n/N 에 곱해지는 값_
 | `aim_gain` ⚙ | ibvs_gain · B + ibvs_center_gain [deg/s] (= 대괄호 [ ]) |
 | `ibvs_center_gain` | control.ibvs_center_gain |
 
-### Roll 항별 기여
+### Roll term contributions
 
 _[deg/s] · guidance_x = aim_term_x + los_rate_term_x_
 
@@ -511,7 +511,7 @@ _[deg/s] · guidance_x = aim_term_x + los_rate_term_x_
 | `guidance_x` | aim_term_x + los_rate_term_x [deg/s] |
 | `roll_rate_out` | clamp(roll_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
 
-### Pitch 항별 기여
+### Pitch term contributions
 
 _[deg/s] · guidance_y = aim_term_y + los_rate_term_y_
 
@@ -524,7 +524,7 @@ _[deg/s] · guidance_y = aim_term_y + los_rate_term_y_
 | `guidance_y` | aim_term_y + los_rate_term_y [deg/s] |
 | `pitch_rate_out` | clamp(pitch_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
 
-### 항별 비중
+### Term share
 
 _[%] · aim + lead = 100 (TRACK 에서만)_
 
@@ -535,7 +535,7 @@ _[%] · aim + lead = 100 (TRACK 에서만)_
 | `aim_share_y` ⚙ | \|aim_term_y\| / (\|aim_term_y\| + \|los_rate_term_y\|) · 100 [%] |
 | `lead_share_y` ⚙ | \|los_rate_term_y\| / (\|aim_term_y\| + \|los_rate_term_y\|) · 100 [%] |
 
-### 명령 vs 자세
+### Command vs attitude
 
 _왼축 [deg/s] · 오른축 CRSF 자세[deg]_
 
@@ -548,7 +548,7 @@ _왼축 [deg/s] · 오른축 CRSF 자세[deg]_
 | `crsf_rx.roll_deg` (오른축) | CRSF 텔레메트리 roll [deg] |
 | `crsf_rx.pitch_deg` (오른축) | CRSF 텔레메트리 pitch [deg] |
 
-### 스케줄링 배율
+### Scheduling scales
 
 _0~1_
 
@@ -570,7 +570,7 @@ _왼축 loom_size·loom_rate · 오른축 tau[s]_
 | `loom_rate` | EMA(Δloom_size/dt, loom_rate_alpha) |
 | `tau` (오른축) | loom_size / loom_rate [s] (loom_rate ≤ 0 → 9.99) |
 
-### 추력
+### Thrust
 
 _0~1_
 
@@ -580,7 +580,7 @@ _0~1_
 | `throttle_up` | hover + (track − hover)·range_throttle_scale |
 | `emag` | √(filt_err_x² + filt_err_y²) |
 
-### 플래그
+### Flags
 
 _0/1_
 
@@ -593,7 +593,7 @@ _0/1_
 | `rate_saturated` | \|rate_cmd\| > max_cmd_rate_dps |
 | `manual_out` | 수동 모드 or RTL (스틱 passthrough) |
 
-### 게인 / dt
+### Gains / dt
 
 _왼축 게인 · 오른축 dt[ms]_
 

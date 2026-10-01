@@ -18,8 +18,10 @@ import numpy as np
 
 MSG_DIR = Path(__file__).resolve().parents[2] / "arms_ws" / "src" / "arms_msgs" / "msg"
 
-# 영상은 그래프 대상이 아니고 무거우므로 역직렬화하지 않는다.
+# 영상은 그래프 대상이 아니고 무거우므로 역직렬화하지 않는다(프레임 색인만 만든다).
 SKIP_TYPES = {"sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image"}
+VIDEO_TYPE = "sensor_msgs/msg/CompressedImage"
+VIDEO_TOPIC = "/arms/ui_image/compressed"   # 우선 사용할 화면 영상 토픽
 # 평탄화에서 버릴 필드 (시각은 bag 수신시각으로 통일, MultiArray layout 은 잡음).
 SKIP_FIELDS = {"header", "layout"}
 MAX_ARRAY = 16
@@ -166,6 +168,7 @@ def load_record(record: Path) -> dict:
     rows = {}      # 토픽 → [(t_ns, flat dict)]
     types = {}
     errors = {}
+    frames = {}    # 영상 토픽 → [(t_ns, db 경로, message id)]  (디코드 없이 색인만)
     t0 = None
     for db in dbs:
         con = _connect(db)
@@ -174,6 +177,11 @@ def load_record(record: Path) -> dict:
             t0 = lo if t0 is None else min(t0, lo)
         topics = {tid: (name, ty) for tid, name, ty in
                   con.execute("SELECT id, name, type FROM topics")}
+        for tid, (name, ty) in topics.items():
+            if ty == VIDEO_TYPE:
+                frames.setdefault(name, []).extend(
+                    (t_ns, str(db), mid) for mid, t_ns in con.execute(
+                        "SELECT id, timestamp FROM messages WHERE topic_id = ?", (tid,)))
         want = [tid for tid, (_, ty) in topics.items() if ty not in SKIP_TYPES]
         if not want:
             con.close()
@@ -221,9 +229,36 @@ def load_record(record: Path) -> dict:
             "fields": num,
             "strings": strs,
         }
+    # 화면 영상: /arms/ui_image/compressed 우선, 없으면 아무 CompressedImage 토픽.
+    video, frame_index = None, []
+    vname = VIDEO_TOPIC if VIDEO_TOPIC in frames else next(iter(frames), None)
+    if vname and frames[vname]:
+        fr = sorted(frames[vname])
+        t_end = max(t_end, fr[-1][0])
+        video = {"topic": vname, "t": [round((t - t0) / 1e9, 6) for t, _, _ in fr]}
+        frame_index = [(db, mid) for _, db, mid in fr]
     return {
         "t0_ns": t0,
         "duration": (t_end - t0) / 1e9,
         "topics": out_topics,
+        "video": video,              # {"topic", "t": [초...]} 또는 None
         "errors": list(errors.values()),
+        "_frames": frame_index,      # 서버 전용(JSON 에 안 나감): i번째 프레임의 (db, id)
     }
+
+
+def read_frame(db: str, msg_id: int):
+    """색인된 프레임 1장 → (이미지 바이트, mimetype)."""
+    con = _connect(Path(db))
+    try:
+        row = con.execute(
+            "SELECT m.data, t.type FROM messages m JOIN topics t ON m.topic_id = t.id "
+            "WHERE m.id = ?", (msg_id,)).fetchone()
+    finally:
+        con.close()
+    if row is None:
+        raise KeyError(msg_id)
+    msg = typestore().deserialize_cdr(bytes(row[0]), row[1])
+    fmt = (msg.format or "").lower()
+    mime = "image/png" if "png" in fmt else "image/jpeg"
+    return bytes(msg.data), mime

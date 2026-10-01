@@ -18,7 +18,7 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
 import bag_reader
 
@@ -127,25 +127,44 @@ def records():
     return jsonify({"root": str(root), "records": _records(root)})
 
 
-@app.get("/api/record")
-def record():
-    p = _record_path(request.args.get("id", ""))
+def _load_cached(p: Path) -> dict:
+    """기록 로드(최근 4개 캐시). 캐시 키에 db 파일 mtime/크기를 넣어 녹화 중 갱신도 반영."""
     dbs = bag_reader.find_db3(p)
     key = (str(p), tuple((str(d), d.stat().st_mtime_ns, d.stat().st_size) for d in dbs))
     with _cache_lock:
         if key in _cache:
             _cache.move_to_end(key)
-            return jsonify(_cache[key])
-    try:
-        data = bag_reader.load_record(p)
-    except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
+            return _cache[key]
+    data = bag_reader.load_record(p)
     data["name"] = p.name
     with _cache_lock:
         _cache[key] = data
         while len(_cache) > 4:
             _cache.popitem(last=False)
-    return jsonify(data)
+    return data
+
+
+@app.get("/api/frame")
+def frame():
+    """화면 영상 i번째 프레임(JPEG). 뷰어가 재생/커서 위치에 맞춰 한 장씩 요청한다."""
+    p = _record_path(request.args.get("id", ""))
+    try:
+        idx = int(request.args.get("i", "0"))
+        db, mid = _load_cached(p)["_frames"][idx]
+        img, mime = bag_reader.read_frame(db, mid)
+    except (ValueError, IndexError, KeyError):
+        abort(404)
+    return Response(img, mimetype=mime, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/record")
+def record():
+    p = _record_path(request.args.get("id", ""))
+    try:
+        data = _load_cached(p)
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify({k: v for k, v in data.items() if not k.startswith("_")})
 
 
 def main():

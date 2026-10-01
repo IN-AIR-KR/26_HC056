@@ -32,6 +32,12 @@ python3 SW/scripts/ibvs_viewer/server.py
   - 패널 위 **필터 칩**([체크박스][필드명][수식])을 눌러 선을 켜고 끈다(범례 클릭과 연동, 패널별로 브라우저에 기억).
   - `gain_barrier`, `aim_gain`, `aim_term_*`, `*_share_*` 는 기록된 필드로 뷰어가 계산한 중간값
     (게인 곱한 값 · 항별 비중). 구 기록에도 나온다.
+- **화면 영상**: 우상단 `Graphs` / `Video + Graphs` 로 전환. `Video + Graphs` 는 왼쪽에 녹화된 UI 화면
+  (`/arms/ui_image/compressed`), 오른쪽에 그래프가 나온다. 영상 위 토글로 보는 방식을 고른다.
+  - `Play`: 영상 재생(▶/Space, 시크바, 0.25~4×). 재생 위치가 모든 그래프의 커서로 표시되고,
+    그래프를 클릭하면 그 시각으로 이동한다.
+  - `Follow cursor`: 그래프에 마우스를 올린 시각의 화면이 바로 나온다.
+  - 영상 토픽이 없는 기록(SITL 구버전 녹화 등)은 영상 칸에 안내만 뜬다.
 - **패널 추가**(맨 아래): `토픽 필드` 를 쉼표로 여러 개 입력하면 새 패널이 생긴다
   (예: `/arms/ibvs_debug barrier, /arms/crsf_rx roll_deg`). 토픽을 생략하면 ibvs_debug.
 
@@ -39,5 +45,5 @@ python3 SW/scripts/ibvs_viewer/server.py
 
 - 커스텀 메시지는 레포의 `SW/arms_ws/src/arms_msgs/msg/*.msg` 로 해석한다. 녹화 이후 .msg
   필드가 바뀌었다면 그 토픽은 "역직렬화 실패"로 표시되고 건너뛴다.
-- 영상 토픽은 읽지 않는다(영상은 `bag_visualize/bag_to_mp4.py`).
+- 영상은 프레임을 필요할 때 한 장씩 읽는다(mp4 로 뽑으려면 `bag_visualize/bag_to_mp4.py`).
 - uPlot 은 CDN(jsdelivr)에서 받는다 — 처음 열 때 인터넷이 필요하다.

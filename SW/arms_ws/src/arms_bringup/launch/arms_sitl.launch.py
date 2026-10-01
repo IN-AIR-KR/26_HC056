@@ -174,7 +174,7 @@ def generate_launch_description():
         DeclareLaunchArgument("auto_save", default_value="false",
                               description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "
                                           "~/arms_flight_logs_ibvs/<일시>_sitl/ "
-                                          "에 bag(sqlite3) 저장. UI 영상은 제외."),
+                                          "에 bag(sqlite3) 저장(UI 화면 영상 포함)."),
 
         # PX4 SITL + Gazebo — 시뮬레이터 쪽은 전부 arms_sim 담당
         IncludeLaunchDescription(
@@ -232,14 +232,29 @@ def generate_launch_description():
             package="arms_ui", executable="arms_ui_node",
             name="arms_ui_node", output="screen",
         ),
+        # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image) → compressed(/arms/ui_image/compressed).
+        #   arms.launch.py 와 같은 구성. 녹화기(auto_save)가 이 compressed 를 녹화한다.
+        #   lazy — 구독자(녹화기·rqt) 있을 때만 변환·발행하므로 평소 부하 없음.
+        #   ★ out 베이스 리맵은 파생 서브토픽에 전파 안 되므로 out/compressed 를 직접 리맵한다.
+        Node(
+            package="image_transport", executable="republish",
+            name="ui_image_republish",
+            arguments=["raw", "compressed"],
+            remappings=[
+                ("in", "/arms/ui_image"),
+                ("out/compressed", "/arms/ui_image/compressed"),
+            ],
+            parameters=[{"compressed.jpeg_quality": 60}],
+        ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). 실기체와 같은 노드·같은 조건
-        #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 영상(ui_image)은 빼고 저장.
+        #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 화면 영상도 같이 저장.
         Node(
             package="arms_ui", executable="flight_recorder",
             name="flight_recorder", output="screen",
             parameters=[{
                 "tag": "sitl",
                 "record_topics": [
+                    "/arms/ui_image/compressed",
                     "/arms/detections_raw",
                     "/arms/detections",
                     "/arms/detector_status",

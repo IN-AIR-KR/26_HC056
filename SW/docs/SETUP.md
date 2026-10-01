@@ -174,7 +174,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
-> `auto_save` 는 `arms.launch.py`(실기체)와 `arms_sitl.launch.py`(SITL, UI 영상 제외)에 있는 인자입니다. 위 표의 나머지 인자는
+> `auto_save` 는 `arms.launch.py`(실기체)와 `arms_sitl.launch.py`(SITL)에 있는 인자입니다. 위 표의 나머지 인자는
 > `arms_replay.launch.py` 기준이며, 실기체와 공유되는 것(`model`/`start_detection`/`crsf_port`/
 > `fullscreen`/`debug`/`cv_debug`)은 `arms.launch.py` 에서도 동일하게 씁니다.
 
@@ -517,7 +517,7 @@ storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
   - 모드(auto/manual)·상태머신·kill 과 무관하다. kill 이 걸려도 ARM 이 위면 계속 녹화.
   - 녹화기가 뜰 때 이미 ARM 이 위였다면 한 번 내렸다 올려야 시작된다(상승엣지).
 - **SITL**: `arms_sitl.launch.py auto_save:=true` 도 같은 조건(가상 조종기 ARM 스위치).
-  폴더명이 `<일시>_sitl` 이고 UI 영상은 저장하지 않는다.
+  폴더명이 `<일시>_sitl` 이다. UI 화면 영상도 실기체와 똑같이 저장된다.
 - **저장 위치**: `~/arms_flight_logs_ibvs/<YYYYmmdd_HHMMSS>/` (비행 시작 일시 폴더). 이 폴더 안에
   `bag/`(rosbag) 과 `record.log`(녹화 프로세스 로그)가 함께 담긴다.
 
