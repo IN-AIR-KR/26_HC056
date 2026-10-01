@@ -30,8 +30,8 @@ SW/jetson_setting/startup/
    cd ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/arms_ws/src/arms_detection/docker
    docker compose -f docker-compose.jetson.yml build
    ```
-   - YOLO 엔진(`models/balloon_nano_v8.engine` 등)은 **이 젯슨에서 빌드된 것**이어야 한다
-     (`SW/YOLO_balloon/export_trt.py` 참고). compose 기본값은 `/models/balloon_nano_v8.engine`.
+   - YOLO 엔진(`models/balloon_nano_v9.engine` 등)은 **이 젯슨에서 빌드된 것**이어야 한다
+     (`SW/YOLO_balloon/export_trt.py` 참고). compose 기본값은 `/models/balloon_nano_v9.engine`.
 3. **스크립트 실행권한**
    ```bash
    chmod +x ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/start_arms.sh
