@@ -84,7 +84,7 @@ $$
 \lambda \leftarrow \hat\lambda + \alpha\, r,\qquad \dot\lambda \leftarrow \dot\lambda + \frac{\beta}{dt}\, r,\qquad \dot\lambda \in [-3, 3]
 $$
 
-그다음 근거리 폭주 방지로 한 번 더 자른다: $\dot\lambda_{use} = \text{clamp}(\dot\lambda, \pm\,$`pn_los_clamp`$)$.
+그다음 근거리 폭주 방지로 한 번 더 자른다: $\dot\lambda_{use} = \text{clamp}(\dot\lambda, \pm c_{los})$ ($c_{los}$ = `pn_los_clamp`).
 
 - 단위는 **[화면(정규화)/s]** — 0.5/s 면 "1초에 화면 반폭만큼 이동".
 - $\alpha$: 위치를 얼마나 측정 쪽으로 당길지, $\beta$: 속도를 얼마나 빨리 고칠지.
@@ -224,9 +224,11 @@ $$
 ## 6. 출력 — 포화와 CRSF 변환
 
 $$
-\omega_{out} = \text{clamp}(\omega_{cmd},\ \pm\,\text{max\_cmd\_rate\_dps}),\qquad
-\text{stick} = \frac{\omega_{out}}{\text{max\_rate\_dps}}
+\omega_{out} = \text{clamp}(\omega_{cmd},\ \pm\,\omega_{max}),\qquad
+\text{stick} = \frac{\omega_{out}}{\omega_{full}}
 $$
+
+($\omega_{max}$ = `max_cmd_rate_dps`, $\omega_{full}$ = `max_rate_dps`)
 
 - 각속도 천장은 `max_cmd_rate_dps`(227.5°/s) **하나뿐**이다. 걸리면 `rate_saturated = 1`.
 - PX4 는 **ACRO** 고정(각속도 모드, 자동수평 없음): 스틱 ±1 = ±`max_rate_dps`(400°/s,
@@ -256,8 +258,10 @@ $$
 ### 7-2. 정렬 품질 (`pursuit_center_boost`, 현재 **off**)
 
 $$
-q_{center} = \text{clamp}\!\left(1 - \frac{|e_{filt}|}{\text{pursuit\_gate}},\ 0,\ 1\right)\quad(\text{off 면 } q_{center}=1)
+q_{center} = \text{clamp}\!\left(1 - \frac{|e_{filt}|}{g_p},\ 0,\ 1\right)\quad(\text{off 면 } q_{center}=1)
 $$
+
+($g_p$ = `pursuit_gate`)
 
 - on 이면: 잘 겨눴을 때만 세게 밀고, 빗나가면 hover 로 낮춰 재조준을 우선한다.
 - 지금은 off → 정렬과 무관하게 $u$ 까지 민다.
@@ -302,8 +306,10 @@ thrust = 0.51 + 0.114×0.5 = **0.567**.
 TRACK 중 아래가 동시에 성립하면 FIRE:
 
 $$
-s_{bbox} \ge \text{loom\_s\_min},\qquad 0 < \tau < \text{tau\_fire\_sec},\qquad |e_{raw}| < \text{fire\_align\_tol}
+s_{bbox} \ge s_{min},\qquad 0 < \tau < \tau_{fire},\qquad |e_{raw}| < e_{tol}
 $$
+
+($s_{min}$ = `loom_s_min`, $\tau_{fire}$ = `tau_fire_sec`, $e_{tol}$ = `fire_align_tol`)
 
 현재 SITL·실기체 모두 false(SITL 은 심판 `/arms/hit` 로 RTL). τ 자체는 FIRE 여부와 무관하게
 항상 계산되어 7-3 추력 감속에 쓰인다.
@@ -435,6 +441,16 @@ _정규화 ±0.5_
 | `filt_err_x` | α·raw_err_x + (1−α)·filt_err_x (α = error_lpf_alpha) |
 | `raw_err_y` | bbox_cy/H − 0.5 |
 | `filt_err_y` | α·raw_err_y + (1−α)·filt_err_y |
+
+### 오차 각도
+
+_[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
+
+| 필드 | 수식 |
+|---|---|
+| `err_angle_x` ⚙ | atan(x_n) · 180/π [deg] (좌우 오차각, + = 오른쪽) |
+| `err_angle_y` ⚙ | atan(y_n) · 180/π [deg] (상하 오차각, + = 아래) |
+| `theta_deg` | acos(1/N) [deg] (전체 이탈각) |
 
 ### LOS각속도
 
