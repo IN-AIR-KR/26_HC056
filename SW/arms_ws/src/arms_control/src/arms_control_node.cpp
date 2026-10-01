@@ -154,20 +154,20 @@ class ArmsControlNode : public rclcpp::Node {
     //
     // 픽셀오차(정규화 ±0.5) → tan 단위 이미지좌표 변환에 화각이 필요하다.
     //   x_n = 2*tan(hfov/2) * error_x,   y_n = 2*tan(hfov/2)*aspect * error_y
-    // SITL 기본값은 arms_sim 기체 SDF 의 upward_camera 스펙(hfov 2.0rad, 720x480).
+    // SITL 기본값은 arms_sim 기체 SDF 의 upward_camera 스펙(hfov 0.7610rad = Phoenix 2 SE V2 + 8mm, 720x480).
     // ★ 실기체는 hw_overrides.yaml 의 control.camera.* (체커보드 캘리)가 이 근사를 대체한다.
-    declare_parameter("control.ibvs_hfov_deg", 114.5916);  // 수평 화각[deg] (=2.0 rad)
+    declare_parameter("control.ibvs_hfov_deg", 43.6028);   // 수평 화각[deg] (=0.7610 rad)
     declare_parameter("control.ibvs_aspect", 0.6666667);   // 세로/가로 = 480/720
     // 카메라 내부파라미터(체커보드 캘리). calibrated=true 면 위 hfov/aspect 근사 대신
     //   fx,fy,cx,cy + 왜곡 역보정으로 x_n,y_n 을 구한다. 실기체 전용 — hw_overrides.yaml.
     //   값은 image_width x image_height 해상도 기준 픽셀 단위(ROS camera_calibration 출력 그대로).
-    //   기본값은 SITL upward_camera 와 동일한 이상적 핀홀(fx = 360/tan(1.0), 왜곡 0).
+    //   기본값은 SITL upward_camera 와 동일한 이상적 핀홀(fx = 360/tan(0.3805) = 360/0.4 = 900, 왜곡 0).
     //   ※ 기동 시 1회만 읽는다(런타임 변경 미지원).
     declare_parameter("control.camera.calibrated", false);
     declare_parameter("control.camera.image_width", 720);
     declare_parameter("control.camera.image_height", 480);
-    declare_parameter("control.camera.fx", 231.1545);
-    declare_parameter("control.camera.fy", 231.1545);
+    declare_parameter("control.camera.fx", 900.0);
+    declare_parameter("control.camera.fy", 900.0);
     declare_parameter("control.camera.cx", 360.0);
     declare_parameter("control.camera.cy", 240.0);
     // "plumb_bob"(k1,k2,p1,p2[,k3]) | "equidistant"(fisheye k1,k2,k3,k4)
@@ -176,9 +176,9 @@ class ArmsControlNode : public rclcpp::Node {
                       std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
     // 배리어 kb: z1 이 이 값에 닿으면 게인이 발산한다 = "여기는 못 넘어간다".
     //   z1 = 1 - cos(theta) 이므로 kb 는 허용 최대 이탈각으로 환산된다.
-    //   화면 모서리의 z1 = 0.529 (hfov 115°, 3:2) 이므로 그보다 약간 크게 잡는다.
+    //   화면 모서리의 z1 = 0.099 (hfov 43.6°, 3:2) 이므로 그보다 약간 크게 잡는다.
     //   낮추면 표적을 더 중앙에 붙잡아두려 하고(공격적), 높이면 가장자리까지 허용.
-    declare_parameter("control.ibvs_kb", 0.55);
+    declare_parameter("control.ibvs_kb", 0.11);
     // 배리어항 계수[deg/s]. 유도 전체의 세기. 못 따라가면 ↑, 과조향이면 ↓.
     declare_parameter("control.ibvs_gain", 200.0);
     // 선형항 계수[deg/s]. 순수 배리어는 중앙 근처에서 theta^3 라 거의 0 이다
@@ -1610,15 +1610,15 @@ class ArmsControlNode : public rclcpp::Node {
   // 유도(Guidance): 기본 추적(0) / 비례항법 PN(1) / IBVS 공선유도(2)
   int    guidance_mode_{2};
   // IBVS 공선유도 [mode 2] — 배리어 Lyapunov. 광축=추력축 기하라 자세 불필요.
-  double ibvs_hfov_deg_{114.5916};   // 수평 화각[deg]
+  double ibvs_hfov_deg_{43.6028};    // 수평 화각[deg]
   double ibvs_aspect_{0.6666667};    // 세로/가로
-  double ibvs_kx_{3.1148};           // = 2*tan(hfov/2)         (update_ibvs_scale 가 계산)
-  double ibvs_ky_{2.0765};           // = 2*tan(hfov/2)*aspect
+  double ibvs_kx_{0.8000};             // = 2*tan(hfov/2)         (update_ibvs_scale 가 계산)
+  double ibvs_ky_{0.5333};             // = 2*tan(hfov/2)*aspect
   // 카메라 캘리 (control.camera.*) — calibrated=true 면 위 kx/ky 대신 사용
   bool   cam_calibrated_{false};
   bool   cam_fisheye_{false};        // distortion_model == "equidistant"
   double cam_width_{720.0}, cam_height_{480.0};
-  double cam_fx_{231.1545}, cam_fy_{231.1545};
+  double cam_fx_{900.0}, cam_fy_{900.0};
   double cam_cx_{360.0}, cam_cy_{240.0};
   std::array<double, 5> cam_dist_{};  // plumb_bob: k1,k2,p1,p2,k3 / equidistant: k1..k4
   double ibvs_kb_{0.55};             // 배리어 한계 (z1 = 1-cos(theta) 기준)

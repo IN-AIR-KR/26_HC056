@@ -43,9 +43,10 @@ arms_control_node:
       # 픽셀오차 → 각도(tan 단위 x_n, y_n) 환산에 쓴다. 틀리면 ibvs_gain/kb 가
       # 전부 어긋난다. calibrated=true 면 ibvs_hfov_deg/ibvs_aspect 는 무시된다.
       #
-      # ★ 지금 값은 "기본값" = SITL upward_camera 와 같은 이상적 핀홀
-      #   (720x480, hfov 2.0rad → fx = 360/tan(1.0) = 231.15, 왜곡 0).
-      #   즉 체커보드 캘리 전에는 SITL 과 똑같이 동작한다.
+      # ★ 지금은 calibrated=false = 캘리 미적용 → control_params.yaml 의
+      #   ibvs_hfov_deg/ibvs_aspect(Phoenix 2 SE V2 + 8mm, 43.6°, 720x480) 근사를 쓴다.
+      #   즉 체커보드 캘리 전에는 SITL 과 똑같이 동작한다. 아래 fx/fy 는 같은 근사의
+      #   핀홀 값(fx = 360/tan(21.8°) = 900)이라, 캘리 후 true 로 바꾸며 덮어쓰면 된다.
       #
       # 채우는 법 — 체커보드 캘리 결과(ost.yaml / camera_info)를 그대로 옮긴다:
       #   ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
@@ -69,11 +70,11 @@ arms_control_node:
       #   2) 기체를 손으로 들고 롤/피치를 줘서 화면 속 표적이 예상대로
       #      움직이는지(어긋나면 roll_sign/pitch_sign 으로 교정).
       camera:
-        calibrated: true
+        calibrated: false
         image_width: 720
         image_height: 480
-        fx: 231.1545
-        fy: 231.1545
+        fx: 900.0
+        fy: 900.0
         cx: 360.0
         cy: 240.0
         distortion_model: "plumb_bob"
