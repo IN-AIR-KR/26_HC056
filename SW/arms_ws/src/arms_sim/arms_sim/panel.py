@@ -283,11 +283,10 @@ class PanelGUI:
 
         # ── [유도] arms_control ─────────────────────────────────────────────
         g_guid = group(right, "유도  ·  arms_control")
-        # 0=기본 추적(각속도 PID 추종), 1=PN(비례항법). 기본은 PN.
-        #   (노드에서 읽어오기 전 표시용 — control_params.yaml 기본값과 맞춘다)
-        self._guidance_mode = 1
-        self.guid_btn = tk.Button(g_guid, text="방식: PN(비례항법)", font=("Arial", 11, "bold"),
-                                  bg="#6a1b9a", fg="white", activebackground="#546e7a",
+        # 0=기본 추적(각속도 PID 추종), 1=PN(비례항법). 기본은 기본 추적.
+        self._guidance_mode = 0
+        self.guid_btn = tk.Button(g_guid, text="방식: 기본 추적", font=("Arial", 11, "bold"),
+                                  bg="#37474f", fg="white", activebackground="#546e7a",
                                   command=self.toggle_guidance)
         self.guid_btn.pack(pady=(0, 4), fill="x")
         self._track(CTRL_NODE, "control.guidance_mode",
@@ -297,25 +296,12 @@ class PanelGUI:
         self.lead = tk.Scale(g_guid, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",
                              length=180, bg="#1e1e1e", fg="white", label="예측 조준 lead (기본 추적)",
                              highlightthickness=0, troughcolor="#444")
-        self.lead.set(0.0)   # 노드에서 읽어오기 전 표시용 (control_params.yaml 기본값)
+        self.lead.set(0.0)
         self.lead.pack(pady=(2, 0))
         self._track(CTRL_NODE, "control.lead_gain",
                     lambda v: self.lead.set(float(v)))
         self.lead.bind("<ButtonRelease-1>",
                        lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
-
-        # 조준 오프셋 — 표적 중심이 아니라 화면상 그 위/아래를 겨냥 (control.aim_offset_y).
-        #   리드와 달리 미분 추정값을 안 써서 떨림이 없다. 부호는 화면 보며 잡는 게 빠르다.
-        self.aim_off = tk.Scale(g_guid, from_=-0.15, to=0.15, resolution=0.01, orient="horizontal",
-                                length=180, bg="#1e1e1e", fg="white",
-                                label="조준 오프셋 (+위/-아래, 화면비)",
-                                highlightthickness=0, troughcolor="#444")
-        self.aim_off.set(0.05)
-        self.aim_off.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.aim_offset_y",
-                    lambda v: self.aim_off.set(float(v)))
-        self.aim_off.bind("<ButtonRelease-1>",
-                          lambda e: ros_param_set("control.aim_offset_y", float(self.aim_off.get())))
 
         self.pn_nav = tk.Scale(g_guid, from_=0, to=525, resolution=5, orient="horizontal",
                                length=180, bg="#1e1e1e", fg="white", label="PN 항법이득 (PN 일때)",
@@ -329,7 +315,7 @@ class PanelGUI:
         self.pn_center = tk.Scale(g_guid, from_=0.0, to=350.0, resolution=0.5, orient="horizontal",
                                   length=180, bg="#1e1e1e", fg="white", label="PN 중심유지 (PN 일때)",
                                   highlightthickness=0, troughcolor="#444")
-        self.pn_center.set(220.0)
+        self.pn_center.set(52.5)
         self.pn_center.pack(pady=(2, 0))
         self._track(CTRL_NODE, "control.pn_center_gain",
                     lambda v: self.pn_center.set(float(v)))
