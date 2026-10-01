@@ -55,8 +55,8 @@ arms_control_node:
         kd: 0.0
 
       # ── 추격 추력 (실기체 전용) ──────────────────────────────────────────
-      # TRACK 때 표적쪽으로 상승하는 세기. SITL(control_params)은 0.85지만 실기체는
-      # TWR·무게가 달라 따로 잡는다. hover_throttle(≈0.51) 위여야 상승한다.
+      # TRACK 때 표적쪽으로 상승하는 세기. SITL(control_params)과 현재 동일한 0.70이며,
+      # TWR·무게가 달라 따로 잡는다. hover_throttle(≈0.42) 위여야 상승한다.
       #   첫 비행은 보수적으로(가볍게 상승) → 추격력 부족하면 ↑.
       #   pursuit_center_boost=false 라 이 값이 곧 상수 추력이다.
       track_throttle: 0.70
@@ -67,5 +67,4 @@ arms_control_node:
       #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
       # auto_arm_states: ["TRACK", "FIRE", "RTL"]
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]
-
 

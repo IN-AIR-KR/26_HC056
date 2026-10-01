@@ -223,7 +223,7 @@ class PanelGUI:
         thr_row.pack(anchor="w")
         self.thr_entry = tk.Entry(thr_row, width=7, bg="#2e2e2e", fg="white",
                                   insertbackground="white", relief="flat")
-        self.thr_entry.insert(0, "0.85")   # yaml track_throttle 과 일치 (1.05kg)
+        self.thr_entry.insert(0, "0.70")   # yaml track_throttle 과 일치 (모터당 1.5kgf)
         self.thr_entry.grid(row=0, column=0, padx=(4, 6))
         self._track(CTRL_NODE, "control.track_throttle",
                     lambda v: (self.thr_entry.delete(0, "end"),

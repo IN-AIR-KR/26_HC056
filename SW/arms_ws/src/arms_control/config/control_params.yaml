@@ -153,9 +153,10 @@ arms_control_node:
       # ── 추력 ──────────────────────────────────────────────────────────
       # TRACK 추력은 hover_throttle ↔ track_throttle 보간이 전부다. 겨냥이 좋을수록
       # (오차 < pursuit_gate) track 쪽으로, 빗나가면 hover 쪽으로 붙는다.
-      #   물리량 AUW 1.05kg · 추력 4kgf · TWR≈3.81 · 호버≈0.51 기준.
-      hover_throttle: 0.51    # 빗나갔을 때 최소 상승(재조준). MPC_THR_HOVER 와 일치
-      track_throttle: 0.85    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑
+      #   물리량 AUW 1.05kg · 추력 6kgf(1.5kgf×4) · TWR≈5.71 · 호버≈0.42 기준.
+      #   track 0.70은 구 추력(1kgf×4)에서 0.85와 거의 같은 절대 추력이다.
+      hover_throttle: 0.42    # 빗나갔을 때 최소 상승(재조준). MPC_THR_HOVER 와 일치
+      track_throttle: 0.70    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑
       pursuit_gate: 0.25      # 오차 이 이하면 full 상승 (pursuit_center_boost=true 일 때만 의미)
       # 중앙 정렬될수록 추력 세지는 로직 on/off. false=정렬 무관 상수 추력(track_throttle 고정).
       pursuit_center_boost: false   # ★ 비활성화(요청). true 면 기존처럼 center_q 로 hover↔track 보간
