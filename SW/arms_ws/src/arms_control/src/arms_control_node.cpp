@@ -52,7 +52,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pitch_pid.ki", 0.0);
     declare_parameter("control.pitch_pid.kd", 3.5);
     declare_parameter("control.track_throttle", 0.66);
-    declare_parameter("control.lead_gain", 0.0);
+    declare_parameter("control.lead_gain", 0.0);   // 예측 조준 [s] — control_params.yaml 과 일치必
+    // 조준 오프셋 [화면 정규화]: 표적 중심이 아니라 그보다 화면상 위쪽을 겨냥한다.
+    declare_parameter("control.aim_offset_y", 0.05);
     declare_parameter("control.roll_sign", 1.0);
     declare_parameter("control.pitch_sign", 1.0);
     declare_parameter("control.error_lpf_alpha", 0.25);
@@ -134,7 +136,7 @@ class ArmsControlNode : public rclcpp::Node {
     //            2=IBVS 공선유도(배리어 Lyapunov). 현재 기본값.
     declare_parameter("control.guidance_mode", 2);
     declare_parameter("control.pn_nav_gain", 175.0);    // PN 항법이득 N (LOS각속도→기울기). 못따라가면↑ 떨리면↓
-    declare_parameter("control.pn_center_gain", 52.5);  // 표적 중심유지(화면 이탈 방지)
+    declare_parameter("control.pn_center_gain", 220.0); // 표적 중심유지 + 잔류오차 축소
     declare_parameter("control.pn_alpha", 0.35);         // alpha-beta 위치이득 (표적 상태추정)
     declare_parameter("control.pn_beta", 0.02);         // alpha-beta 속도이득 (LOS각속도 추정)
     declare_parameter("control.pn_los_clamp", 1.5);     // PN 시선각속도 제한(0=무제한)
@@ -295,6 +297,7 @@ class ArmsControlNode : public rclcpp::Node {
 
     track_throttle_ = get_parameter("control.track_throttle").as_double();
     lead_gain_ = get_parameter("control.lead_gain").as_double();
+    aim_offset_y_ = get_parameter("control.aim_offset_y").as_double();
     roll_sign_ = get_parameter("control.roll_sign").as_double();
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
@@ -382,6 +385,8 @@ class ArmsControlNode : public rclcpp::Node {
               track_throttle_ = p.as_double();
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
+            else if (n == "control.aim_offset_y")
+              aim_offset_y_ = p.as_double();
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
             else if (n == "control.deadzone")
@@ -984,8 +989,13 @@ class ArmsControlNode : public rclcpp::Node {
       double los_y = filt_err_y_;
 
       // ---- 중앙 데드존 (보정된 LOS 기준) ----
+      // 조준 오프셋 — 표적 중심이 아니라 화면상 그 위를 겨냥한다.
+      //   ey = (y_center - 0.5) 이고 이미지 y 는 아래로 증가하므로, 빼면
+      //   "표적이 화면 중앙보다 아래에 있는 상태" 가 목표가 된다 = 조준선은
+      //   표적 위를 향한다. 음수면 반대로 아래를 겨냥한다.
+      //   리드(lead_gain)와 달리 미분 추정값을 안 쓰므로 노이즈가 없다.
       double ex = apply_deadzone(los_x, deadzone_);
-      double ey = apply_deadzone(los_y, deadzone_);
+      double ey = apply_deadzone(los_y - aim_offset_y_, deadzone_);
       if (dt > 1e-6) {
         // 표적 시선각속도(LOS rate) 추정 = 예측조준의 핵심 신호 (보정 LOS 의 미분).
         const double DOT_A = err_dot_alpha_;
@@ -1525,6 +1535,7 @@ class ArmsControlNode : public rclcpp::Node {
 
   double track_throttle_{0.66};
   double lead_gain_{0.0};
+  double aim_offset_y_{0.05};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
   double error_lpf_alpha_{0.25};
@@ -1628,7 +1639,7 @@ class ArmsControlNode : public rclcpp::Node {
   double ibvs_z1_dbg_{0.0};          // 로그용 현재 z1
   double tau_ease_dbg_{1.0};         // 로그용 현재 τ 추력 감속 배율
   double pn_nav_gain_{175.0};
-  double pn_center_gain_{52.5};
+  double pn_center_gain_{220.0};
   double pn_alpha_{0.35};
   double pn_beta_{0.02};
   double pn_los_clamp_{1.5};
