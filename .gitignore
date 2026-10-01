@@ -18,3 +18,6 @@ venv/
 
 # UI S키 캡처 출력물 (런타임 생성물)
 SW/output_image/
+
+# 카메라 캘리 결과·캡처 사진 (camera_calib/calibrate.py 생성물)
+SW/scripts/camera_calib/output/
