@@ -55,6 +55,8 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.lead_gain", 0.0);
     declare_parameter("control.roll_sign", 1.0);
     declare_parameter("control.pitch_sign", 1.0);
+    // Mode 0 중력 처짐 보상: 양수면 카메라 중심을 표적보다 화면 위쪽으로 조준한다.
+    declare_parameter("control.mode0_aim_above_offset", 0.03);
     declare_parameter("control.error_lpf_alpha", 0.25);
     declare_parameter("control.control_rate_hz", 50.0);
     declare_parameter("control.deadzone", 0.04);
@@ -297,6 +299,8 @@ class ArmsControlNode : public rclcpp::Node {
     lead_gain_ = get_parameter("control.lead_gain").as_double();
     roll_sign_ = get_parameter("control.roll_sign").as_double();
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
+    mode0_aim_above_offset_ = std::clamp(
+        get_parameter("control.mode0_aim_above_offset").as_double(), -0.5, 0.5);
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
     control_rate_hz_ = get_parameter("control.control_rate_hz").as_double();
     deadzone_ = get_parameter("control.deadzone").as_double();
@@ -382,6 +386,8 @@ class ArmsControlNode : public rclcpp::Node {
               track_throttle_ = p.as_double();
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
+            else if (n == "control.mode0_aim_above_offset")
+              mode0_aim_above_offset_ = std::clamp(p.as_double(), -0.5, 0.5);
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
             else if (n == "control.deadzone")
@@ -985,7 +991,12 @@ class ArmsControlNode : public rclcpp::Node {
 
       // ---- 중앙 데드존 (보정된 LOS 기준) ----
       double ex = apply_deadzone(los_x, deadzone_);
-      double ey = apply_deadzone(los_y, deadzone_);
+      // Mode 0에서 양의 offset은 풍선이 화면 중심보다 아래(raw_err_y>0)에
+      // 머물도록 만든다. 즉 카메라 중심/추력축은 풍선보다 화면 위를 조준한다.
+      // 상수항은 미분 전에 넣지 않아 err_dot/PN/IBVS 추정을 오염시키지 않는다.
+      const double mode0_y_reference =
+          guidance_mode_ == 0 ? mode0_aim_above_offset_ : 0.0;
+      double ey = apply_deadzone(los_y - mode0_y_reference, deadzone_);
       if (dt > 1e-6) {
         // 표적 시선각속도(LOS rate) 추정 = 예측조준의 핵심 신호 (보정 LOS 의 미분).
         const double DOT_A = err_dot_alpha_;
@@ -1190,7 +1201,11 @@ class ArmsControlNode : public rclcpp::Node {
         const double up = hover_throttle_ +
             (track_throttle_ - hover_throttle_) * range_throttle_scale;  // 잘 겨눴을 때 최대 상승(=공쪽 돌진, 근접시 하향)
         const double hover = hover_throttle_;   // 빗나갔을 때 최소(재조준)
-        double emag = std::hypot(filt_err_x_, filt_err_y_);
+        // Mode 0은 중앙이 아니라 aim offset 위치가 목표이므로, 추력 보간과
+        // 정렬 완료 판정도 같은 보정 오차를 사용한다. Mode 1/2는 기존 중앙 기준.
+        double emag = guidance_mode_ == 0
+                          ? std::hypot(ex, ey)
+                          : std::hypot(filt_err_x_, filt_err_y_);
 
         // ---- τ(충돌까지 시간) 기반 추력 감속 ----
         //   위 near_size 스케줄링은 "크기"만 보고 접근속도는 모른다. τ 는 크기와
@@ -1527,6 +1542,7 @@ class ArmsControlNode : public rclcpp::Node {
   double lead_gain_{0.0};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
+  double mode0_aim_above_offset_{0.03};  // 정규화 영상 높이, 양수=표적보다 화면 위 조준
   double error_lpf_alpha_{0.25};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};

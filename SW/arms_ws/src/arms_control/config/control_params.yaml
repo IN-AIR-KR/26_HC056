@@ -131,6 +131,12 @@ arms_control_node:
       roll_sign: 1.0
       pitch_sign: 1.0
 
+      # 중력 처짐 보상용 수직 조준 오프셋 [mode 0 전용]. 정규화 영상 높이 단위.
+      #   양수: 카메라 중심을 풍선보다 화면 위쪽으로 조준
+      #         (= 풍선의 목표 위치는 화면 중심보다 아래, raw_err_y=이 값).
+      #   0.03은 480px 영상에서 약 14px. 음수면 반대 방향, 0이면 기존 중앙 조준.
+      mode0_aim_above_offset: 0.03
+
       # 예측 조준(lead) — [mode 0 전용]. 움직이는 표적의 미래 위치를 겨냥.
       #   PN(mode 1)은 리드를 alpha-beta 로 따로 만들므로 lead_gain 을 안 읽는다 → 0 유지.
       lead_gain: 0.0
