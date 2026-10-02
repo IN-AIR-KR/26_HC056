@@ -216,7 +216,7 @@ class ArmsUINode(Node):
         self._keep_aspect = True    # True=레터박스(비율 유지, 잘림 없음), False=강제 스트레치
 
         # 터치(=마우스 클릭)로 누르는 전원 종료 버튼. 누르면 즉시 끄지 않고 확인 받는다.
-        self.declare_parameter("ui.power_button", True)
+        self.declare_parameter("ui.power_button", False)
         self.declare_parameter("ui.power_off_cmd", "systemctl poweroff")
         self._confirm_shutdown = False    # 확인 다이얼로그 표시 중 여부
         self._btn_rects = {}              # 버튼 히트박스(원본 프레임 좌표): name→(x1,y1,x2,y2)
