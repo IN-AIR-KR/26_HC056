@@ -572,7 +572,7 @@ function buildScenePath() {
   for (let i = 0; i < gps.t.length; i++) { const p = enu(lat[i], lon[i], alt[i]); if (p) pts.push(p); }
   if (pts.length > 1) {
     S3.path?.removeFromParent();
-    S3.path = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xfbbf24 }));
+    S3.path = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x60a5fa }));
     S3.scene.add(S3.path);
     const box = new THREE.Box3().setFromPoints(pts); const center = box.getCenter(new THREE.Vector3());
     const span = Math.max(8, box.getSize(new THREE.Vector3()).length());

@@ -277,6 +277,7 @@ def generate_launch_description():
                     "/arms/control_debug",
                     "/arms/crsf_tx",
                     "/arms/crsf_rx",
+                    "/arms/attitude",
                     "/arms/battery",
                     "/arms/gps",
                     "/arms/mission_state",

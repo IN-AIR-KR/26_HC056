@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IBVS 로그 뷰어</title>
+<title>ARMS Flight Analyzer</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
@@ -13,7 +13,7 @@
 <div id="app">
   <aside id="sidebar">
     <div class="side-head">
-      <div class="brand">IBVS 로그 뷰어</div>
+      <div class="brand">ARMS Flight Analyzer</div>
       <div class="root-row">
         <span id="root-path" class="mono" title=""></span>
         <button id="btn-change-root" class="btn small">변경</button>
@@ -66,7 +66,7 @@
           </select>
         </div>
         <section id="scene-pane">
-          <div class="scene-head"><span>3D 비행 뷰</span><span id="scene-info" class="mono muted"></span></div>
+          <div class="scene-head"><span id="scene-info" class="mono muted"></span></div>
           <div id="scene-canvas" aria-label="GPS 및 CRSF 자세 기반 3D 비행 경로. 드래그로 회전, 휠로 확대 및 축소"></div>
           <div class="scene-controls">
             <span class="muted">회전/줌 중심</span>
