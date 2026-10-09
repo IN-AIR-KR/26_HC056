@@ -144,7 +144,7 @@ graph TD
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
 | `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
 | `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>CRSF serial |
-| `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)                                                                 | MAVLink RC_CHANNELS_OVERRIDE → PX4                                                        |
+| `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)<br/>PX4 MAVLink (`GPS_RAW_INT`)                                | MAVLink RC_CHANNELS_OVERRIDE → PX4<br/>`/arms/gps` (SITL GPS)                            |
 | `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps` | —                                                                                         |
 
 ### 3.2 노드별 역할
@@ -158,7 +158,7 @@ graph TD
 | `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
 | `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
 | `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS 프레임을 `/arms/gps`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
-| `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude)                             | 호스트 (SITL)                 |
+| `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. PX4 `GPS_RAW_INT`를 `/arms/gps`로 변환한다. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL)                 |
 | `arms_ui_node`         | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                                          | 호스트                        |
 
 ## 4. 상태 머신 (arms_control 내부)
@@ -757,11 +757,15 @@ throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로
 
 ### 9.2 GPS 텔레메트리 표시
 
-`arms_control_node`는 ELRS 수신 CRSF GPS 프레임(type `0x02`)을 해석해 `/arms/gps`
-(`arms_msgs/GpsTelemetry`)로 발행한다. UI는 좌하단에 다음 형식으로 표시한다.
+실기체에서는 `arms_control_node`가 ELRS 수신 CRSF GPS 프레임(type `0x02`)을, SITL에서는
+`sitl_bridge_node`가 PX4 `GPS_RAW_INT`를 `/arms/gps`(`arms_msgs/GpsTelemetry`)로 발행한다.
+UI는 우상단에 다음 네 줄로 표시한다.
 
 ```
-GPS: 3D FIX  12 SAT  ALT 85 m  GS 4.2 m/s
+GPS: 3D FIX
+SAT: 12
+ALT: 85 m
+GS: 4.2 m/s
 ```
 
 - 토픽에는 위도/경도, 고도, 지상속도, 지상침로, 위성 수를 담고, UI는 고도·지상속도·위성 수와 fix 상태를 표시한다.

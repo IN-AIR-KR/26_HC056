@@ -618,7 +618,7 @@ class ArmsUINode(Node):
         self._draw_link_status(frame)
         # 배터리(전압/퍼센트)는 하단 중앙에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
-        # GPS fix/위성수/고도/지상속도는 하단 좌측에 표시한다.
+        # GPS fix/위성수/고도/지상속도는 우상단에 네 줄로 표시한다.
         self._draw_gps(frame)
         # 검출기 작동여부·confidence·모드 텍스트는 디버그 모드에서만(메인은 깔끔하게).
         if self._debug and not self._manual_mode and (
@@ -858,7 +858,7 @@ class ArmsUINode(Node):
 
     def _draw_manual_arm(self, frame):
         """수동 모드: arm/disarm, GPS Rescue 요청 시 RTL 상태를 상단 중앙에 표시."""
-        h = frame.shape[0]
+        h, w = frame.shape[:2]
         armed = bool(self._latest_state.armed)
         text = "ARMED" if armed else "DISARMED"
         color = (0, 0, 255) if armed else (0, 200, 0)   # arm=빨강(주의), disarm=초록(안전)
@@ -1053,7 +1053,8 @@ class ArmsUINode(Node):
         fresh = gps is not None and (time.monotonic() - self._gps_received_t) <= timeout
 
         if not fresh:
-            text, color = "GPS: NO GPS", (100, 100, 255)
+            lines = ["GPS: NO GPS", "SAT: --", "ALT: --", "GS: --"]
+            color = (100, 100, 255)
         else:
             # MAVLink GPS_FIX_TYPE: 1=NO_FIX, 2=2D_FIX, 3=3D_FIX.
             labels = {1: "NO FIX", 2: "2D FIX", 3: "3D FIX"}
@@ -1062,17 +1063,26 @@ class ArmsUINode(Node):
             color = ((0, 0, 255) if fix <= 1 else
                      (0, 190, 255) if fix == 2 else
                      (0, 220, 0))
-            text = (f"GPS: {label}  {int(gps.satellites)} SAT"
-                    f"  ALT {float(gps.altitude_m):.0f}m"
-                    f"  GS {float(gps.ground_speed_mps):.1f}m/s")
+            speed = float(gps.ground_speed_mps)
+            speed_text = "--" if speed != speed else f"{speed:.1f} m/s"
+            lines = [
+                f"GPS: {label}",
+                f"SAT: {int(gps.satellites)}",
+                f"ALT: {float(gps.altitude_m):.0f} m",
+                f"GS: {speed_text}",
+            ]
 
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = max(0.42, h / 1150.0)
         thick = max(1, int(round(scale * 2)))
-        # 중앙 하단 배터리 표기와 겹치지 않게 한 줄 위에 둔다.
-        y = h - max(10, int(h * 0.02)) - max(20, int(h * 0.055))
-        cv2.putText(frame, text, (10, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
-        cv2.putText(frame, text, (10, y), font, scale, color, thick, cv2.LINE_AA)
+        margin = max(10, int(h * 0.02))
+        line_h = max(20, int(h * 0.048))
+        for i, text in enumerate(lines):
+            (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+            x = max(margin, w - margin - tw)
+            y = margin + th + i * line_h
+            cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+            cv2.putText(frame, text, (x, y), font, scale, color, thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
         """검출 필터 상태(TRK)·YOLO/HSV 상태·후보 카운트를 좌상단에 표시."""

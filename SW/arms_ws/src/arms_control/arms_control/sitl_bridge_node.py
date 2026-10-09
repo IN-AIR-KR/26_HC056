@@ -3,7 +3,8 @@
 sitl_bridge_node — CRSF→MAVLink bridge for SITL
 
 Reads CRSF RC frames from a virtual serial port (socat PTY pair) and converts
-them to MAVLink RC_CHANNELS_OVERRIDE toward PX4.
+them to MAVLink RC_CHANNELS_OVERRIDE toward PX4.  PX4가 Gazebo NavSat 센서에서
+만든 GPS_RAW_INT는 /arms/gps로 다시 발행해 SITL UI도 실기체와 같은 토픽을 쓴다.
 
 Channel mapping:
   CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
@@ -18,6 +19,8 @@ import time
 
 import rclpy
 from rclpy.node import Node
+
+from arms_msgs.msg import GpsTelemetry
 
 try:
     from pymavlink import mavutil
@@ -42,6 +45,8 @@ ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed 
 # 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
 # PX4 는 1Hz 로 heartbeat 을 보내므로 3s 면 오탐 없이 충분히 빠르다.
 HB_TIMEOUT_SEC = 3.0
+GPS_RAW_INT_MESSAGE_ID = 24
+GPS_STREAM_INTERVAL_US = 200_000  # 5 Hz: UI 표시에는 충분하고 MAVLink 부하는 작다.
 
 
 def _crc8_dvb_s2(data: bytes) -> int:
@@ -145,6 +150,9 @@ class ArmsSITLCommNode(Node):
         # '조용히 기울기 명령으로 오해석' 상태로 계속 난다.
         self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
         self._reiniting = False        # _initial_setup 재실행 중복 방지
+        # 실기체는 arms_control_node가 ELRS 수신 CRSF GPS를 발행한다. SITL은 ELRS가
+        # 없으므로 여기서 PX4 MAVLink GPS_RAW_INT를 같은 인터페이스로 공급한다.
+        self._gps_pub = self.create_publisher(GpsTelemetry, "/arms/gps", 10)
 
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
@@ -184,6 +192,7 @@ class ArmsSITLCommNode(Node):
         mode_name = "ACRO(각속도)"
         self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
         self._send_set_mode(PX4_CUSTOM_MAIN_MODE_ACRO)
+        self._request_gps_stream()
         time.sleep(0.5)
 
         self._connected = True
@@ -209,16 +218,16 @@ class ArmsSITLCommNode(Node):
         threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------------------------
-    # MAVLink RX (armed-state tracking via HEARTBEAT)
+    # MAVLink RX (armed-state tracking via HEARTBEAT + SITL GPS telemetry)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """HEARTBEAT(armed 상태) 수신 + PX4 재기동 감지 후 모드 재설정."""
+        """HEARTBEAT와 GPS_RAW_INT를 수신하고 PX4 재기동을 감지한다."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type=['HEARTBEAT'],
+                msg = self._mav.recv_match(type=['HEARTBEAT', 'GPS_RAW_INT'],
                                            blocking=True, timeout=1.0)
                 now = time.monotonic()
                 if msg is None:
@@ -241,9 +250,35 @@ class ArmsSITLCommNode(Node):
                         self._restore_mode()
                     self._last_hb = now
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+                elif t == 'GPS_RAW_INT':
+                    self._publish_gps(msg)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
+
+    def _publish_gps(self, msg):
+        """PX4 GPS_RAW_INT를 실기체 CRSF GPS와 같은 /arms/gps 형식으로 변환한다."""
+        fix_type = int(getattr(msg, 'fix_type', 1))
+        altitude_mm = int(getattr(msg, 'alt', 0))
+        velocity_cms = int(getattr(msg, 'vel', 0))
+        course_cdeg = int(getattr(msg, 'cog', 0))
+
+        gps = GpsTelemetry()
+        gps.header.stamp = self.get_clock().now().to_msg()
+        gps.latitude_deg = float(getattr(msg, 'lat', 0)) / 1e7
+        gps.longitude_deg = float(getattr(msg, 'lon', 0)) / 1e7
+        gps.altitude_m = altitude_mm / 1000.0
+        # MAVLink의 UINT16_MAX는 unknown sentinel이다. UI에는 0으로 만들지 않고
+        # NaN을 넘겨 잘못된 수치를 정상 값처럼 보이지 않게 한다.
+        gps.ground_speed_mps = (float('nan') if velocity_cms == 0xFFFF
+                                else velocity_cms / 100.0)
+        gps.ground_course_deg = (float('nan') if course_cdeg == 0xFFFF
+                                 else course_cdeg / 100.0)
+        gps.satellites = int(getattr(msg, 'satellites_visible', 0))
+        gps.mavlink_fix_type = fix_type
+        gps.fix_type_inferred = False
+        gps.valid_fix = fix_type >= 2  # MAVLink: 2D FIX 이상
+        self._gps_pub.publish(gps)
 
     # ------------------------------------------------------------------
     # CRSF reader
@@ -346,6 +381,28 @@ class ArmsSITLCommNode(Node):
             float(sub_mode),
             0, 0, 0, 0,
         )
+
+    def _request_gps_stream(self):
+        """PX4에 GPS_RAW_INT 주기 전송을 요청한다.
+
+        Gazebo NavSat 센서와 PX4 EKF가 정상이어도 MAVLink 기본 stream profile에 따라
+        GPS_RAW_INT가 느리거나 빠질 수 있다. SITL UI용으로 5 Hz를 명시 요청한다.
+        지원하지 않는 PX4 버전은 command를 무시할 뿐 RC bridge에는 영향이 없다.
+        """
+        if self._mav is None:
+            return
+        try:
+            self._mav.mav.command_long_send(
+                self._mav.target_system, self._mav.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                float(GPS_RAW_INT_MESSAGE_ID),
+                float(GPS_STREAM_INTERVAL_US),
+                0, 0, 0, 0, 0,
+            )
+        except Exception as e:
+            self.get_logger().warn(
+                f"GPS_RAW_INT stream request failed: {e}", throttle_duration_sec=5.0)
 
 
 def main(args=None):
