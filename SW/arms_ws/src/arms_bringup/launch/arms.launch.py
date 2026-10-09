@@ -150,6 +150,20 @@ def generate_launch_description():
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
+        # 원본 카메라 영상을 녹화할 때만 compressed transport로 만든다. UI가 덧그려지기 전
+        # 프레임이라 검출/제어 재현용 원본으로 남는다.
+        Node(
+            package="image_transport",
+            executable="republish",
+            name="raw_image_republish",
+            arguments=["raw", "compressed"],
+            remappings=[
+                ("in", "/arms/image_raw"),
+                ("out/compressed", "/arms/image_raw/compressed"),
+            ],
+            parameters=[{"compressed.jpeg_quality": 80}],
+            condition=IfCondition(LaunchConfiguration("auto_save")),
+        ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). ARM 스위치 ON~OFF 동안
         #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3) 저장(kill 무관).
         Node(
@@ -157,6 +171,16 @@ def generate_launch_description():
             executable="flight_recorder",
             name="flight_recorder",
             output="screen",
+            parameters=[{
+                "manifest.control_params_path": str(control_config),
+                "manifest.arg_crsf_port": LaunchConfiguration("crsf_port"),
+                "manifest.arg_start_detection": LaunchConfiguration("start_detection"),
+                "manifest.arg_model": LaunchConfiguration("model"),
+                "manifest.arg_fullscreen": LaunchConfiguration("fullscreen"),
+                "manifest.arg_debug": LaunchConfiguration("debug"),
+                "manifest.arg_cv_debug": LaunchConfiguration("cv_debug"),
+                "manifest.arg_auto_save": LaunchConfiguration("auto_save"),
+            }],
             condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
     ]

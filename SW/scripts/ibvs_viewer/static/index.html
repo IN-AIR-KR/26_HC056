@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -48,6 +49,8 @@
             <button data-m="play" title="영상만 재생 (그래프 커서가 재생 위치를 따라감)">Play</button>
             <button data-m="follow" title="그래프에 마우스를 올린 시각의 화면을 표시">Follow cursor</button>
           </div>
+          <select id="v-source" title="영상 소스"></select>
+          <a id="v-download" class="btn small" title="선택한 compressed 영상을 MP4로 변환해 다운로드">MP4 다운로드</a>
           <span id="v-info" class="mono muted"></span>
         </div>
         <div class="vp-frame">
@@ -62,11 +65,24 @@
             <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
           </select>
         </div>
+        <section id="scene-pane">
+          <div class="scene-head"><span>3D 비행 뷰</span><span id="scene-info" class="mono muted"></span></div>
+          <div id="scene-canvas" aria-label="GPS 및 CRSF 자세 기반 3D 비행 경로"></div>
+          <div id="balloon-form">
+            <label>풍선 위도<input id="balloon-lat" type="number" step="any" placeholder="latitude"></label>
+            <label>경도<input id="balloon-lon" type="number" step="any" placeholder="longitude"></label>
+            <label>고도 m<input id="balloon-alt" type="number" step="any" placeholder="altitude"></label>
+            <button id="balloon-save" class="btn small">풍선 저장</button>
+          </div>
+        </section>
       </section>
       <div id="graphs">
         <div id="state-legend"></div>
         <div id="errors"></div>
-        <div id="panels"></div>
+        <h2 class="section-title">Flight telemetry</h2>
+        <div id="general-panels"></div>
+        <h2 class="section-title">IBVS guidance</h2>
+        <div id="ibvs-panels"></div>
         <section id="custom-add" hidden>
           <input id="custom-input" list="field-list" placeholder="필드 추가 → 새 패널 (예: /arms/ibvs_debug barrier, /arms/crsf_rx roll_deg)">
           <datalist id="field-list"></datalist>

@@ -31,7 +31,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image, Joy
 from std_msgs.msg import Float32MultiArray
 
-from arms_msgs.msg import CrsfTelemetry, DetectionArray, GpsTelemetry, MissionState
+from arms_msgs.msg import BatteryTelemetry, DetectionArray, GpsTelemetry, MissionState
 from geometry_msgs.msg import Vector3
 
 # /arms/command Joy 버튼 인덱스 (arms_command_uart_node.cpp / arms_control_node.cpp 와 일치)
@@ -168,8 +168,8 @@ class ArmsUINode(Node):
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
         self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
-        # arms_control 이 CRSF 수신 텔레메트리를 통합 발행 (/arms/crsf_rx). 배터리 필드를 여기서 읽는다.
-        self.create_subscription(CrsfTelemetry, "/arms/crsf_rx", self._cb_battery, 10)
+        # 배터리는 CRSF 통합 스냅샷이 아니라 전용 토픽을 구독한다.
+        self.create_subscription(BatteryTelemetry, "/arms/battery", self._cb_battery, 10)
         # GPS는 CRSF 0x02를 control 노드가 별도 변환해 발행한다.
         self.create_subscription(GpsTelemetry, "/arms/gps", self._cb_gps, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
@@ -181,7 +181,7 @@ class ArmsUINode(Node):
         self._latest_cmd = Vector3()
         self._latest_roi = None
         self._latest_hsv_debug = None
-        self._latest_battery = None   # /arms/crsf_rx 최신값 (None=아직 미수신)
+        self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
         self._latest_gps = None       # /arms/gps 최신값 (CRSF GPS frame 기준)
         self._gps_received_t = 0.0    # GPS telemetry가 끊긴 상태를 표시하기 위한 monotonic 시각
         self._elrs_connected = None   # ELRS 연결 여부 (None=미수신). 화면 표시는 이 값으로 즉시 반영
@@ -322,7 +322,7 @@ class ArmsUINode(Node):
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
 
-    def _cb_battery(self, msg: CrsfTelemetry):
+    def _cb_battery(self, msg: BatteryTelemetry):
         self._latest_battery = msg
 
     def _cb_gps(self, msg: GpsTelemetry):
@@ -1022,7 +1022,7 @@ class ArmsUINode(Node):
             return
         h, w = frame.shape[:2]
         volt = float(bat.voltage_v)
-        pct = float(bat.battery_remaining_pct)   # CrsfTelemetry.battery_remaining_pct 는 0~100(%)
+        pct = float(bat.battery_remaining_pct)   # BatteryTelemetry.battery_remaining_pct 는 0~100(%)
         pct_valid = (pct == pct) and pct >= 0   # NaN(pct!=pct)·음수면 무효
         if pct_valid:
             pct = max(0.0, min(100.0, pct))
@@ -1081,8 +1081,9 @@ class ArmsUINode(Node):
             (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
             x = max(margin, w - margin - tw)
             y = margin + th + i * line_h
+            line_color = color if i == 0 else (255, 255, 255)
             cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
-            cv2.putText(frame, text, (x, y), font, scale, color, thick, cv2.LINE_AA)
+            cv2.putText(frame, text, (x, y), font, scale, line_color, thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
         """검출 필터 상태(TRK)·YOLO/HSV 상태·후보 카운트를 좌상단에 표시."""

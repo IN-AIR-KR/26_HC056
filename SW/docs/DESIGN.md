@@ -143,9 +143,9 @@ graph TD
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
 | `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>CRSF serial |
+| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>`/arms/battery`<br/>CRSF serial |
 | `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)<br/>PX4 MAVLink (`GPS_RAW_INT`)                                | MAVLink RC_CHANNELS_OVERRIDE → PX4<br/>`/arms/gps` (SITL GPS)                            |
-| `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps` | —                                                                                         |
+| `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps`<br/>`/arms/battery` | —                                                                                         |
 
 ### 3.2 노드별 역할
 
@@ -157,7 +157,7 @@ graph TD
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. 300 ms 동안 유효 패킷이 없으면 `command_lost` 이벤트를 함께 발행. fake_mode 지원 | 호스트 (실기체)               |
 | `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
 | `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
-| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS 프레임을 `/arms/gps`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
+| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS·배터리 프레임을 각각 `/arms/gps`·`/arms/battery`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
 | `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. PX4 `GPS_RAW_INT`를 `/arms/gps`로 변환한다. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL)                 |
 | `arms_ui_node`         | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                                          | 호스트                        |
 
@@ -581,6 +581,7 @@ arms_control_node
   |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용, 구독 중에만 발행)
   |     /arms/ibvs_debug      (IbvsDebug — IBVS 유도 각 항/스케줄링/명령·추력 스냅샷, 구독 중에만 발행)
   |     /arms/gps             (GpsTelemetry — CRSF GPS 위치·속도·고도·위성 수)
+  |     /arms/battery         (BatteryTelemetry — CRSF 배터리 전압·전류·사용량·잔량)
   |
   +-- [Serial Output]
   |     CRSF frames → crsf.port (30Hz)
@@ -775,9 +776,70 @@ GS: 4.2 m/s
 - GPS 프레임이 없거나 `ui.gps_timeout_sec`(기본 2초)보다 오래되면 `GPS: NO GPS`로 표시한다.
   이 상태는 RTK/DGPS 같은 정밀 fix를 주장하지 않는다.
 
-## 10. 런치 파일 구조
+## 10. 비행 기록 (`auto_save`)
 
-### 9.1 SITL 런치
+`arms.launch.py`와 `arms_sitl.launch.py`의 `auto_save`는 기본 `false`다. `true`로 실행하면
+`flight_recorder`가 기동하고, `/arms/command`의 ARM 스위치(`buttons[1]`) **상승엣지**에서
+rosbag 녹화를 시작하며 ARM을 내리면 정상 마감한다. 녹화기가 켜질 때 이미 ARM이 올라가 있었다면
+한 번 내렸다 다시 올려야 시작한다. 상태 머신·auto/manual 모드·RTL과는 독립적인 조건이다.
+
+저장 위치는 `~/arms_flight_logs_ibvs/<YYYYmmdd_HHMMSS>/`이며, SITL은 폴더명에 `_sitl`을
+붙인다. 저장 형식은 Jetson에서도 항상 사용할 수 있는 `sqlite3`이다.
+
+원본과 UI 영상은 모두 JPEG compressed로 기록한다. `/arms/image_raw/compressed`는 UI 오버레이 전의
+원본 프레임(quality 80)이고, `/arms/ui_image/compressed`는 바운딩박스·상태 등이 합성된 화면
+(quality 60)이다. 원본 JPEG 변환 노드는 `auto_save:=true`일 때만 띄운다.
+
+### 10.1 rosbag 토픽
+
+| 토픽 | 타입 | 기록 내용 |
+| --- | --- | --- |
+| `/arms/ui_image/compressed` | `sensor_msgs/CompressedImage` | 오버레이가 합성된 운영자 UI 영상 |
+| `/arms/image_raw/compressed` | `sensor_msgs/CompressedImage` | 오버레이 전 원본 카메라 영상. 검출·유도 재현용 |
+| `/arms/detections_raw` | `arms_msgs/DetectionArray` | 칼만 필터 전 원시 검출 결과 |
+| `/arms/detections` | `arms_msgs/DetectionArray` | 필터/단일 표적 선택 후 제어에 들어간 검출 결과 |
+| `/arms/detector_status` | `std_msgs/Float32MultiArray` | HSV·YOLO 후보/승인 수와 검출기 진단 값 |
+| `/arms/ibvs_debug` | `arms_msgs/IbvsDebug` | LOS, LOS rate, 배리어 항, 스케줄링, 각속도·추력 등 IBVS 유도 내부 스냅샷 |
+| `/arms/control_debug` | `geometry_msgs/Vector3` | 최종 제어 명령: `x=roll rate [deg/s]`, `y=pitch rate [deg/s]`, `z=thrust [0..1]` |
+| `/arms/crsf_tx` | `std_msgs/Int16MultiArray` | 실제 송신한 CRSF 채널 `[roll,pitch,throttle,yaw,arm,mode,rtl,ch8]` |
+| `/arms/crsf_rx` | `arms_msgs/CrsfTelemetry` | CRSF 수신 통합 스냅샷: 링크 상태·자세·수직속도·FC 비행 모드 등 |
+| `/arms/battery` | `arms_msgs/BatteryTelemetry` | 배터리 전압·전류·사용 용량·잔량·감지 셀 수 |
+| `/arms/gps` | `arms_msgs/GpsTelemetry` | 위도/경도·고도·지상속도·침로·위성 수·fix 상태 |
+| `/arms/mission_state` | `arms_msgs/MissionState` | 상태 머신 상태, 검출/오차, arm·모드 등 미션 상태 |
+| `/arms/command` | `sensor_msgs/Joy` | 스틱과 MODE/ARM/LAUNCH/RTL 입력. 실험 재현의 입력 기준 |
+
+토픽 발행자가 없는 환경에서는 해당 토픽의 메시지가 기록되지 않는다. 예를 들어 현재 SITL은 PX4 GPS를
+`/arms/gps`로 공급하지만, CRSF 배터리 프레임은 없으므로 `/arms/battery`가 비어 있을 수 있다.
+
+### 10.2 비행 폴더 manifest
+
+녹화 시작과 동시에 rosbag과 별도로 다음 파일을 만든다.
+
+```
+<timestamp>[_sitl]/
+├── bag/                  # rosbag2 sqlite3 데이터와 metadata.yaml
+├── record.log            # ros2 bag record 프로세스 출력
+├── manifest.json         # 실행 재현 메타데이터
+└── control_params.yaml   # 실제 사용한 control_params.yaml 사본
+```
+
+`manifest.json`에는 다음을 저장한다.
+
+- `git_commit`: 녹화 시작 시점 저장소의 `HEAD` 커밋 SHA
+- `launch_arguments`: 런치가 실제로 해석한 인자. SITL은 `px4`, `px4_dir`, `rviz`, `detection`,
+  `det_model`, `auto_save`; 실기체는 `crsf_port`, `start_detection`, `model`, `fullscreen`,
+  `debug`, `cv_debug`, `auto_save`를 기록한다.
+- `control_params_source`, `control_params_copy`: 설정 원본 경로와 폴더 안 복사본 이름
+- `record_topics`: 그 비행에서 `ros2 bag record`에 전달한 전체 토픽 목록
+- `balloon` (선택): `ibvs_viewer`에서 입력한 표적 풍선의 `latitude_deg`, `longitude_deg`,
+  `altitude_m`. 비행 기록 생성 시에는 없고, 사후 3D 비행 뷰에서 **풍선 저장**을 누르면 추가된다.
+
+`git_commit`은 커밋 SHA만 보관한다. 커밋되지 않은 작업 트리 변경이나 실기체 전용
+`hw_overrides.yaml`까지 재현해야 하면 별도로 커밋하거나 함께 보관해야 한다.
+
+## 11. 런치 파일 구조
+
+### 11.1 SITL 런치
 
 ```
 # arms_bringup/launch/arms_sitl.launch.py  (메인 SITL 런치)
@@ -804,7 +866,7 @@ nodes:
   arms_control_node + sitl_bridge_node
 ```
 
-### 9.2 실기체 런치
+### 11.2 실기체 런치
 
 ```
 # arms_bringup/launch/arms_full.launch.py
@@ -825,7 +887,7 @@ nodes:
   arms_control_node only (control_params.yaml + hw_overrides.yaml 오버레이)
 ```
 
-## 11. 전체 데이터 흐름 요약
+## 12. 전체 데이터 흐름 요약
 
 ```
 FPV Receiver (USB)          Gazebo Camera (SITL)

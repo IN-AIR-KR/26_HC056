@@ -229,21 +229,26 @@ def load_record(record: Path) -> dict:
             "fields": num,
             "strings": strs,
         }
-    # 화면 영상: /arms/ui_image/compressed 우선, 없으면 아무 CompressedImage 토픽.
-    video, frame_index = None, []
-    vname = VIDEO_TOPIC if VIDEO_TOPIC in frames else next(iter(frames), None)
-    if vname and frames[vname]:
-        fr = sorted(frames[vname])
+    # CompressedImage는 UI/원본 등 여러 개일 수 있다. UI를 기본으로 쓰되, 각 소스를
+    # 독립 색인해 브라우저에서 바꿔 볼 수 있게 한다.
+    videos, frame_indexes = {}, {}
+    for name, items in frames.items():
+        fr = sorted(items)
+        if not fr:
+            continue
         t_end = max(t_end, fr[-1][0])
-        video = {"topic": vname, "t": [round((t - t0) / 1e9, 6) for t, _, _ in fr]}
-        frame_index = [(db, mid) for _, db, mid in fr]
+        videos[name] = {"topic": name, "t": [round((t - t0) / 1e9, 6) for t, _, _ in fr]}
+        frame_indexes[name] = [(db, mid) for _, db, mid in fr]
+    vname = VIDEO_TOPIC if VIDEO_TOPIC in videos else next(iter(videos), None)
+    video = videos.get(vname)
     return {
         "t0_ns": t0,
         "duration": (t_end - t0) / 1e9,
         "topics": out_topics,
-        "video": video,              # {"topic", "t": [초...]} 또는 None
+        "video": video,              # 기본 영상 {"topic", "t": [초...]} 또는 None
+        "videos": videos,            # 모든 CompressedImage 소스
         "errors": list(errors.values()),
-        "_frames": frame_index,      # 서버 전용(JSON 에 안 나감): i번째 프레임의 (db, id)
+        "_frames": frame_indexes,    # 서버 전용(JSON 에 안 나감): 토픽별 i번째 (db, id)
     }
 
 

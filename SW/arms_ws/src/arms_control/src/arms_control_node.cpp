@@ -14,6 +14,7 @@
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
+#include "arms_msgs/msg/battery_telemetry.hpp"
 #include "arms_msgs/msg/crsf_telemetry.hpp"
 #include "arms_msgs/msg/gps_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
@@ -506,9 +507,10 @@ class ArmsControlNode : public rclcpp::Node {
     // IBVS 튜닝/디버깅: 유도 각 항(오차→LOS각속도→z1/배리어→항별 기여→스케줄링→명령/추력)을
     //   한 메시지로 매 틱 발행(구독자 있을 때만). auto_save 녹화 대상.
     pub_ibvs_dbg_ = create_publisher<arms_msgs::msg::IbvsDebug>("/arms/ibvs_debug", 10);
-    // CRSF 배터리 텔레메트리(0x08)를 UI 등에서 쓰도록 표준 메시지로 재발행한다.
-    // CRSF 수신(RX) 텔레메트리 통합 발행: 배터리/자세(RPY)/수직속도/비행모드/링크통계 → /arms/crsf_rx.
-    //   (배터리는 별도 /arms/battery 없이 이 토픽으로만 나간다. UI 도 이걸 구독.)
+    // 배터리(CRSF 0x08)는 UI/녹화용 전용 토픽으로 발행한다. /arms/crsf_rx의 통합
+    // 스냅샷에도 호환성을 위해 같은 값은 유지하되, 소비자는 /arms/battery를 쓴다.
+    pub_battery_ = create_publisher<arms_msgs::msg::BatteryTelemetry>("/arms/battery", 10);
+    // CRSF 수신(RX) 통합 텔레메트리: 자세(RPY)/수직속도/비행모드/링크통계 등.
     pub_crsf_rx_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf_rx", 10);
     // CRSF 송신(TX) 채널 로그용(구독자 있을 때만).
     // [roll,pitch,thr,yaw,arm,mode,rtl,ch8] CRSF 단위.
@@ -890,13 +892,22 @@ class ArmsControlNode : public rclcpp::Node {
           pct_ratio = std::clamp(pct_ratio, 0.0, 1.0);            // 0~1 범위로 자른다.
         }
 
-        // 배터리는 /arms/crsf_rx 통합 필드로만 발행(별도 /arms/battery 폐지 — UI 도 /arms/crsf_rx 구독).
-        //   잔량%: cell_count 설정 시 전압 기반 계산값, 아니면 FC(CRSF) 원값(pct_ratio 가 이미 반영).
+        // 통합 CRSF 스냅샷 호환 필드도 갱신한다.
+        // 잔량%: cell_count 설정 시 전압 기반 계산값, 아니면 FC(CRSF) 원값(pct_ratio 가 이미 반영).
         crsf_telem_.voltage_v = static_cast<float>(voltage_v);
         crsf_telem_.current_a = static_cast<float>(current_da) / 10.0f;
         crsf_telem_.capacity_used_mah = capacity_mah;
         crsf_telem_.battery_remaining_pct =
             static_cast<int>(pct_ratio * 100.0 + 0.5);
+
+        arms_msgs::msg::BatteryTelemetry battery;
+        battery.header.stamp = now();
+        battery.voltage_v = crsf_telem_.voltage_v;
+        battery.current_a = crsf_telem_.current_a;
+        battery.capacity_used_mah = capacity_mah;
+        battery.battery_remaining_pct = crsf_telem_.battery_remaining_pct;
+        battery.cell_count = static_cast<uint8_t>(std::max(0, battery_detected_cells_));
+        pub_battery_->publish(battery);
       } else if (frame.type == 0x1E && frame.payload.size() >= 6) {
         // 자세(Attitude): pitch, roll, yaw 순서의 int16 big-endian, 값 = radian × 10000.
         auto be16 = [&](size_t i) {
@@ -1694,6 +1705,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<arms_msgs::msg::IbvsDebug>::SharedPtr pub_ibvs_dbg_;      // IBVS 디버그 → /arms/ibvs_debug
+  rclcpp::Publisher<arms_msgs::msg::BatteryTelemetry>::SharedPtr pub_battery_; // CRSF battery → /arms/battery
   rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_rx_;   // CRSF 수신 텔레메트리 → /arms/crsf_rx
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_crsf_tx_;  // CRSF 송신 채널 로그 → /arms/crsf_tx
   rclcpp::Publisher<arms_msgs::msg::GpsTelemetry>::SharedPtr pub_gps_;        // CRSF GPS → /arms/gps

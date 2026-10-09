@@ -17,7 +17,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - panel                   (튜닝/심판 콘솔)                          [arms_sim]
   - referee                 (표적 풍선/드론 비행 + 명중 판정)          [arms_sim]
   - arms_ui_node            (OpenCV 영상 오버레이)
-  - sitl_viz + rviz2        (3D 궤적/기체/표적, rviz:=true 일 때만)      [arms_sim]
+  - sitl_viz + rviz2        (3D 궤적/기체/표적, 기본 기동; rviz:=false 로 생략) [arms_sim]
   - plotjuggler             (5초 뒤)
   - flight_recorder         (auto_save:=true 일 때만. ~/arms_flight_logs_ibvs/<일시>_sitl/) [arms_ui]
 
@@ -154,9 +154,9 @@ def generate_launch_description():
                               description="PX4 SITL + Gazebo 도 같이 띄울지 (이미 떠 있으면 false)"),
         DeclareLaunchArgument("px4_dir", default_value=os.environ.get("PX4_DIR", "~/PX4-Autopilot"),
                               description="PX4-Autopilot 경로 (px4:=true 일 때)"),
-        DeclareLaunchArgument("rviz", default_value="false",
+        DeclareLaunchArgument("rviz", default_value="true",
                               description="rviz 3D 시각화(기체·표적·궤적) 기동 여부. "
-                                          "sitl_viz(진실값 발행) + rviz2 가 같이 뜬다."),
+                                          "기본 true. sitl_viz(진실값 발행) + rviz2 가 같이 뜬다."),
         DeclareLaunchArgument("detection", default_value="host",
                               description="검출 실행 위치: host(기본, 호스트 in-process YOLO) | "
                                           "docker(검출 컨테이너). 동시에 띄우면 노드 이름이 "
@@ -246,6 +246,19 @@ def generate_launch_description():
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
+        # 원본 카메라 영상도 녹화 때만 JPEG compressed로 만든다. UI 오버레이 전 프레임이라
+        # 추후 검출/유도 재현에 쓴다.
+        Node(
+            package="image_transport", executable="republish",
+            name="raw_image_republish",
+            arguments=["raw", "compressed"],
+            remappings=[
+                ("in", "/arms/image_raw"),
+                ("out/compressed", "/arms/image_raw/compressed"),
+            ],
+            parameters=[{"compressed.jpeg_quality": 80}],
+            condition=IfCondition(LaunchConfiguration("auto_save")),
+        ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). 실기체와 같은 노드·같은 조건
         #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 화면 영상도 같이 저장.
         Node(
@@ -255,20 +268,31 @@ def generate_launch_description():
                 "tag": "sitl",
                 "record_topics": [
                     "/arms/ui_image/compressed",
+                    "/arms/image_raw/compressed",
                     "/arms/detections_raw",
                     "/arms/detections",
                     "/arms/detector_status",
                     "/arms/ibvs_debug",
+                    "/arms/control_debug",
                     "/arms/crsf_tx",
                     "/arms/crsf_rx",
+                    "/arms/battery",
+                    "/arms/gps",
                     "/arms/mission_state",
                     "/arms/command",
                 ],
+                "manifest.control_params_path": str(control_config),
+                "manifest.arg_px4": LaunchConfiguration("px4"),
+                "manifest.arg_px4_dir": LaunchConfiguration("px4_dir"),
+                "manifest.arg_rviz": LaunchConfiguration("rviz"),
+                "manifest.arg_detection": LaunchConfiguration("detection"),
+                "manifest.arg_det_model": LaunchConfiguration("det_model"),
+                "manifest.arg_auto_save": LaunchConfiguration("auto_save"),
             }],
             condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
-        # 3D 시각화 (rviz:=true 일 때만). gz 진실값 → TF/궤적/마커.
-        #   rviz 를 안 띄우면 발행할 이유도 없으므로 같은 인자로 묶는다.
+        # 3D 시각화 (기본 활성). gz 진실값 → TF/궤적/마커.
+        #   rviz:=false면 sitl_viz도 함께 생략한다.
         Node(
             package="arms_sim", executable="sitl_viz",
             name="arms_sitl_viz", output="screen",

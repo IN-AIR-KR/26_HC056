@@ -71,6 +71,7 @@ body {
 }
 #readout:empty { display: none; }
 #state-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 0 0; font-size: 12px; }
+.section-title { font-size: 14px; margin: 18px 0 0; color: var(--fg); }
 #state-legend span { display: inline-flex; align-items: center; gap: 5px; }
 #state-legend i { width: 14px; height: 10px; border-radius: 2px; display: inline-block; border: 1px solid var(--border); }
 #errors { color: var(--danger); font-size: 12px; }
@@ -207,9 +208,24 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #v-seek { flex: 1; min-width: 0; accent-color: var(--accent); padding: 0; }
 #v-speed { font: inherit; font-size: 12px; color: var(--fg); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+#v-source { font: inherit; font-size: 12px; color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px; max-width: 180px; }
 .follow #v-ctrl { display: none; }
+
+/* ---------------- 동기화 3D 비행 뷰 ---------------- */
+#scene-pane { display: flex; flex-direction: column; gap: 7px; min-height: 0; }
+.scene-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; }
+#scene-canvas { height: 260px; background: #090c10; border-radius: 6px; overflow: hidden; }
+#scene-canvas canvas { width: 100%; height: 100%; display: block; }
+#balloon-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 6px; align-items: end; }
+#balloon-form label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11px; }
+#balloon-form input { width: 100%; min-width: 0; padding: 4px 6px; font-size: 12px; }
 
 @media (max-width: 1000px) {
   .split #content { grid-template-columns: 1fr; }
   #video-pane { position: static; max-height: none; }
+}
+@media (max-width: 520px) {
+  #balloon-form { grid-template-columns: 1fr 1fr; }
+  #balloon-save { grid-column: span 2; }
 }

@@ -3,6 +3,15 @@
 
 const T = "/arms/ibvs_debug";
 const R = "/arms/crsf_rx";
+const M = "/arms/mission_state";
+const C = "/arms/control_debug";
+const G = "/arms/gps";
+const B = "/arms/battery";
+const CMD = "/arms/command";
+const TX = "/arms/crsf_tx";
+const D = "/arms/detections";
+const DR = "/arms/detections_raw";
+const DS = "/arms/detector_status";
 
 // ---------------------------------------------------------------- 필드 수식
 // 범례는 필드명 그대로. 수식은 패널 위 표와 범례 툴팁에 나온다.
@@ -94,6 +103,61 @@ const DERIVED = {
   aim_share_y: { deps: ["barrier_term_y", "center_term_y", "los_rate_term_y"], fn: (b, c, l) => share(b + c, l) },
   lead_share_y: { deps: ["barrier_term_y", "center_term_y", "los_rate_term_y"], fn: (b, c, l) => share(l, b + c) },
 };
+
+// ---------------------------------------------------------------- 일반 비행 정보 (IBVS 세부 그래프보다 위에 배치)
+const GENERAL_PANELS = [
+  { title: "Detection", note: "raw / filtered target count and selected target confidence",
+    series: [
+      { t: DR, f: "detections_count", label: "raw count" }, { t: D, f: "detections_count", label: "filtered count" },
+      { t: D, f: "detections_0_confidence", label: "target confidence", scale: "y2" },
+    ] },
+  { title: "Detector diagnostics", note: "YOLO / HSV confidence and processing latency",
+    series: [
+      { t: DS, f: "data_0", label: "YOLO confidence" }, { t: DS, f: "data_1", label: "HSV confidence" },
+      { t: DS, f: "data_10", label: "total [ms]", scale: "y2" },
+    ] },
+  { title: "Mission / target error", note: "state, lock, normalized image error",
+    series: [
+      { t: M, f: "error_x", label: "error_x" }, { t: M, f: "error_y", label: "error_y" },
+      { t: M, f: "lock_elapsed_sec", label: "lock elapsed [s]", scale: "y2" },
+    ] },
+  { title: "Control output", note: "final command before CRSF normalization",
+    series: [
+      { t: C, f: "x", label: "roll rate [deg/s]" }, { t: C, f: "y", label: "pitch rate [deg/s]" },
+      { t: C, f: "z", label: "thrust [0..1]", scale: "y2" },
+    ] },
+  { title: "GPS motion", note: "altitude / ground speed / course",
+    series: [
+      { t: G, f: "altitude_m", label: "altitude [m]" },
+      { t: G, f: "ground_speed_mps", label: "ground speed [m/s]" },
+      { t: G, f: "ground_course_deg", label: "course [deg]", scale: "y2" },
+    ] },
+  { title: "GPS position", note: "latitude / longitude",
+    series: [
+      { t: G, f: "latitude_deg", label: "latitude" }, { t: G, f: "longitude_deg", label: "longitude", scale: "y2" },
+    ] },
+  { title: "Battery", note: "pack voltage / current / remaining",
+    series: [
+      { t: B, f: "voltage_v", label: "voltage [V]" }, { t: B, f: "current_a", label: "current [A]" },
+      { t: B, f: "battery_remaining_pct", label: "remaining [%]", scale: "y2" },
+    ] },
+  { title: "CRSF attitude / link", note: "roll, pitch, yaw / uplink quality",
+    series: [
+      { t: R, f: "roll_deg", label: "roll [deg]" }, { t: R, f: "pitch_deg", label: "pitch [deg]" },
+      { t: R, f: "yaw_deg", label: "yaw [deg]" }, { t: R, f: "uplink_lq", label: "uplink LQ [%]", scale: "y2" },
+    ] },
+  { title: "Operator command", note: "sticks from /arms/command",
+    series: [
+      { t: CMD, f: "axes_0", label: "yaw" }, { t: CMD, f: "axes_1", label: "throttle" },
+      { t: CMD, f: "axes_2", label: "roll" }, { t: CMD, f: "axes_3", label: "pitch" },
+    ] },
+  { title: "CRSF output", note: "channels sent to FC",
+    series: [
+      { t: TX, f: "data_0", label: "roll" }, { t: TX, f: "data_1", label: "pitch" },
+      { t: TX, f: "data_2", label: "throttle" }, { t: TX, f: "data_4", label: "arm" },
+      { t: TX, f: "data_6", label: "rtl" },
+    ] },
+];
 
 // ---------------------------------------------------------------- 패널 정의
 // series: {t: 토픽(기본 T), f: 필드(또는 DERIVED 이름), scale: "y"|"y2", dash, width, step, show,
@@ -191,7 +255,7 @@ let showHelp = loadLS("ibvs_viewer.help", true);   // 필터 칩의 수식 표�
 let layout = loadLS("ibvs_viewer.layout", "graphs");  // "graphs" | "split"(영상 + 그래프)
 let vmode = loadLS("ibvs_viewer.vmode", "play");      // "play"(영상 재생) | "follow"(그래프 커서 따라감)
 // 영상 재생 상태
-const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false, lastTs: 0, lastCursor: 0 };
+const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false, lastTs: 0, lastCursor: 0, topic: null };
 
 const $ = (id) => document.getElementById(id);
 
@@ -337,7 +401,11 @@ async function openRecord(id) {
   renderStateLegend();
   fillFieldList();
   renderPanels();
+  initScene();
+  buildScenePath();
+  loadBalloon();
   resetVideo();
+  updateScene(0);
 }
 
 function buildStateSegs() {
@@ -363,6 +431,113 @@ function stateAt(t) {
     if (stateSegs[m].t0 <= t) { ans = stateSegs[m]; lo = m + 1; } else hi = m - 1;
   }
   return ans?.state ?? "";
+}
+
+// ---------------------------------------------------------------- GPS/CRSF 동기화 3D 뷰
+// 좌표는 기록 첫 GPS를 원점으로 한 ENU 근사: X=east, Y=up, Z=north [m].
+const S3 = { renderer: null, scene: null, camera: null, drone: null, balloon: null,
+  path: null, origin: null, gps: null, resize: null };
+const deg = (v) => (v || 0) * Math.PI / 180;
+
+function nearestAt(d, field, t) {
+  const col = d?.fields?.[field];
+  if (!col || !d.t?.length) return null;
+  let lo = 0, hi = d.t.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (d.t[m] < t) lo = m + 1; else hi = m; }
+  const i = lo > 0 && Math.abs(d.t[lo - 1] - t) < Math.abs(d.t[lo] - t) ? lo - 1 : lo;
+  return col[i] == null ? null : Number(col[i]);
+}
+function enu(lat, lon, alt) {
+  if (!S3.origin || !isFinite(lat) || !isFinite(lon) || !isFinite(alt)) return null;
+  const r = Math.PI / 180, o = S3.origin;
+  return new THREE.Vector3(
+    (lon - o.lon) * 111320 * Math.cos(o.lat * r),
+    alt - o.alt,
+    (lat - o.lat) * 110540,
+  );
+}
+function gpsAt(t) {
+  const g = rec?.topics?.[G];
+  if (!g) return null;
+  return enu(nearestAt(g, "latitude_deg", t), nearestAt(g, "longitude_deg", t), nearestAt(g, "altitude_m", t));
+}
+function initScene() {
+  const host = $("scene-canvas");
+  if (!window.THREE || !host) return;
+  if (S3.renderer) { S3.renderer.dispose(); host.innerHTML = ""; }
+  const width = Math.max(1, host.clientWidth), height = Math.max(1, host.clientHeight);
+  S3.renderer = new THREE.WebGLRenderer({ antialias: true });
+  S3.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  S3.renderer.setSize(width, height); host.appendChild(S3.renderer.domElement);
+  S3.scene = new THREE.Scene(); S3.scene.background = new THREE.Color(0x090c10);
+  S3.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 50000);
+  S3.camera.position.set(20, 16, 22); S3.camera.lookAt(0, 0, 0);
+  S3.scene.add(new THREE.HemisphereLight(0xbfd7ff, 0x202a32, 2.2));
+  const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.scene.add(grid);
+  const worldAxes = new THREE.AxesHelper(4); S3.scene.add(worldAxes);
+  S3.drone = new THREE.Group();
+  S3.drone.add(new THREE.Mesh(new THREE.SphereGeometry(.55, 20, 14), new THREE.MeshStandardMaterial({ color: 0x60a5fa })));
+  const axes = [[0xff5555, new THREE.Vector3(1, 0, 0)], [0x55dd77, new THREE.Vector3(0, 1, 0)], [0x55aaff, new THREE.Vector3(0, 0, 1)]];
+  axes.forEach(([color, dir]) => S3.drone.add(new THREE.ArrowHelper(dir, new THREE.Vector3(), 1.5, color, .3, .18)));
+  S3.scene.add(S3.drone);
+  S3.balloon = new THREE.Mesh(new THREE.SphereGeometry(.45, 18, 14), new THREE.MeshStandardMaterial({ color: 0xef4444 }));
+  S3.balloon.visible = false; S3.scene.add(S3.balloon);
+  S3.resize?.disconnect();
+  S3.resize = new ResizeObserver(() => { if (!S3.renderer) return; const w = host.clientWidth, h = host.clientHeight; S3.camera.aspect = w / h; S3.camera.updateProjectionMatrix(); S3.renderer.setSize(w, h); renderScene(); });
+  S3.resize.observe(host);
+}
+function buildScenePath() {
+  const gps = rec?.topics?.[G]; S3.gps = gps || null; S3.origin = null;
+  if (!window.THREE || !S3.scene) return;
+  if (!gps?.t?.length) return;
+  const lat = gps.fields.latitude_deg, lon = gps.fields.longitude_deg, alt = gps.fields.altitude_m;
+  if (!lat || !lon || !alt) return;
+  const i0 = lat.findIndex((v, i) => v != null && lon[i] != null && alt[i] != null &&
+    isFinite(v) && isFinite(lon[i]) && isFinite(alt[i]));
+  if (i0 < 0) return;
+  S3.origin = { lat: Number(lat[i0]), lon: Number(lon[i0]), alt: Number(alt[i0]) };
+  const pts = [];
+  for (let i = 0; i < gps.t.length; i++) { const p = enu(lat[i], lon[i], alt[i]); if (p) pts.push(p); }
+  if (pts.length > 1) {
+    S3.path?.removeFromParent();
+    S3.path = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xfbbf24 }));
+    S3.scene.add(S3.path);
+    const box = new THREE.Box3().setFromPoints(pts); const center = box.getCenter(new THREE.Vector3());
+    const span = Math.max(8, box.getSize(new THREE.Vector3()).length());
+    S3.camera.position.copy(center).add(new THREE.Vector3(span * .9, span * .65, span * .9)); S3.camera.lookAt(center);
+  }
+}
+function setBalloonFromInputs() {
+  const lat = parseFloat($("balloon-lat").value), lon = parseFloat($("balloon-lon").value), alt = parseFloat($("balloon-alt").value);
+  const p = enu(lat, lon, alt); S3.balloon.visible = !!p; if (p) S3.balloon.position.copy(p); renderScene();
+}
+function loadBalloon() {
+  const b = rec?.manifest?.balloon || {};
+  $("balloon-lat").value = b.latitude_deg ?? ""; $("balloon-lon").value = b.longitude_deg ?? ""; $("balloon-alt").value = b.altitude_m ?? "";
+  setBalloonFromInputs();
+}
+function updateScene(t) {
+  if (!S3.scene || !rec) return;
+  const pos = gpsAt(t); const att = rec.topics[R];
+  if (pos) {
+    S3.drone.visible = true; S3.drone.position.copy(pos);
+    // CRSF attitude is an approximate body visualization: yaw=heading, roll/pitch=body tilt.
+    S3.drone.rotation.order = "YXZ";
+    S3.drone.rotation.set(deg(nearestAt(att, "pitch_deg", t)), -deg(nearestAt(att, "yaw_deg", t)), -deg(nearestAt(att, "roll_deg", t)));
+    $("scene-info").textContent = `t=${t.toFixed(2)}s  E ${pos.x.toFixed(1)}  N ${pos.z.toFixed(1)}  U ${pos.y.toFixed(1)} m`;
+  } else {
+    S3.drone.visible = false; $("scene-info").textContent = "GPS 위치 없음";
+  }
+  renderScene();
+}
+function renderScene() { if (S3.renderer && S3.scene && S3.camera) S3.renderer.render(S3.scene, S3.camera); }
+async function saveBalloon() {
+  const balloon = { latitude_deg: parseFloat($("balloon-lat").value), longitude_deg: parseFloat($("balloon-lon").value), altitude_m: parseFloat($("balloon-alt").value) };
+  if (Object.values(balloon).some((v) => !isFinite(v))) { $("scene-info").textContent = "풍선 위도·경도·고도를 입력하세요"; return; }
+  try {
+    const j = await api("/api/manifest/balloon", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: currentId, balloon }) });
+    rec.manifest = rec.manifest || {}; rec.manifest.balloon = j.balloon; setBalloonFromInputs();
+  } catch (e) { $("scene-info").textContent = "풍선 저장 실패: " + e.message; }
 }
 function renderStateLegend() {
   const el = $("state-legend");
@@ -400,10 +575,14 @@ function destroyCharts() {
 function renderPanels() {
   destroyCharts();
   $("empty").hidden = true;
-  const root = $("panels");
-  root.innerHTML = "";
-  const all = [...PANELS, ...customPanels.map((p, i) => ({ ...p, custom: i }))];
-  for (const p of all) root.appendChild(makePanel(p));
+  const general = $("general-panels");
+  const ibvs = $("ibvs-panels");
+  general.innerHTML = "";
+  ibvs.innerHTML = "";
+  for (const p of GENERAL_PANELS) if (p.series.some((s) => fieldCol(s.t || T, s.f))) general.appendChild(makePanel(p));
+  for (const p of [...PANELS, ...customPanels.map((p, i) => ({ ...p, custom: i }))]) {
+    ibvs.appendChild(makePanel(p));
+  }
 }
 
 function makePanel(p) {
@@ -531,7 +710,7 @@ function buildData(p) {
 }
 
 function chartWidth() {
-  return Math.max(300, $("panels").clientWidth - 22);
+  return Math.max(300, $("graphs").clientWidth - 22);
 }
 
 function makeChart(p, { data, specs, multiTopic }, el) {
@@ -596,6 +775,7 @@ function makeChart(p, { data, specs, multiTopic }, el) {
         const st = stateAt(t);
         $("readout").textContent = `t = ${t.toFixed(3)} s${st ? "  ·  " + st : ""}`;
         if (videoOn() && vmode === "follow") showFrameAt(t);
+        updateScene(t);
       }],
     },
   };
@@ -672,15 +852,16 @@ function addCustom() {
   saveLS("ibvs_viewer.custom", customPanels);
   $("custom-input").value = "";
   renderPanels();
-  $("panels").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
+  $("ibvs-panels").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 // ---------------------------------------------------------------- 화면 영상
-const hasVideo = () => !!(rec && rec.video && rec.video.t.length);
+const videoData = () => rec?.videos?.[V.topic] || rec?.video || null;
+const hasVideo = () => !!(videoData() && videoData().t.length);
 const videoOn = () => layout === "split" && hasVideo();
 
 function frameIndexAt(t) {          // t 이하인 마지막 프레임
-  const ts = rec.video.t;
+  const ts = videoData().t;
   let lo = 0, hi = ts.length - 1, ans = 0;
   while (lo <= hi) {
     const m = (lo + hi) >> 1;
@@ -692,6 +873,7 @@ function frameIndexAt(t) {          // t 이하인 마지막 프레임
 /* 프레임을 한 장씩 받아 바꾼다. 받는 중에 다른 요청이 오면 마지막 것만 남긴다(밀림 방지). */
 function showFrameAt(t) {
   if (!hasVideo()) return;
+  updateScene(t);
   V.want = frameIndexAt(t);
   updateVideoInfo(t);
   pumpFrame();
@@ -709,13 +891,13 @@ function pumpFrame() {
     pumpFrame();
   };
   img.onerror = () => { V.loading = false; V.shown = i; pumpFrame(); };
-  img.src = `/api/frame?id=${encodeURIComponent(id)}&i=${i}`;
+  img.src = `/api/frame?id=${encodeURIComponent(id)}&topic=${encodeURIComponent(V.topic || "")}&i=${i}`;
 }
 function updateVideoInfo(t) {
   if (!hasVideo()) return;
   const st = stateAt(t);
   $("v-info").textContent =
-    `t = ${t.toFixed(2)} s · frame ${V.want + 1}/${rec.video.t.length}${st ? " · " + st : ""}`;
+    `t = ${t.toFixed(2)} s · frame ${V.want + 1}/${videoData().t.length}${st ? " · " + st : ""}`;
 }
 
 /* 재생 위치를 그래프 커서로 표시 (첫 차트에 커서를 두면 sync 로 전부 따라온다). */
@@ -757,15 +939,33 @@ function tick(now) {
 function resetVideo() {
   setPlaying(false);
   V.t = 0; V.shown = -1; V.want = -1;
+  V.topic = rec?.video?.topic || Object.keys(rec?.videos || {})[0] || null;
+  const source = $("v-source");
+  source.innerHTML = "";
+  for (const name of Object.keys(rec?.videos || {})) {
+    const option = document.createElement("option");
+    option.value = option.textContent = name;
+    option.selected = name === V.topic;
+    source.appendChild(option);
+  }
+  source.hidden = source.options.length < 2;
+  updateMp4Download();
   $("v-img").removeAttribute("src");
   $("v-info").textContent = "";
   const ok = hasVideo();
   $("v-seek").max = rec ? (rec.duration || 1) : 1;
   $("v-seek").value = 0;
   $("v-empty").textContent = !rec ? "기록을 선택하세요"
-    : ok ? "" : "이 기록에는 화면 영상(/arms/ui_image/compressed)이 없습니다";
+    : ok ? "" : "이 기록에는 compressed 영상이 없습니다";
   $("v-play").disabled = $("v-seek").disabled = !ok;
   if (ok && layout === "split") showFrameAt(0);
+}
+
+function updateMp4Download() {
+  const link = $("v-download");
+  const ok = hasVideo() && currentId;
+  link.hidden = !ok;
+  if (ok) link.href = `/api/mp4?id=${encodeURIComponent(currentId)}&topic=${encodeURIComponent(V.topic || "")}`;
 }
 
 function applyLayout() {
@@ -789,6 +989,11 @@ function bind() {
   $("v-play").onclick = () => setPlaying(!V.playing);
   $("v-seek").oninput = () => { setPlaying(false); seekVideo(parseFloat($("v-seek").value)); };
   $("v-speed").onchange = () => { V.speed = parseFloat($("v-speed").value); };
+  $("v-source").onchange = () => {
+    setPlaying(false); V.topic = $("v-source").value; V.shown = V.want = -1; updateMp4Download(); showFrameAt(V.t);
+  };
+  ["balloon-lat", "balloon-lon", "balloon-alt"].forEach((id) => { $(id).onchange = setBalloonFromInputs; });
+  $("balloon-save").onclick = saveBalloon;
   document.addEventListener("keydown", (e) => {   // Space = 재생/일시정지 (입력창 밖에서만)
     if (e.code !== "Space" || !videoOn() || vmode !== "play") return;
     if (/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(document.activeElement?.tagName)) return;
@@ -824,7 +1029,7 @@ function bind() {
       const w = chartWidth();
       for (const c of charts) if (c.width !== w) c.setSize({ width: w, height: CHART_H });
     });
-  }).observe($("panels"));
+  }).observe($("graphs"));
 }
 
 (async function init() {

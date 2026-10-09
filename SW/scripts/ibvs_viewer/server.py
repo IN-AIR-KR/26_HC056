@@ -11,14 +11,18 @@ ROS 없이 동작한다(sqlite3 + rosbags 로 직접 읽음) → 노트북에 ba
     python3 SW/scripts/ibvs_viewer/server.py --host 0.0.0.0   # 젯슨에서 띄우고 노트북으로 접속
 """
 import argparse
+import json
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
 import webbrowser
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, Response, abort, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
 import bag_reader
 
@@ -144,17 +148,114 @@ def _load_cached(p: Path) -> dict:
     return data
 
 
+def _manifest_path(record: Path) -> Path:
+    """비행 폴더의 manifest 위치. bag/ 또는 단일 db3 선택도 허용한다."""
+    base = record.parent if record.is_file() else record
+    if base.name == "bag":
+        base = base.parent
+    return base / "manifest.json"
+
+
+def _read_manifest(record: Path) -> dict:
+    path = _manifest_path(record)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_manifest(record: Path, data: dict):
+    path = _manifest_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp.replace(path)
+
+
+def _mp4_name(record: Path, topic: str) -> str:
+    """다운로드 파일명. 토픽별 UI/원본 영상을 구분한다."""
+    source = "ui" if topic == bag_reader.VIDEO_TOPIC else "raw"
+    return f"{record.name}_{source}.mp4"
+
+
+def _export_mp4(record: Path, topic: str) -> Path:
+    """색인된 JPEG 프레임을 ffmpeg에 직접 전달해 임시 H.264 MP4로 만든다."""
+    if shutil.which("ffmpeg") is None:
+        abort(503, "ffmpeg가 없습니다. Ubuntu에서 'sudo apt install ffmpeg'를 설치하세요.")
+    data = _load_cached(record)
+    frames = data.get("_frames", {}).get(topic)
+    times = (data.get("videos", {}).get(topic) or {}).get("t")
+    if not frames or not times:
+        abort(404, "선택한 compressed 영상 토픽이 없습니다")
+    if len(frames) != len(times):
+        abort(500, "영상 프레임 색인이 일치하지 않습니다")
+
+    span = times[-1] - times[0] if len(times) > 1 else 0.0
+    fps = (len(times) - 1) / span if span > 1e-6 else 15.0
+    fps = min(max(fps, 1.0), 120.0)
+    fd, name = tempfile.mkstemp(prefix="ibvs_viewer_", suffix=".mp4")
+    os.close(fd)
+    output = Path(name)
+    command = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        # rosbag의 auto_save 영상은 JPEG compressed이다. image2pipe만으로는 일부 ffmpeg가
+        # 입력 코덱을 추론하지 못하므로 mjpeg를 명시한다.
+        "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", f"{fps:.4f}", "-i", "-",
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        str(output),
+    ]
+    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        for db, mid in frames:
+            image, _mime = bag_reader.read_frame(db, mid)
+            proc.stdin.write(image)
+        proc.stdin.close()
+        stderr = proc.stderr.read().decode("utf-8", "replace")
+        if proc.wait() != 0:
+            abort(500, f"ffmpeg MP4 변환 실패: {stderr.strip() or 'unknown error'}")
+    except Exception:
+        if proc.stdin and not proc.stdin.closed:
+            proc.stdin.close()
+        proc.kill()
+        proc.wait()
+        output.unlink(missing_ok=True)
+        raise
+    finally:
+        if proc.stderr:
+            proc.stderr.close()
+    return output
+
+
 @app.get("/api/frame")
 def frame():
     """화면 영상 i번째 프레임(JPEG). 뷰어가 재생/커서 위치에 맞춰 한 장씩 요청한다."""
     p = _record_path(request.args.get("id", ""))
     try:
         idx = int(request.args.get("i", "0"))
-        db, mid = _load_cached(p)["_frames"][idx]
+        data = _load_cached(p)
+        topic = request.args.get("topic") or (data.get("video") or {}).get("topic")
+        db, mid = data["_frames"][topic][idx]
         img, mime = bag_reader.read_frame(db, mid)
     except (ValueError, IndexError, KeyError):
         abort(404)
     return Response(img, mimetype=mime, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/mp4")
+def download_mp4():
+    """선택한 compressed 영상 토픽을 요청 시 H.264 MP4로 만들어 다운로드한다."""
+    record = _record_path(request.args.get("id", ""))
+    data = _load_cached(record)
+    topic = request.args.get("topic") or (data.get("video") or {}).get("topic")
+    if topic not in data.get("_frames", {}):
+        abort(404, "선택한 compressed 영상 토픽이 없습니다")
+    output = _export_mp4(record, topic)
+    response = send_file(output, mimetype="video/mp4", as_attachment=True,
+                         download_name=_mp4_name(record, topic), max_age=0)
+    response.call_on_close(lambda: output.unlink(missing_ok=True))
+    return response
 
 
 @app.get("/api/record")
@@ -164,7 +265,30 @@ def record():
         data = _load_cached(p)
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
-    return jsonify({k: v for k, v in data.items() if not k.startswith("_")})
+    payload = {k: v for k, v in data.items() if not k.startswith("_")}
+    payload["manifest"] = _read_manifest(p)
+    return jsonify(payload)
+
+
+@app.post("/api/manifest/balloon")
+def save_balloon():
+    body = request.get_json(silent=True) or {}
+    p = _record_path(str(body.get("id", "")))
+    balloon = body.get("balloon")
+    if not isinstance(balloon, dict):
+        return jsonify({"error": "balloon 객체가 필요함"}), 400
+    try:
+        clean = {
+            "latitude_deg": float(balloon["latitude_deg"]),
+            "longitude_deg": float(balloon["longitude_deg"]),
+            "altitude_m": float(balloon["altitude_m"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "풍선 위도·경도·고도는 숫자여야 함"}), 400
+    manifest = _read_manifest(p)
+    manifest["balloon"] = clean
+    _write_manifest(p, manifest)
+    return jsonify({"balloon": clean})
 
 
 def main():
