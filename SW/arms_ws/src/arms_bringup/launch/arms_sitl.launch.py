@@ -36,6 +36,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess, IncludeLaunch
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -282,12 +283,12 @@ def generate_launch_description():
                     "/arms/command",
                 ],
                 "manifest.control_params_path": str(control_config),
-                "manifest.arg_px4": LaunchConfiguration("px4"),
-                "manifest.arg_px4_dir": LaunchConfiguration("px4_dir"),
-                "manifest.arg_rviz": LaunchConfiguration("rviz"),
-                "manifest.arg_detection": LaunchConfiguration("detection"),
-                "manifest.arg_det_model": LaunchConfiguration("det_model"),
-                "manifest.arg_auto_save": LaunchConfiguration("auto_save"),
+                "manifest.arg_px4": ParameterValue(LaunchConfiguration("px4"), value_type=str),
+                "manifest.arg_px4_dir": ParameterValue(LaunchConfiguration("px4_dir"), value_type=str),
+                "manifest.arg_rviz": ParameterValue(LaunchConfiguration("rviz"), value_type=str),
+                "manifest.arg_detection": ParameterValue(LaunchConfiguration("detection"), value_type=str),
+                "manifest.arg_det_model": ParameterValue(LaunchConfiguration("det_model"), value_type=str),
+                "manifest.arg_auto_save": ParameterValue(LaunchConfiguration("auto_save"), value_type=str),
             }],
             condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
