@@ -156,6 +156,7 @@ class ArmsSITLCommNode(Node):
         # '조용히 기울기 명령으로 오해석' 상태로 계속 난다.
         self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
         self._reiniting = False        # _initial_setup 재실행 중복 방지
+        self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
         # 실기체는 arms_control_node가 ELRS 수신 CRSF GPS를 발행한다. SITL은 ELRS가
         # 없으므로 여기서 PX4 MAVLink GPS_RAW_INT를 같은 인터페이스로 공급한다.
         self._gps_pub = self.create_publisher(GpsTelemetry, "/arms/gps", 10)
@@ -304,6 +305,11 @@ class ArmsSITLCommNode(Node):
         att.pitch_deg = math.degrees(float(getattr(msg, 'pitch', 0.0)))
         att.yaw_deg = math.degrees(float(getattr(msg, 'yaw', 0.0)))
         self._attitude_pub.publish(att)
+        if not self._attitude_seen:
+            self._attitude_seen = True
+            self.get_logger().info(
+                "PX4 ATTITUDE stream active → /arms/attitude "
+                f"(roll={att.roll_deg:.1f}, pitch={att.pitch_deg:.1f}, yaw={att.yaw_deg:.1f} deg)")
 
     # ------------------------------------------------------------------
     # CRSF reader
@@ -486,6 +492,15 @@ class ArmsSITLCommNode(Node):
         except Exception as e:
             self.get_logger().warn(
                 f"ATTITUDE stream request failed: {e}", throttle_duration_sec=5.0)
+        # 일부 PX4/MAVLink 조합은 SET_MESSAGE_INTERVAL을 무시하거나 stream profile이
+        # 다시 덮어쓴다. EXTRA1은 ATTITUDE가 속한 표준 data stream이므로 함께 요청한다.
+        try:
+            self._mav.mav.request_data_stream_send(
+                self._mav.target_system, self._mav.target_component,
+                mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 30, 1)
+        except Exception as e:
+            self.get_logger().warn(
+                f"ATTITUDE EXTRA1 stream request failed: {e}", throttle_duration_sec=5.0)
 
 
 def main(args=None):
