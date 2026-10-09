@@ -143,9 +143,9 @@ graph TD
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
 | `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>CRSF serial |
+| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>CRSF serial |
 | `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)                                                                 | MAVLink RC_CHANNELS_OVERRIDE → PX4                                                        |
-| `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                                                         |
+| `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps` | —                                                                                         |
 
 ### 3.2 노드별 역할
 
@@ -153,11 +153,11 @@ graph TD
 | ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `arms_video_node`      | `arms_video`     | 영상 소스 추상화. 실기체는 v4l2_camera, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                                                          | 호스트                        |
 | `arms_detection_node`  | `arms_detection` | HSV로 붉은 후보를 제안하고 ROI YOLO로 검증(+전체화면 fallback), KF로 평활한 단일 표적을 `/arms/detections`로 발행. **YOLO가 최종 판정자**(HSV 단독 발행 금지 → YOLO 없으면 검출 없음). GPU Docker | Docker (실기체/SITL) |
-| `arms_command_node`    | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·KILL/ARM/MODE/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지)             | 호스트 (SITL)                 |
-| `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원                                     | 호스트 (실기체)               |
+| `arms_command_node`    | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·MODE/RTL/ARM/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지)             | 호스트 (SITL)                 |
+| `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. 300 ms 동안 유효 패킷이 없으면 `command_lost` 이벤트를 함께 발행. fake_mode 지원 | 호스트 (실기체)               |
 | `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
 | `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
-| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                                                              | 호스트                        |
+| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS 프레임을 `/arms/gps`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
 | `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude)                             | 호스트 (SITL)                 |
 | `arms_ui_node`         | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                                          | 호스트                        |
 
@@ -168,15 +168,14 @@ graph TD
 | 상태       | 드론 동작                       | CRSF 출력                                                      | 서보 잠금장치              | UI 표시                   |
 | ---------- | ------------------------------- | -------------------------------------------------------------- | -------------------------- | ------------------------- |
 | **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                              | **OPEN**(진입 시)          | 회색 테두리               |
-| **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                                            | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=disarm (기본; 클램프 물린 채 대기)                         | LOCK 유지                  | 주황색 박스, "Locking..." |
+| **SEARCH** | 타겟 탐색 중                    | CH3=min, CH5=`auto_arm_states` 설정에 따름                    | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=`auto_arm_states` 설정에 따름 (클램프는 잠김)             | LOCK 유지                  | 주황색 박스, "Locking..." |
 | **TRACK**  | 위치 보정 추적                  | **CH5=arm** + PID → CH1/2 + track_throttle → CH3               | **OPEN**(LOCK→TRACK 엣지)  | 빨간 박스, "LOCKED"       |
-| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | CH5=arm, PID 유지 (전용 fire 채널 없음; mission_state로 신호)  | OPEN 유지                  | 빨간 박스, "FIRED!"       |
-| **RTL**    | 귀환 및 착륙                    | CH5=arm (전용 land 채널 없음; 수동 Altitude 착륙 등 별도 경로) | OPEN 유지                  | "Returning..."            |
+| **RTL**    | GPS Rescue 귀환 및 착륙 요청    | CH5=arm 유지(ARM 스위치가 올라간 경우), **CH7=RTL high**       | OPEN 유지                  | "RTL"                     |
 
-> **자동 모드 arm(CH5)은 상태머신 상태로 결정**(스위치와 분리). 기본은 **발사(TRACK)부터 무장**
-> (`control.auto_arm_states = [TRACK, FIRE, RTL]`). LOCK 은 클램프 물린 채 disarm 대기 →
-> TRACK(발사)에서 arm+서보 열림. SEARCH 등에서 미리 arm 하려면 목록만 수정. 수동 모드 CH5 는 arm 스위치.
+> **자동 모드 arm(CH5)은 상태머신 상태로 결정**(스위치와 분리). 기본은 `SEARCH`부터 상태를 진행하되
+> CH5 무장은 `control.auto_arm_states` 설정으로 정한다(현재 기본값 `[SEARCH, LOCK, TRACK, RTL]`).
+> LOCK에서는 클램프가 기체를 고정하고, TRACK 전이에서 서보가 열린다. 수동 모드 CH5 는 arm 스위치.
 
 > **서보 잠금장치(발사 클램프)**: 발사 전 기체를 발사기에 고정하고 발사 순간에만 놓아준다.
 > 방아쇠(launch 버튼)가 아니라 **상태 전이 엣지**로 제어한다(SEARCH 중 방아쇠를 눌러도 안 풀림).
@@ -193,9 +192,7 @@ stateDiagram-v2
     SEARCH --> LOCK
     LOCK --> SEARCH
     LOCK --> TRACK
-    TRACK --> SEARCH
-    TRACK --> FIRE
-    FIRE --> RTL
+    TRACK --> RTL
     RTL --> IDLE
 ```
 
@@ -211,12 +208,11 @@ stateDiagram-v2
     LOCK --> SEARCH : 타겟 소실 detection_timeout_sec
 
     LOCK --> TRACK : joy buttons[3] launch<br/>(또는 sitl_auto_launch 타이머)
-    TRACK --> SEARCH : 타겟 소실
+    TRACK --> RTL : 타겟 소실 detection_timeout_sec
+    TRACK --> RTL : 선택: looming τ < tau_rtl_sec + 정렬<br/>(looming_rtl_enabled)
+    TRACK --> RTL : SITL hit 이벤트 (hit_rtl_via_referee)
 
-    TRACK --> FIRE : 비전 looming τ < tau_fire_sec + 정렬<br/>(유일한 경로 — 심판은 전이시키지 않음)
-    FIRE --> RTL : 페이로드 트리거 즉시 (mission_state 신호)
-
-    RTL --> IDLE : 착륙 완료
+    RTL --> IDLE : ARM 스위치 OFF 또는 모드 전환/재초기화
 ```
 
 ### 4.4 전이 조건 파라미터
@@ -227,16 +223,18 @@ mission:
   detection_confidence_threshold: 0.32
   detection_timeout_sec: 1.0
   lock_duration_sec: 0.3
-  tau_fire_sec: 0.3 # 비전 looming: 충돌까지 시간(τ) 임계 [s] → FIRE
-  fire_align_tol: 0.2 # FIRE 정렬 허용오차
-  loom_s_min: 0.1 # FIRE 최소 bbox 크기(정규화)
+  tau_rtl_sec: 0.3 # 비전 looming: 충돌까지 시간(τ) 임계 [s] → RTL
+  intercept_align_tol: 0.2 # RTL 전이 전 정렬 허용오차
+  loom_s_min: 0.1 # looming 판정 최소 bbox 크기(정규화)
   loom_size_alpha: 0.3
   loom_rate_alpha: 0.3
+  looming_rtl_enabled: false # true일 때만 looming 종단 조건으로 RTL
+  hit_rtl_via_referee: true # SITL 심판 hit 이벤트 → RTL
   sitl_auto_launch: true # SITL 만. 실기체는 hw_overrides.yaml 이 false 로 덮어씀
   auto_launch_delay_sec: 0.5
 ```
 
-> 제어 게인(유도/PID/acro)은 [7.5](#75-유도제어-track--fire-상태에서-활성) 및
+> 제어 게인(유도/PID/acro)은 [7.5](#75-유도제어-track-상태에서-활성) 및
 > `control_params.yaml` 참고.
 
 ## 5. 영상 수신 (arms_video)
@@ -438,15 +436,15 @@ SITL:
 
 ### 7.2 CRSF 채널 매핑
 
-| CH  | 기능        | 값                                                        | PX4 RC_MAP (실기체) |
-| --- | ----------- | --------------------------------------------------------- | ------------------- |
-| 1   | roll        | -1..1 → 172..1811                                         | RC_MAP_ROLL=1       |
-| 2   | pitch       | -1..1 → 172..1811                                         | RC_MAP_PITCH=2      |
-| 3   | throttle    | 0..1 → 172..1811                                          | RC_MAP_THROTTLE=3   |
-| 4   | yaw         | -1..1 → 172..1811 (auto: 992)                             | RC_MAP_YAW=4        |
-| 5   | arm switch  | disarm=172, arm=1811 (auto=상태머신, manual=arm 스위치)   | RC_MAP_ARM_SW=5     |
-| 6   | flight mode | ACRO=172(auto), Altitude=1811(manual)                     | RC_MAP_FLTMODE=6    |
-| 7   | kill switch | 정상=172, kill=1811 (상태 머신 무관, FC가 직접 모터 차단) | RC_MAP_KILL_SW=7    |
+| CH  | 기능        | 값                                                        | FC 설정 |
+| --- | ----------- | --------------------------------------------------------- | ------- |
+| 1   | roll        | -1..1 → 172..1811                                         | roll 입력 |
+| 2   | pitch       | -1..1 → 172..1811                                         | pitch 입력 |
+| 3   | throttle    | 0..1 → 172..1811                                          | throttle 입력 |
+| 4   | yaw         | -1..1 → 172..1811 (auto: 992)                             | yaw 입력 |
+| 5   | arm switch  | disarm=172, arm=1811 (auto=상태머신, manual=arm 스위치)   | ARM AUX |
+| 6   | flight mode | auto/manual 모드 선택용                                    | 비행 모드 AUX |
+| 7   | RTL switch  | 정상=172, **RTL=1811** (`State::RTL`)                      | Betaflight **GPS RESCUE** AUX |
 | 8   | (미사용)    | 172 고정                                                  | —                   |
 
 > - **CH6 flight mode**는 오퍼레이터 모드 스위치(joy buttons[2])와 1:1이다.
@@ -455,11 +453,15 @@ SITL:
 >   로 설정. SITL 은 sitl_bridge 가 CH6 low 를 **ACRO 고정**으로 매핑한다
 >   (예전의 `autonomous_acro` / `control.acro_mode` 짝은 유효값이 하나뿐이라 둘 다 삭제됨).
 > - **CH5 arm**은 모드에 따라 소스가 다르다. **auto**: 스위치와 분리 — 상태머신 상태 기반
->   (`control.auto_arm_states`, 기본 발사 TRACK 부터). **manual**: arm 스위치(buttons[1]) +
+>   (`control.auto_arm_states`, 현재 기본 `[SEARCH, LOCK, TRACK, RTL]`). **manual**: arm 스위치(buttons[1]) +
 >   재토글 안전장치(모드 전환/부팅 직후 재토글 전까지 disarm). 자세히는 [7.3](#73-auto--manual-모드).
 >   자동 모드의 buttons[1] 은 arm 이 아니라 미션 상태(IDLE↔SEARCH)만 제어한다.
-> - **launch 버튼(buttons[3])** 과 **land/fire** 는 CRSF 채널로 내보내지 않는다.
->   launch는 상태 머신 LOCK→TRACK 전이 트리거로만 쓰이고, CH8은 비워 둔다.
+> - **CH7 RTL**은 kill switch가 아니다. 직접 RTL 스위치, TRACK에서 타겟 소실, 선택적인 looming/hit
+>   종단 조건, 또는 무장 중 command 입력 단절이 `RTL` 상태를 만들면 high가 된다. 실기체에서는
+>   Betaflight Configurator의 Modes에서 이 AUX를 **GPS RESCUE**에 매핑한다. ARM 스위치를 내리면
+>   RTL 중에도 CH5가 내려가므로 즉시 disarm 된다.
+> - **launch 버튼(buttons[3])** 은 CRSF 채널로 내보내지 않는다. LOCK→TRACK 전이 트리거로만 쓰이고,
+>   CH8은 비워 둔다.
 
 CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`  
 전송 속도: 400000 baud (커스텀 baud, termios2 `BOTHER`. 실기체 UART에서 확정)
@@ -482,8 +484,8 @@ CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`
 
 > **자동 모드 = 스위치와 arm 분리**: 자동 모드에서 상태 스위치(buttons[1])는 미션 상태
 > (IDLE↔SEARCH)만 제어하고 FC arm(CH5)은 건드리지 않는다. arm 은 상태머신 상태로 컨트롤 노드가
-> 결정한다 — 기본은 **발사(TRACK)부터 무장**(`control.auto_arm_states`, 기본 `[TRACK, FIRE, RTL]`;
-> 나중에 SEARCH 등에서 arm 하려면 이 목록만 수정).
+> 결정한다 — 현재 기본값은 `[SEARCH, LOCK, TRACK, RTL]`이며, 필요한 실험 구성에 맞춰
+> `control.auto_arm_states`만 조정한다.
 >
 > **재토글 안전장치 (자동·수동 공통)**: 모드 전환/부팅 직후 상태 스위치가 올라가 있어도 즉시
 > 적용되지 않게 하는 래치(`effective_arm = joy_arm_ && !require_arm_reset_`). `require_arm_reset_`
@@ -526,7 +528,7 @@ manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
   error_y = (bbox_cy - img_cy) / img_h    [-0.5, +0.5]
 ```
 
-### 7.5 유도·제어 (TRACK / FIRE 상태에서 활성)
+### 7.5 유도·제어 (TRACK 상태에서 활성)
 
 파이프라인 (매 control_rate_hz 틱):
 
@@ -577,6 +579,7 @@ arms_control_node
   |     /arms/control_debug   (Vector3 — UI 화살표용. x,y = 각속도[deg/s], z = throttle)
   |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용, 구독 중에만 발행)
   |     /arms/ibvs_debug      (IbvsDebug — IBVS 유도 각 항/스케줄링/명령·추력 스냅샷, 구독 중에만 발행)
+  |     /arms/gps             (GpsTelemetry — CRSF GPS 위치·속도·고도·위성 수)
   |
   +-- [Serial Output]
   |     CRSF frames → crsf.port (30Hz)
@@ -585,10 +588,11 @@ arms_control_node
   |     evaluate detections → update state
   |     auto arm: effective_arm(ARM 스위치+재토글 래치) → IDLE → SEARCH
   |     launch button (joy buttons[3]) → LOCK→TRACK
-  |     비전 looming: τ=bbox크기/팽창률 < tau_fire_sec + 정렬 (TRACK) → FIRE
+  |     RTL button (joy buttons[4]), 무장 중 command_lost, TRACK 타겟 소실 → RTL
+  |     선택: 비전 looming τ=bbox크기/팽창률 < tau_rtl_sec + 정렬 (TRACK) → RTL
   |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
   |
-  +-- [유도·제어]  (TRACK / FIRE 상태에서 활성)
+  +-- [유도·제어]  (TRACK 상태에서 활성)
   |     LOS(픽셀오차) → alpha-beta 필터 → 유도(기본 추적=PID / PN)
   |       → 각속도[deg/s] → clamp(max_cmd_rate_dps) → ÷max_rate_dps → CH1/CH2
   |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
@@ -615,7 +619,7 @@ arms_control_node
 
 - 방아쇠(launch 버튼)가 아니라 **LOCK→TRACK 전이**가 OPEN 트리거다(SEARCH 에서 방아쇠를 눌러도
   안 풀림). SEARCH/LOCK/TRACK 은 auto 모드에서만 발생하므로 전이만으로 판정 가능.
-- LOCK→SEARCH(표적 소실)·TRACK→SEARCH 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
+- LOCK→SEARCH(표적 소실)·TRACK→RTL 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
 - 판정은 `control_loop` 말미에서 in-tick 전이(arm/disarm) 반영 후 최신 `sm_->state()` 로 한다.
 
 **하드웨어 (Jetson Orin Nano)**
@@ -666,12 +670,14 @@ axes[1] = throttle  (L-stick Y)   놓아도 그 자리 유지 (SITL 기본 중�
 axes[2] = roll      (R-stick X)   스프링 중앙 복귀
 axes[3] = pitch     (R-stick Y)   스프링 중앙 복귀
 
-buttons[0] = KILL   buttons[1] = ARM
-buttons[2] = MODE   buttons[3] = LAUNCH
+buttons[0] = reserved  buttons[1] = ARM
+buttons[2] = MODE      buttons[3] = LAUNCH
+buttons[4] = RTL       buttons[5] = command_lost (내부 이벤트)
 ```
 
 > Mode2 조종기 배치. auto 모드에선 유도가 축을 대체하므로 스틱은 manual 전용이다.
-> 화면 버튼 배치 순서(MODE/KILL/ARM)와 인덱스 순서(0=KILL,1=ARM,2=MODE)는 다르다.
+> `buttons[5]`는 가상 조종기가 만드는 버튼이 아니다. 실기체 command 노드가 ESP32 USB 입력
+> 단절을 control 노드에 전달하기 위한 내부 이벤트다.
 
 ### 8.3 버튼별 역할
 
@@ -679,16 +685,17 @@ buttons[2] = MODE   buttons[3] = LAUNCH
 | ---------- | ---------- | ---------- | --------------------------------------------------------- | --------------------------------- |
 | **MODE**   | buttons[2] | 레벨(토글) | 모드 자체 (auto) → CH6=ACRO                               | 모드 자체 (manual) → CH6=Altitude |
 | **ARM**    | buttons[1] | 레벨(토글) | **미션 상태만** (IDLE↔SEARCH). CH5 arm 은 상태머신이 결정 | **CH5 arm 스위치**                |
-| **KILL**   | buttons[0] | 레벨(토글) | CH7 kill (FC 직접 모터 차단)                              | 동일                              |
+| **RTL**    | buttons[4] | 레벨(토글) | 무장 상태에서 `RTL` 전이 → CH7 GPS Rescue                 | 동일                              |
 | **LAUNCH** | buttons[3] | 순간       | LOCK→TRACK 전이 트리거 (CRSF 채널로 안 나감)              | (무의미)                          |
 
 - **MODE**: 0=auto(영상유도, PX4 ACRO) / 1=manual(손제어, PX4 Altitude). CH6 flight mode 와 1:1.
 - **LAUNCH**: 순간 눌림(약 300ms 만 1). LOCK 상태에서 눌러야 TRACK(발사)으로 넘어간다.
-- **KILL**: 상태·모드 무관 즉시 모터 차단(비상). **공중에서도 듣는다** — 실수로 누르지 말 것.
+- **RTL**: 무장한 상태에서 누르면 control 노드가 `RTL` 상태로 전이하고 CH7을 GPS Rescue AUX로
+  올린다. Rescue 중이라도 ARM 스위치를 내리면 disarm 된다.
 
 ### 8.4 안전장치
 
-기본 상태는 **모드=자동 · ARM=DISARM · KILL=off** 다. 전원/모드 전환 직후 의도치 않은
+기본 상태는 **모드=자동 · ARM=DISARM · RTL=off** 다. 전원/모드 전환 직후 의도치 않은
 무장·급발진을 막기 위해 아래 안전장치가 있다.
 
 **① 재토글 상승엣지 (모드 전환·부팅 직후)**
@@ -708,13 +715,21 @@ manual 모드에서 ARM 하는 순간 **스틱이 idle** 이어야만 실제로 
 - SITL 가상 조종기는 throttle 스틱 기본이 **중앙**(호버)이라, ARM 전에 throttle 을 한 번
   맨 아래로 내려야 통과한다. auto arm 은 상태머신이 결정하므로 무관하다.
 
-**③ KILL 스위치** — buttons[0]. 상태·모드 무관, FC 가 직접 모터를 끊는다(공중 포함).
+**③ RTL 및 command 입력 단절**
+
+- `buttons[4]` RTL 요청은 control 노드가 처리한다. 직전에 실제 CH5가 무장 상태였을 때만
+  CH5를 유지한 채 `RTL`로 전이한다. 미무장 상태의 RTL 요청이나 입력 단절이 새 arm을 만들지 않는다.
+- ESP32 입력이 300 ms 넘게 끊기면 command 노드는 `command_lost` 이벤트만 발행하고, RTL 여부는
+  control 노드가 위의 실제 무장 상태로 판단한다. 이는 **Jetson–ESP32 USB 단절** 감지이며 ELRS RF
+  상실 감지는 아니다.
+- ELRS RF 상실은 Betaflight failsafe가 독립적으로 GPS Rescue를 수행하도록 설정한다. 따라서
+  조종기/ELRS 경로와 Jetson/ESP32 경로 모두에서 귀환 안전망을 가진다.
 
 > 제어 노드 측 처리(래치 `effective_arm`, auto/manual arm 소스 분기)는 [7.3](#73-auto--manual-모드) 참고.
 
 ### 8.5 SITL 가상 조종기 (arms_command_node)
 
-tkinter 창 하나 = 스틱 2개(L: yaw/throttle, R: roll/pitch) + MODE/KILL/ARM 버튼 + LAUNCH.
+tkinter 창 하나 = 스틱 2개(L: yaw/throttle, R: roll/pitch) + MODE/RTL/ARM 버튼 + LAUNCH.
 throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로 yaw 만 중앙 복귀)라, 자동→수동
 인계 시 스틱을 안 건드리면 그 자리에 뜬 채로 있다. 튜닝·표적 제어는 여기 없다(arms_sim/panel).
 
@@ -739,6 +754,21 @@ throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로
 >   (이를 위해 `MissionState` 에 `armed`, `manual_mode` 필드를 추가했다.)
 > - 모드가 막 바뀐 틱에서는 arm/state 값이 동시에 튀므로 `_cb_state` 가 상태 효과음을 억제한다
 >   (모드 전환음과 중복 방지).
+
+### 9.2 GPS 텔레메트리 표시
+
+`arms_control_node`는 ELRS 수신 CRSF GPS 프레임(type `0x02`)을 해석해 `/arms/gps`
+(`arms_msgs/GpsTelemetry`)로 발행한다. UI는 좌하단에 다음 형식으로 표시한다.
+
+```
+GPS: 3D FIX  12 SAT  ALT 85 m  GS 4.2 m/s
+```
+
+- 토픽에는 위도/경도, 고도, 지상속도, 지상침로, 위성 수를 담고, UI는 고도·지상속도·위성 수와 fix 상태를 표시한다.
+- CRSF GPS 프레임에는 MAVLink `GPS_FIX_TYPE`가 직접 없으므로 위성 수로 상태를 추정한다:
+  3개 미만 `NO FIX`, 3개 `2D FIX`, 4개 이상 `3D FIX`.
+- GPS 프레임이 없거나 `ui.gps_timeout_sec`(기본 2초)보다 오래되면 `GPS: NO GPS`로 표시한다.
+  이 상태는 RTK/DGPS 같은 정밀 fix를 주장하지 않는다.
 
 ## 10. 런치 파일 구조
 
@@ -816,7 +846,7 @@ arms_control_node  (state machine + PID)
       |
       | CRSF serial (30Hz)
       |   CH1: roll   CH2: pitch      CH3: throttle   CH4: yaw
-      |   CH5: arm    CH6: flightmode CH7: kill        CH8: (미사용)
+      |   CH5: arm    CH6: flightmode CH7: RTL/GPS Rescue  CH8: (미사용)
       |
       +─── SITL ──────────────────────────────────────────────
       |    /tmp/crsf_tx → [socat] → /tmp/crsf_rx

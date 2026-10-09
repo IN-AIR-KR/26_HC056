@@ -406,7 +406,7 @@ private:
     publishJoy(packet);
   }
 
-  void publishJoy(const ControllerPacket & packet)
+  void publishJoy(const ControllerPacket & packet, bool command_lost = false)
   {
     sensor_msgs::msg::Joy msg;
     msg.header.stamp = now();
@@ -422,15 +422,17 @@ private:
       static_cast<float>(packet.pitch) / 1000.0F
     };
 
-    //   buttons[0]=kill, [1]=arm, [2]=mode, [3]=launch
-    //     실기체 배선상 kill 스위치와 상태(arm) 스위치가 뒤바뀌어 있어 두 입력을 스왑한다.
-    //     → 물리 kill 스위치는 eland 필드로, 물리 상태/arm 스위치는 kill 필드로 들어온다.
+    //   buttons[0]=reserved, [1]=arm, [2]=mode, [3]=launch, [4]=rtl
+    //     실기체 배선상 물리 kill 스위치는 eland 필드로 들어온다. 이 스위치를
+    //     "RTL / GPS Rescue" 요청으로 재정의하고, 상태/arm 스위치(kill 필드)는 유지한다.
     //     fire 버튼 → launch 로 매핑.
     msg.buttons = {
-      packet.eland,   // buttons[0]=kill  (물리 kill 스위치)
+      0,              // buttons[0]=reserved (legacy kill slot)
       packet.kill,    // buttons[1]=arm   (물리 상태/arm 스위치)
       packet.mode,
-      packet.fire
+      packet.fire,
+      packet.eland,   // buttons[4]=rtl   (기존 물리 kill 스위치)
+      command_lost ? 1 : 0  // buttons[5]=command UART timeout
     };
 
     joy_pub_->publish(msg);
@@ -450,7 +452,7 @@ private:
       failsafe_active_ = true;
       RCLCPP_ERROR(
         get_logger(),
-        "No valid ESP32 packet for %lld ms. Publishing USB failsafe: throttle minimum, kill=1.",
+        "No valid ESP32 packet for %lld ms. Publishing command-lost notification.",
         static_cast<long long>(elapsed_ms));
     }
 
@@ -468,10 +470,12 @@ private:
     safe.yaw = 0;
     safe.fire = 0;
     safe.mode = 0;
+    // command 노드는 입력 단절 사실(button[5])만 전달한다. RTL 전이·CH7 출력은
+    // control 노드가 직전 실제 arm 상태를 확인한 뒤 결정한다.
     safe.eland = 0;
-    safe.kill = 1;
+    safe.kill = 0;
 
-    publishJoy(safe);
+    publishJoy(safe, true);
     last_failsafe_publish_time_ = now_steady;
   }
 

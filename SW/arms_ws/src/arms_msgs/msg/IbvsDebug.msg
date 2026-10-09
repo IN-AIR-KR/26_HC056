@@ -3,10 +3,10 @@
 #   각 항은 control_loop() 계산 순서대로다. 적용되지 않은 단계(IDLE/SEARCH 등)는 0/기본값.
 #   *_x = roll 축, *_y = pitch 축. 명령 단위는 각속도[deg/s] (ACRO, 각도 아님).
 std_msgs/Header header
-string  state               # IDLE | SEARCH | LOCK | TRACK | FIRE | RTL
+string  state               # IDLE | SEARCH | LOCK | TRACK | RTL
 int32   guidance_mode       # 0=PID 추적 / 1=PN / 2=IBVS
-bool    filter_active       # LOCK/TRACK/FIRE: 필터(LPF/alpha-beta) 갱신 중
-bool    cmd_active          # TRACK/FIRE: 실제 회전/추력 명령 생성 중
+bool    filter_active       # LOCK/TRACK: 필터(LPF/alpha-beta) 갱신 중
+bool    cmd_active          # TRACK: 실제 회전/추력 명령 생성 중
 bool    manual_out          # 수동/RTL 핸드오버(스틱 passthrough → 아래 명령은 미사용)
 float64 dt                  # 제어 틱 간격[s]
 

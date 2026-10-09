@@ -11,7 +11,8 @@
   · detections_raw = 칼만 적용 전 원시 검출 → 추후 KF 파라미터 오프라인 재현/튜닝용.
   · tag 파라미터를 주면 폴더명 뒤에 붙는다 (SITL: <일시>_sitl).
 
-/arms/command(Joy) 스위치: buttons[0]=kill, [1]=arm, [2]=mode(0=auto/1=manual), [3]=launch.
+/arms/command(Joy) 스위치: buttons[1]=arm, [2]=mode(0=auto/1=manual),
+buttons[3]=launch, [4]=rtl(GPS Rescue 요청), [5]=command UART timeout.
 """
 import os
 import signal

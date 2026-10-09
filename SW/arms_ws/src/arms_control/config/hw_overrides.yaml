@@ -31,12 +31,12 @@ arms_control_node:
       # 헛-LOCK 은 그대로 억제된다. detection 의 acquire.verify_conf 이하로 둘 것.
       detection_confidence_threshold: 0.25
 
-      # 충돌 판정(FIRE/RTL) 소스 — 실기체는 둘 다 끈다.
+      # 종말 RTL 소스 — 실기체는 둘 다 끈다.
       #   hit_rtl_via_referee: 실기체엔 /arms/hit 발행자가 없다(심판=SITL 전용) → false.
-      #   looming_fire_enabled: 자동 요격(비전 τ FIRE)은 아직 검증 전이라 비활성 → false.
-      #     실기체 요격을 켤 때 여기서 true 로 바꾼다.
+      #   looming_rtl_enabled: 자동 요격(비전 τ RTL)은 아직 검증 전이라 비활성 → false.
+      #     자동 종말을 쓸 때 여기서 true 로 바꾼다.
       hit_rtl_via_referee: false
-      looming_fire_enabled: false
+      looming_rtl_enabled: false
 
     control:
       # ── IBVS 카메라 캘리브레이션 (mode 2, 실기체 미측정) ─────────────────
@@ -109,7 +109,6 @@ arms_control_node:
       # 자동 모드: 스위치와 분리하고 상태머신 상태로 컨트롤 노드가 결정한다.
       #   SEARCH/LOCK(throttle 0) 에서 미리 arm → TRACK 에서 throttle↑ 전에 무장
       #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
-      # auto_arm_states: ["TRACK", "FIRE", "RTL"]
-      auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]
-
+      # auto_arm_states: ["TRACK", "RTL"]
+      auto_arm_states: ["SEARCH", "LOCK", "TRACK", "RTL"]
 

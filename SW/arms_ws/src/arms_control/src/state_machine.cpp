@@ -13,7 +13,6 @@ std::string to_string(State s)
     case State::SEARCH: return "SEARCH";
     case State::LOCK:   return "LOCK";
     case State::TRACK:  return "TRACK";
-    case State::FIRE:   return "FIRE";
     case State::RTL:    return "RTL";
   }
   return "UNKNOWN";
@@ -76,9 +75,7 @@ void StateMachine::on_detection(
       transition(State::LOCK);
       target_locked_ = true;
     }
-  } else if (state_ == State::LOCK ||
-             state_ == State::TRACK ||
-             state_ == State::FIRE) {
+  } else if (state_ == State::LOCK || state_ == State::TRACK) {
     if (lock_timer_running_) {
       lock_elapsed_sec_ =
         std::chrono::duration<double>(now - lock_start_time_).count();
@@ -97,31 +94,33 @@ void StateMachine::on_launch_button()
   }
 }
 
-void StateMachine::on_looming(double tau_sec, double bbox_size)
+void StateMachine::on_intercept(double tau_sec, double bbox_size)
 {
   if (state_ != State::TRACK) return;
-  // ① 최소 크기 게이트: 표적이 화면에서 충분히 커야(=가까워야) 발사. 원거리/노이즈 배제.
+  // ① 최소 크기 게이트: 표적이 화면에서 충분히 커야(=가까워야) 종말 처리. 원거리/노이즈 배제.
   if (bbox_size < params_.loom_s_min) return;
-  // ② τ 유효성: 표적이 커지는(닫히는) 중일 때만 τ>0. 정지/멀어짐이면 무한대 → 발사 안 함.
+  // ② τ 유효성: 표적이 커지는(닫히는) 중일 때만 τ>0.
   if (!(tau_sec > 0.0)) return;
-  // ③ FIRE = 곧 충돌(τ 작음) + 정면 정렬. τ 는 스케일 불변이라 표적크기·카메라 무관.
+  // ③ 곧 충돌(τ 작음) + 정면 정렬이면 추가 payload 단계 없이 바로 RTL.
   double emag = std::hypot(error_x_, error_y_);
-  if (tau_sec < params_.tau_fire_sec && emag < params_.fire_align_tol) {
-    transition(State::FIRE);
-  }
-}
-
-void StateMachine::on_fire_complete()
-{
-  if (state_ == State::FIRE) {
+  if (tau_sec < params_.tau_rtl_sec && emag < params_.intercept_align_tol) {
     transition(State::RTL);
   }
 }
 
 void StateMachine::on_hit()
 {
-  // 심판이 실제 직격(거리)을 보고하면 즉시 RTL. 교전 중(TRACK/FIRE)에서만.
-  if (state_ == State::TRACK || state_ == State::FIRE) {
+  // 심판이 실제 직격(거리)을 보고하면 TRACK에서 즉시 RTL.
+  if (state_ == State::TRACK) {
+    transition(State::RTL);
+  }
+}
+
+void StateMachine::request_rtl()
+{
+  // RTL은 ARM 된 기체에 대해서만 control 노드가 호출한다. 현재 미션 단계와
+  // 무관하게 유도를 멈추고 FC의 귀환 모드로 넘긴다.
+  if (state_ != State::RTL) {
     transition(State::RTL);
   }
 }
@@ -147,13 +146,13 @@ void StateMachine::disarm()
 
 void StateMachine::on_detection_timeout()
 {
-  if (state_ == State::SEARCH ||
-      state_ == State::LOCK   ||
-      state_ == State::TRACK)
-  {
-    if (state_ != State::SEARCH) {
-      transition(State::SEARCH);
-    }
+  if (state_ == State::TRACK) {
+    // 추적 중 표적을 timeout까지 놓치면 재수색하지 않고 안전하게 귀환한다.
+    transition(State::RTL);
+    return;
+  }
+  if (state_ == State::SEARCH || state_ == State::LOCK) {
+    if (state_ != State::SEARCH) transition(State::SEARCH);
     lock_timer_running_ = false;
     lock_elapsed_sec_   = 0.0;
   }

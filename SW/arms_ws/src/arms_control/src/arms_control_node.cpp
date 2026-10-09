@@ -15,6 +15,7 @@
 #include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
 #include "arms_msgs/msg/crsf_telemetry.hpp"
+#include "arms_msgs/msg/gps_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/ibvs_debug.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
@@ -37,11 +38,10 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.detection_confidence_threshold", 0.32);
     declare_parameter("mission.lock_duration_sec", 1.0);
     declare_parameter("mission.detection_timeout_sec", 1.0);
-    declare_parameter("mission.fire_align_tol", 0.2);  // FIRE 정렬 허용오차(가짜명중 방지)
-    // 비전 looming(τ) 기반 FIRE — 거리센서 없이 bbox 팽창률로 충돌 임박을 판정.
-    //   (3D 거리는 실기체에서 못 쓰므로 sim 에서도 제거. FIRE 는 τ 로만.)
-    declare_parameter("mission.tau_fire_sec", 0.3);      // 충돌까지 시간(τ) 임계 [s]
-    declare_parameter("mission.loom_s_min", 0.1);        // FIRE 최소 bbox 크기(정규화)
+    declare_parameter("mission.intercept_align_tol", 0.2);  // 종말 RTL 정렬 허용오차
+    // 비전 looming(τ) 기반 종말 RTL — bbox 팽창률로 충돌 임박을 판정한다.
+    declare_parameter("mission.tau_rtl_sec", 0.3);       // 충돌까지 시간(τ) 임계 [s]
+    declare_parameter("mission.loom_s_min", 0.1);        // 종말 RTL 최소 bbox 크기(정규화)
     declare_parameter("mission.loom_size_alpha", 0.3);   // bbox 크기 EMA (지터 억제)
     declare_parameter("mission.loom_rate_alpha", 0.3);   // 크기변화율(ṡ) EMA
 
@@ -63,20 +63,19 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.deriv_lpf_alpha", 0.25);
 
     declare_parameter("mission.sitl_auto_launch", true);
-    // 충돌 판정(FIRE/RTL) 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
+    // 종말 RTL 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
     //   hit_rtl_via_referee: 심판 /arms/hit(지상진실 접촉)를 받으면 RTL.
     //       SITL 전용(Gazebo 접촉 심판이 /arms/hit 발행). 실기체엔 발행자가 없어 false.
-    //   looming_fire_enabled: 비전 τ(bbox 팽창률)로 충돌 임박을 판정해 FIRE.
-    //       실기체의 자동 요격 경로. 지금은 비활성(false), 실기체 검증되면 true 로 켠다.
-    //   조합: SITL=(true,false) / 실기체 현재=(false,false) / 실기체 요격 켤 때=(false,true).
+    //   looming_rtl_enabled: 비전 τ(bbox 팽창률)로 충돌 임박을 판정해 RTL.
+    //   조합: SITL=(true,false) / 실기체 현재=(false,false) / 자동 종말=(false,true).
     declare_parameter("mission.hit_rtl_via_referee", true);
-    declare_parameter("mission.looming_fire_enabled", false);
+    declare_parameter("mission.looming_rtl_enabled", false);
     declare_parameter("mission.auto_launch_delay_sec", 0.5);
 
     // 자동 모드 CH5(FC arm)를 켜는 상태 목록. 자동 모드에선 arm 을 스위치와 분리해
     //   컨트롤 노드가 상태머신 상태로 결정한다. 기본=발사(TRACK)부터 무장.
     //   나중에 SEARCH 등에서 arm 하도록 바꾸려면 이 목록만 수정하면 된다.
-    declare_parameter("control.auto_arm_states", std::vector<std::string>{"SEARCH", "LOCK", "TRACK", "FIRE", "RTL"});
+    declare_parameter("control.auto_arm_states", std::vector<std::string>{"SEARCH", "LOCK", "TRACK", "RTL"});
 
     // 수동 arm pre-arm 안전 확인: arm 순간 스틱이 idle(throttle 최저 + roll/pitch/yaw 중앙)
     //   이어야만 실제 arm 되게 한다(급상승/오발 방지). 한 번 arm 되면 비행 중엔 무관.
@@ -239,7 +238,7 @@ class ArmsControlNode : public rclcpp::Node {
     //   tau_ease_full  에서 최소 배율까지 눌린다.
     // 표적을 아예 못 볼 때/안 다가올 때는 τ=+inf 이므로 자동으로 영향 없음(1.0).
     declare_parameter("control.tau_ease_start", 1.0);   // 이 초 전부터 서서히 감속 시작[s]
-    declare_parameter("control.tau_ease_full", 0.3);    // 이 초에서 최소 배율 적용[s] (tau_fire_sec 과 비슷한 크기가 자연스럽다)
+    declare_parameter("control.tau_ease_full", 0.3);    // 이 초에서 최소 배율 적용[s] (tau_rtl_sec과 비슷한 크기가 자연스럽다)
     declare_parameter("control.tau_ease_min_scale", 0.3); // τ 임박시 추력 배율 하한 (0=완전 hover, 1=끔)
 
     // ----------------------------------------------------------------
@@ -252,10 +251,10 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.lock_duration_sec").as_double();
     sm_params.detection_timeout_sec =
         get_parameter("mission.detection_timeout_sec").as_double();
-    sm_params.fire_align_tol =
-        get_parameter("mission.fire_align_tol").as_double();
-    sm_params.tau_fire_sec =
-        get_parameter("mission.tau_fire_sec").as_double();
+    sm_params.intercept_align_tol =
+        get_parameter("mission.intercept_align_tol").as_double();
+    sm_params.tau_rtl_sec =
+        get_parameter("mission.tau_rtl_sec").as_double();
     sm_params.loom_s_min =
         get_parameter("mission.loom_s_min").as_double();
     loom_size_alpha_ = get_parameter("mission.loom_size_alpha").as_double();
@@ -310,7 +309,7 @@ class ArmsControlNode : public rclcpp::Node {
 
     sitl_auto_launch_ = get_parameter("mission.sitl_auto_launch").as_bool();
     hit_rtl_via_referee_ = get_parameter("mission.hit_rtl_via_referee").as_bool();
-    looming_fire_enabled_ = get_parameter("mission.looming_fire_enabled").as_bool();
+    looming_rtl_enabled_ = get_parameter("mission.looming_rtl_enabled").as_bool();
     auto_launch_delay_sec_ =
         get_parameter("mission.auto_launch_delay_sec").as_double();
 
@@ -402,8 +401,8 @@ class ArmsControlNode : public rclcpp::Node {
               pursuit_center_boost_ = p.as_bool();
             else if (n == "mission.hit_rtl_via_referee")
               hit_rtl_via_referee_ = p.as_bool();
-            else if (n == "mission.looming_fire_enabled")
-              looming_fire_enabled_ = p.as_bool();
+            else if (n == "mission.looming_rtl_enabled")
+              looming_rtl_enabled_ = p.as_bool();
             else if (n == "control.err_dot_alpha")
               err_dot_alpha_ = p.as_double();
             else if (n == "control.err_dot_clamp")
@@ -440,8 +439,8 @@ class ArmsControlNode : public rclcpp::Node {
               ibvs_center_gain_ = p.as_double();
             else if (n == "control.ibvs_los_rate_gain")
               ibvs_los_rate_gain_ = p.as_double();
-            else if (n == "mission.tau_fire_sec")
-              sm_->set_tau_fire(p.as_double());
+            else if (n == "mission.tau_rtl_sec")
+              sm_->set_tau_rtl(p.as_double());
             else if (n == "mission.loom_s_min")
               sm_->set_loom_s_min(p.as_double());
             else if (n == "mission.loom_size_alpha")
@@ -511,8 +510,11 @@ class ArmsControlNode : public rclcpp::Node {
     // CRSF 수신(RX) 텔레메트리 통합 발행: 배터리/자세(RPY)/수직속도/비행모드/링크통계 → /arms/crsf_rx.
     //   (배터리는 별도 /arms/battery 없이 이 토픽으로만 나간다. UI 도 이걸 구독.)
     pub_crsf_rx_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf_rx", 10);
-    // CRSF 송신(TX) 채널 로그용(구독자 있을 때만). [roll,pitch,thr,yaw,arm,mode,kill,ch8] CRSF 단위.
+    // CRSF 송신(TX) 채널 로그용(구독자 있을 때만).
+    // [roll,pitch,thr,yaw,arm,mode,rtl,ch8] CRSF 단위.
     pub_crsf_tx_ = create_publisher<std_msgs::msg::Int16MultiArray>("/arms/crsf_tx", 10);
+    // FC → ELRS → companion 경로의 GPS frame(0x02)을 별도 발행한다.
+    pub_gps_ = create_publisher<arms_msgs::msg::GpsTelemetry>("/arms/gps", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -537,7 +539,8 @@ class ArmsControlNode : public rclcpp::Node {
           auto btn = [&](int i) -> int {
             return (static_cast<size_t>(i) < msg->buttons.size()) ? msg->buttons[i] : 0;
           };
-          int kill = btn(0), arm = btn(1), mode = btn(2), launch = btn(3);
+          int arm = btn(1), mode = btn(2), launch = btn(3), rtl = btn(4);
+          int command_lost = btn(5);
 
           // MODE: 레벨 스위치. 0=auto(영상유도, ACRO/각속도), 1=manual(손제어, 자동수평)
           bool new_manual = static_cast<bool>(mode);
@@ -565,31 +568,17 @@ class ArmsControlNode : public rclcpp::Node {
             sm_->on_launch_button();
           }
 
-          const bool kill_edge = kill && !prev_btn_[0];   // kill 상승엣지
-          joy_kill_ = static_cast<bool>(kill);
           joy_arm_  = static_cast<bool>(arm);
+          joy_rtl_  = static_cast<bool>(rtl);
+          joy_command_lost_ = static_cast<bool>(command_lost);
           // ARM 스위치를 기본 위치(DISARM)로 내리면 재토글 래치 해제.
           if (!joy_arm_) require_arm_reset_ = false;
-          // KILL 이 걸리면 재무장 래치를 세운다(위 해제보다 우선) → kill 을 내려도
-          //   arm 스위치를 재토글(DOWN→UP)해야만 다시 무장. 실수로 즉시 재무장 방지.
-          if (kill_edge) {
-            require_arm_reset_ = true;
-            RCLCPP_WARN(get_logger(), "KILL — 강제 disarm (재무장하려면 ARM 재토글)");
-          }
-          prev_btn_[0] = kill; prev_btn_[1] = arm;
+          prev_btn_[1] = arm;
           prev_btn_[2] = mode; prev_btn_[3] = launch;
+          prev_btn_[4] = rtl;
         });
 
-    // 심판(referee)의 직격 통지 — 로그만 남기고 상태머신은 건드리지 않는다.
-    //
-    // 예전에는 이게 on_external_hit() 로 들어가 TRACK/LOCK 을 곧장 FIRE 로
-    // 밀었다. 그러면 영상 파이프라인이 한 번도 발사 판정을 못 해도 미션이
-    // 성공으로 끝나서, 검출/τ 판정이 고장난 걸 심판이 덮어버린다. 채점자가
-    // 응시자 답을 대신 써 주는 배선이라 성능 측정이 오염된다.
-    //
-    // FIRE 는 이제 on_vision_tick(τ, bbox) 한 경로로만 들어간다. 심판은
-    // 그것과 독립적으로 "실제로 닿았는가"만 보고한다 — 둘이 어긋나는 것
-    // 자체가 정보다(닿았는데 FIRE 없음 = 판정 실패, 그 반대 = 오발).
+    // 심판(referee)의 직격 통지. SITL에서 실제 접촉이 확인되면 TRACK을 RTL로 전이한다.
     sub_hit_ = create_subscription<std_msgs::msg::Empty>(
         "/arms/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
           if (hit_rtl_via_referee_) {
@@ -621,9 +610,10 @@ class ArmsControlNode : public rclcpp::Node {
           align_locked_ = false;
           auto_armed_ = manual_armed_ = false;
           lock_timer_started_ = auto_launched_ = false;
-          fire_sent_ = rtl_sent_ = false;
-          joy_kill_ = false;
+          rtl_sent_ = false;
           joy_arm_ = false;
+          joy_rtl_ = false;
+          joy_command_lost_ = false;
           require_arm_reset_ = true;
           RCLCPP_INFO(get_logger(), "실험 RESET: 제어 상태 IDLE, ARM 재토글 필요");
         });
@@ -645,9 +635,9 @@ class ArmsControlNode : public rclcpp::Node {
   // ----------------------------------------------------------------
   // Helpers
   // ----------------------------------------------------------------
-  // 비전 looming: bbox 크기의 팽창률로 충돌까지 시간 τ 를 추정해 FIRE 판정에 넘긴다.
+  // 비전 looming: bbox 크기의 팽창률로 충돌까지 시간 τ 를 추정해 종말 RTL 판정에 넘긴다.
   //   τ = s/ṡ = d/v_closing. 초점거리·표적 실제크기가 소거되므로 카메라 스펙·표적
-  //   크기 모두에 무관하다(작은 x500도, 큰 풍선도 같은 로직으로 접촉 직전 발사).
+  //   크기 모두에 무관하다.
   void update_looming(const arms_msgs::msg::DetectionArray::SharedPtr & msg) {
     if (msg->detections.empty()) {
       loom_init_ = false;
@@ -672,16 +662,13 @@ class ArmsControlNode : public rclcpp::Node {
     loom_s_ema_ = loom_size_alpha_ * s + (1.0 - loom_size_alpha_) * loom_s_ema_;
     double rate = (loom_s_ema_ - s_prev) / dt;  // ṡ (정규화크기/초)
     loom_rate_ema_ = loom_rate_alpha_ * rate + (1.0 - loom_rate_alpha_) * loom_rate_ema_;
-    // 닫히는 중(ṡ>0)일 때만 τ 유효. 아니면 무한대로 두어 FIRE 안 되게(=추력도 안 눌림).
+    // 닫히는 중(ṡ>0)일 때만 τ 유효. 아니면 무한대로 둔다.
     const double tau = (loom_rate_ema_ > 1e-4)
                    ? (loom_s_ema_ / loom_rate_ema_)
                    : std::numeric_limits<double>::infinity();
-    tau_sec_ = tau;   // control_loop() 의 추력 스케줄링이 재사용 (FIRE 활성 여부와 무관하게 항상 갱신)
-    // 비전 τ FIRE 는 looming_fire_enabled 일 때만. 꺼져 있으면(현재 실기체·SITL)
-    //   τ 로 FIRE 하지 않는다 — TRACK 유지하며 추격만 하고 FIRE 상태엔 진입 안 함.
-    //   SITL 은 대신 심판 /arms/hit 로 RTL, 실기체는 지금 자동 요격을 아직 안 켬.
-    if (looming_fire_enabled_) {
-      sm_->on_looming(tau, loom_s_ema_);
+    tau_sec_ = tau;   // control_loop() 의 추력 스케줄링이 재사용
+    if (looming_rtl_enabled_) {
+      sm_->on_intercept(tau, loom_s_ema_);
     }
 
     geometry_msgs::msg::Vector3 lm;
@@ -920,6 +907,37 @@ class ArmsControlNode : public rclcpp::Node {
         crsf_telem_.pitch_deg = static_cast<float>(be16(0) / 10000.0 * R2D);
         crsf_telem_.roll_deg  = static_cast<float>(be16(2) / 10000.0 * R2D);
         crsf_telem_.yaw_deg   = static_cast<float>(be16(4) / 10000.0 * R2D);
+      } else if (frame.type == 0x02 && frame.payload.size() >= 15) {
+        // GPS: lat/lon E7, speed 0.1 km/h, course 0.01 deg, altitude+1000 m, sats.
+        auto be32 = [&](size_t i) {
+          return static_cast<int32_t>(
+            (static_cast<uint32_t>(frame.payload[i]) << 24) |
+            (static_cast<uint32_t>(frame.payload[i + 1]) << 16) |
+            (static_cast<uint32_t>(frame.payload[i + 2]) << 8) |
+             static_cast<uint32_t>(frame.payload[i + 3]));
+        };
+        auto beu16 = [&](size_t i) {
+          return static_cast<uint16_t>(
+            (static_cast<uint16_t>(frame.payload[i]) << 8) | frame.payload[i + 1]);
+        };
+        arms_msgs::msg::GpsTelemetry gps;
+        gps.header.stamp = now();
+        gps.latitude_deg = static_cast<double>(be32(0)) / 1e7;
+        gps.longitude_deg = static_cast<double>(be32(4)) / 1e7;
+        gps.ground_speed_mps = static_cast<float>(beu16(8)) / 36.0f;
+        gps.ground_course_deg = static_cast<float>(beu16(10)) / 100.0f;
+        gps.altitude_m = static_cast<float>(beu16(12)) - 1000.0f;
+        gps.satellites = frame.payload[14];
+        // CRSF GPS에는 MAVLink GPS_RAW_INT의 fix_type이 없다. MAVLink 명칭을
+        // UI/로그에서 일관되게 쓰기 위해 위성 수로만 보수적으로 추정한다.
+        // 0=NO_GPS는 "GPS frame 자체가 전혀 없음"에만 쓰고, 수신 frame에서
+        // sats<3은 1=NO_FIX, 3은 2=2D_FIX, 4 이상은 3=3D_FIX로 기록한다.
+        gps.mavlink_fix_type = gps.satellites < 3 ? 1
+                             : gps.satellites < 4 ? 2
+                                                   : 3;
+        gps.fix_type_inferred = true;
+        gps.valid_fix = gps.mavlink_fix_type >= 3;
+        pub_gps_->publish(gps);
       } else if (frame.type == 0x07 && frame.payload.size() >= 2) {
         // 수직속도(Vario): int16 big-endian, 단위 cm/s → m/s.
         const int16_t vspeed_cms = static_cast<int16_t>(
@@ -973,9 +991,9 @@ class ArmsControlNode : public rclcpp::Node {
     idbg.tau_ease = 1.0;
 
     // LOCK 단계부터 필터(LOS/오차미분/alpha-beta 추정)를 미리 갱신해둔다.
-    // 실제 회전/추력 명령은 여전히 TRACK/FIRE 에서만 나가지만(아래 안쪽 if),
-    // 발사(TRACK 진입) 순간 filt_err_x_/y_ 등이 0부터 다시 시작하는 콜드스타트를 없애기 위함.
-    if (state == State::LOCK || state == State::TRACK || state == State::FIRE) {
+    // 실제 회전/추력 명령은 TRACK에서만 나가지만(아래 안쪽 if),
+    // TRACK 진입 순간 filt_err_x_/y_ 등이 0부터 다시 시작하는 콜드스타트를 없애기 위함.
+    if (state == State::LOCK || state == State::TRACK) {
       double raw_ex = sm_->current_error_x();
       double raw_ey = sm_->current_error_y();
       filt_err_x_ =
@@ -1054,8 +1072,8 @@ class ArmsControlNode : public rclcpp::Node {
                     filt_err_x_, filt_err_y_, raw_ex, raw_ey);
       }
 
-      // ---- 여기부터 실제 회전/추력 명령을 만든다: TRACK/FIRE(발사 이후)에서만 ----
-      if(state == State::TRACK || state == State::FIRE) {
+      // ---- 여기부터 실제 회전/추력 명령을 만든다: TRACK에서만 ----
+      if (state == State::TRACK) {
       idbg.cmd_active = true;
       if (guidance_mode_ == 2) {
         // ===== IBVS 공선유도 (배리어 Lyapunov) =====
@@ -1277,7 +1295,11 @@ class ArmsControlNode : public rclcpp::Node {
     //   · 자동: idle/search 게이트에 적용 (기본 IDLE, SEARCH 재토글 안전장치)
     //   · 수동: CH5 arm 에 적용 (기본 DISARM, arm 재토글 안전장치)
     //   ※ 자동 CH5 arm 자체는 스위치와 분리되어 상태머신 상태(auto_arm_states_)로 결정한다.
-    const bool effective_arm = joy_arm_ && !require_arm_reset_;
+    // command UART가 끊긴 경우에는 직전 틱에서 실제로 arm 상태였던 기체만 무장을
+    // 유지해 FC GPS Rescue로 넘긴다. 미무장 상태의 통신 단절이 새 arm을 만들면 안 된다.
+    const bool effective_arm =
+        (joy_arm_ && !require_arm_reset_) ||
+        (joy_command_lost_ && last_ch5_armed_);
 
     // ---- 상태 스위치 = idle/search 게이트 (auto 모드) ----
     //   자동 모드에서 이 스위치는 arm 과 분리되어 미션 상태(IDLE↔SEARCH)만 제어한다.
@@ -1356,23 +1378,28 @@ class ArmsControlNode : public rclcpp::Node {
       prearm_blocked_ = false;
     }
 
-    // ---- RTL 핸드오버 ----
-    //   FIRE 후 RTL 에서는 조종사가 수동 스위치를 안 올려도 자동으로 자동수평 모드(CH6 high)
-    //   + 스틱 passthrough 로 넘어간다. 자동수평은 고도유지가 없으므로(throttle 직결)
-    //   조종사가 throttle·스틱으로 직접 몰고 와 착륙시킨다.
-    const bool rtl_handover = (state == State::RTL);
-    const bool manual_out = joy_manual_mode_ || rtl_handover;
+    // AUTO 처리에서 상태가 바뀌었을 수 있으므로 최신 상태를 다시 읽는다.
+    state = sm_->state();
 
     // ---- CH5(FC arm) 결정 ----
-    //   KILL: 최우선 — 눌려 있으면 무조건 disarm(CH5 low). 즉시 모터 정지.
-    //   RTL: 이미 비행 중이므로 무조건 armed 유지 (착지 후 auto-disarm).
-    //   수동: manual_armed_ (재토글 안전장치 + pre-arm 스틱 idle 확인).
-    //   자동: 스위치와 분리 — 상태머신 상태 기반(auto_arm_states_)으로 컨트롤 노드가 결정.
-    const bool ch5_armed =
-        joy_kill_          ? false
-        : rtl_handover     ? true
-        : joy_manual_mode_ ? manual_armed_
-                           : (auto_arm_states_.count(to_string(state)) > 0);
+    // ARM 스위치를 내리면 수동/자동/RTL 모두 CH5를 내린다. 따라서 RTL 중 ARM OFF는
+    // 귀환 취소가 아니라 비상 motor-cut이다. GPS Rescue를 쓸 때 ARM은 계속 ON이어야 한다.
+    const bool base_ch5_armed =
+        joy_manual_mode_ ? manual_armed_
+                         : (effective_arm && auto_armed_ &&
+                            auto_arm_states_.count(to_string(state)) > 0);
+
+    // RTL은 "이미 ARM 된 기체"에서만 받아들인다. 자동/수동 어느 쪽이든 상태머신을
+    // RTL로 옮겨 UI에 명확히 표시하고, 실제 귀환은 CH7의 FC GPS Rescue 매핑이 수행한다.
+    const bool rtl_active = (joy_rtl_ || joy_command_lost_) && base_ch5_armed;
+    if (rtl_active && state != State::RTL) {
+      sm_->request_rtl();
+      state = sm_->state();
+      RCLCPP_WARN(get_logger(), "RTL requested — FC GPS Rescue AUX asserted");
+    }
+    const bool rtl_handover = (state == State::RTL);
+    const bool manual_out = joy_manual_mode_ || rtl_handover;
+    const bool ch5_armed = base_ch5_armed;
 
     // ---- CRSF output ----
     {
@@ -1409,8 +1436,10 @@ class ArmsControlNode : public rclcpp::Node {
       //   RTL 이면 자동으로 자동수평(수동)으로 넘어가 조종사가 이어받아 착륙.
       crsf[5] = manual_out ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
-      // CH7: kill 지시(참고용). 실제 kill 은 CH5 를 강제 disarm 해 처리하므로 FC 매핑 불필요.
-      crsf[6] = joy_kill_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+      // CH7: RTL/GPS Rescue. Betaflight의 GPS RESCUE mode에 이 AUX를 매핑한다.
+      // 조종기 요청뿐 아니라 target loss/종말 판정/심판 hit로 상태가 RTL이 된 경우도
+      // 동일하게 FC Rescue를 활성화해야 실제 귀환이 수행된다.
+      crsf[6] = rtl_handover ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH8: 미사용 (crsf.fill(CRSF_MIN)으로 172 고정)
 
@@ -1423,7 +1452,7 @@ class ArmsControlNode : public rclcpp::Node {
       // 송신 CRSF 채널 로그(구독자 있을 때만; bag record 가 구독하면 자동 on).
       if (pub_crsf_tx_->get_subscription_count() > 0) {
         std_msgs::msg::Int16MultiArray ch;
-        ch.data = {                                                // [roll,pitch,thr,yaw,arm,mode,kill,ch8]
+        ch.data = {                                                // [roll,pitch,thr,yaw,arm,mode,rtl,ch8]
           static_cast<int16_t>(crsf[0]), static_cast<int16_t>(crsf[1]),
           static_cast<int16_t>(crsf[2]), static_cast<int16_t>(crsf[3]),
           static_cast<int16_t>(crsf[4]), static_cast<int16_t>(crsf[5]),
@@ -1431,6 +1460,8 @@ class ArmsControlNode : public rclcpp::Node {
         pub_crsf_tx_->publish(ch);
       }
     }
+
+    last_ch5_armed_ = ch5_armed;
 
     // ---- IBVS 디버그 발행 — 구독자 있을 때만 (auto_save 녹화기가 구독) ----
     if (pub_ibvs_dbg_->get_subscription_count() > 0) {
@@ -1457,14 +1488,6 @@ class ArmsControlNode : public rclcpp::Node {
       pub_dbg_->publish(dbg);
     }
 
-    // ---- FIRE one-shot ----
-    // FIRE 는 looming_fire_enabled=true 일 때만 진입한다(꺼져 있으면 on_looming 게이트에서 차단).
-    if (state == State::FIRE && !fire_sent_) {
-      fire_sent_ = true;
-      RCLCPP_INFO(get_logger(), "FIRE state — payload trigger signaled via mission_state.");
-      sm_->on_fire_complete();
-    }
-
     // ---- RTL one-shot ----
     // NOTE: land/RTL 전용 CRSF 채널은 제거됨(CH6는 flight mode). 자동 착륙은
     // 별도 경로(예: manual 모드 Altitude 전환 후 수동 착륙)로 처리 필요.
@@ -1474,7 +1497,6 @@ class ArmsControlNode : public rclcpp::Node {
     }
 
     if (state == State::IDLE) {
-      fire_sent_ = false;
       rtl_sent_ = false;
     }
 
@@ -1571,7 +1593,7 @@ class ArmsControlNode : public rclcpp::Node {
 
   bool sitl_auto_launch_{false};
   bool hit_rtl_via_referee_{true};    // 심판 /arms/hit → RTL. SITL 지상진실 판정(실기체는 발행자 없음).
-  bool looming_fire_enabled_{false};  // 비전 τ → FIRE. 실기체 자동 요격 경로(현재 비활성).
+  bool looming_rtl_enabled_{false};   // 비전 τ → RTL 종말 경로(현재 비활성).
   double auto_launch_delay_sec_{0.5};
   bool lock_timer_started_{false};
   bool auto_launched_{false};
@@ -1592,10 +1614,12 @@ class ArmsControlNode : public rclcpp::Node {
 
   // Joy state
   std::array<float, 4> joy_axes_{};
-  bool joy_kill_{false};
   bool joy_arm_{false};
+  bool joy_rtl_{false};
+  bool joy_command_lost_{false};
+  bool last_ch5_armed_{false};
   bool joy_manual_mode_{false};
-  std::array<int, 4> prev_btn_{};
+  std::array<int, 5> prev_btn_{};
   // ARM 재토글 안전장치: true 면 ARM 스위치가 올라가 있어도 arm 안 됨.
   //   부팅 시 true(스위치 이미 올라가 있어도 즉시 arm 방지), 모드 전환 시 true,
   //   ARM 스위치를 DISARM 으로 내리면 false. → 재토글해야만 arm.
@@ -1672,6 +1696,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<arms_msgs::msg::IbvsDebug>::SharedPtr pub_ibvs_dbg_;      // IBVS 디버그 → /arms/ibvs_debug
   rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_rx_;   // CRSF 수신 텔레메트리 → /arms/crsf_rx
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_crsf_tx_;  // CRSF 송신 채널 로그 → /arms/crsf_tx
+  rclcpp::Publisher<arms_msgs::msg::GpsTelemetry>::SharedPtr pub_gps_;        // CRSF GPS → /arms/gps
   int battery_detected_cells_{0};    // 전압으로 자동 감지한 셀 수(첫 유효 전압에서 1회 감지 후 래치)
   double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
   double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
@@ -1683,7 +1708,6 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Time last_tick_;
 
-  bool fire_sent_{false};
   bool rtl_sent_{false};
 };
 

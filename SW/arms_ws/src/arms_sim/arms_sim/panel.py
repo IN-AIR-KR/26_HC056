@@ -4,7 +4,7 @@ panel.py — A.R.M.S. SITL 튜닝/심판 콘솔 (tkinter GUI)  [arms_sim]
 
 SITL 전용 개발 콘솔. /arms/command 는 발행하지 않는다 (그건 가상 조종기 =
 arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
-  - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/FIRE/RTL) — 읽기전용 구독
+  - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/RTL) — 읽기전용 구독
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET → Gazebo world reset + PX4 SITL 재시작 (Gazebo 프로세스는 유지)
@@ -35,7 +35,6 @@ STATE_COLOR = {
     "SEARCH": "#f5a623",
     "LOCK":   "#f57c00",
     "TRACK":  "#d0021b",
-    "FIRE":   "#ff1744",
     "RTL":    "#2979ff",
 }
 

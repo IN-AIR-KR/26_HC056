@@ -5,7 +5,7 @@ arms_command_node.py — A.R.M.S. SITL 가상 조종기 (tkinter GUI)
 실기체의 물리 조종기(ESP32 → arms_command_hw_node)에 대응하는 SITL 쌍둥이.
 오직 /arms/command (sensor_msgs/Joy) 만 발행한다:
   - 스틱 드래그        → axes  (roll/pitch/throttle/yaw)
-  - MODE/KILL/ARM 버튼 → buttons[2]/[0]/[1]  (화면 순서 ≠ 인덱스 순서)
+  - MODE/RTL/ARM 버튼 → buttons[2]/[4]/[1]  (화면 순서 ≠ 인덱스 순서)
   - LAUNCH 버튼        → buttons[3] (수동 TRACK 전환, 순간 눌림)
 
 튜닝/심판 콘솔은 arms_sim 패키지의 panel 노드로 분리됨.
@@ -35,7 +35,8 @@ class ControllerNode(Node):
         super().__init__("arms_command_node")
         self._joy_pub = self.create_publisher(Joy, "/arms/command", 10)
         self._axes = [0.0, 0.0, 0.0, 0.0]
-        self._buttons = [0, 0, 0, 0]
+        # [reserved, arm, mode, launch, rtl, command_lost]
+        self._buttons = [0, 0, 0, 0, 0, 0]
         self.create_timer(0.05, self._publish_joy)  # 20 Hz
 
     def _publish_joy(self):
@@ -64,7 +65,7 @@ class ControllerNode(Node):
 
 
 class ControllerGUI:
-    """가상 조종기 창 — 스틱 2개 + 모드/킬/암 버튼 + LAUNCH."""
+    """가상 조종기 창 — 스틱 2개 + 모드/RTL/암 버튼 + LAUNCH."""
 
     def __init__(self, root, node):
         self.root = root
@@ -133,15 +134,15 @@ class ControllerGUI:
         for c in range(3):
             btn_frm.grid_columnconfigure(c, weight=1, uniform="sw")
 
-        # 순서: 모드 / 킬 / 암-디스암
+        # 순서: 모드 / RTL(GPS Rescue) / 암-디스암
         self.mode_btn = tk.Button(btn_frm, text="모드: 자동", height=2,
                                   font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
                                   activebackground="#2e7d32", command=self._toggle_mode)
         self.mode_btn.grid(row=0, column=0, padx=(0, 3), sticky="ew")
-        self.kill_btn = tk.Button(btn_frm, text="KILL", height=2,
+        self.rtl_btn = tk.Button(btn_frm, text="RTL", height=2,
                                   font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
-                                  activebackground="#c62828", command=self._toggle_kill)
-        self.kill_btn.grid(row=0, column=1, padx=3, sticky="ew")
+                                  activebackground="#f57c00", command=self._toggle_rtl)
+        self.rtl_btn.grid(row=0, column=1, padx=3, sticky="ew")
         self.arm_btn = tk.Button(btn_frm, text="DISARM", height=2,
                                  font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
                                  activebackground="#1565c0", command=self._toggle_arm)
@@ -153,11 +154,11 @@ class ControllerGUI:
         self.launch_btn.grid(row=1, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
     # ---- 스위치 핸들러 (토글 + 색/텍스트 갱신) ----
-    def _toggle_kill(self):
-        on = self.node.toggle_button(0)
-        self.kill_btn.config(text="■ KILL" if on else "KILL",
-                             bg="#000000" if on else "#444444",
-                             fg="#ff4444" if on else "#cccccc")
+    def _toggle_rtl(self):
+        on = self.node.toggle_button(4)
+        self.rtl_btn.config(text="■ RTL ACTIVE" if on else "RTL",
+                            bg="#e65100" if on else "#444444",
+                            fg="white" if on else "#cccccc")
 
     def _toggle_arm(self):
         on = self.node.toggle_button(1)

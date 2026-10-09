@@ -21,17 +21,14 @@ arms_control_node:
       detection_timeout_sec: 1.0
       lock_duration_sec: 1.0
 
-      # ── LOCK → FIRE 판정 (비전 looming, τ) ────────────────────────────
+      # ── TRACK → RTL 판정 (비전 looming, τ) ────────────────────────────
       # 거리센서 없이 bbox 팽창률로 충돌 임박을 판정한다. 3D 거리는 실기체에서
-      # 못 쓰므로 sim 포함 전면 제거했고, 발사는 τ 로만 결정된다.
+      # 못 쓰므로 sim 포함 전면 제거했고, 종말 RTL은 τ 로만 결정된다.
       #   τ = bbox크기 / 크기변화율 = 충돌까지 시간.
       #   스케일 불변이라 표적 크기·카메라와 무관 — 작은 x500도 큰 풍선도 같은 로직.
       #
-      # ★ FIRE 는 이 경로 하나로만 들어온다. 심판(referee)의 실제 접촉 판정은
-      #   미션에 영향을 주지 않는다(로그 전용) — 채점자가 답을 대신 쓰면
-      #   검출이 고장나도 미션이 성공으로 끝나 성능 측정이 오염된다.
-      tau_fire_sec: 0.3         # τ 이 값 미만 + 정렬 + 최소크기 → FIRE. 늦으면 ↓, 빨리 터지면 ↑
-      fire_align_tol: 0.2       # 정렬 허용오차 (중앙정렬 만족해야 발사)
+      tau_rtl_sec: 0.3          # τ 이 값 미만 + 정렬 + 최소크기 → RTL. 늦으면 ↓, 빨리 끝나면 ↑
+      intercept_align_tol: 0.2  # 종말 RTL 정렬 허용오차
       loom_s_min: 0.1           # 최소 bbox 크기(정규화). 원거리/노이즈 오탐 차단
       loom_size_alpha: 0.3      # bbox 크기 EMA (클수록 민첩/노이즈↑)
       loom_rate_alpha: 0.3      # 크기변화율(ṡ) EMA (τ 안정화)
@@ -43,16 +40,15 @@ arms_control_node:
       #   그 주석만 있고 실제 오버라이드가 없어서 실기체도 true 였다.
       sitl_auto_launch: true
       auto_launch_delay_sec: 0.5
-      # ── 충돌 판정(FIRE/RTL) 소스 ─────────────────────────────────────
+      # ── 종말 RTL 소스 ───────────────────────────────────────────────
       # 서로 독립적인 두 스위치다. 이름의 sitl/실기체는 "누가 쓰나"의 관례일 뿐,
       # 둘 다 환경과 무관하게 동작한다(오해 방지로 sitl_hit_rtl 을 분리·개명).
       #   hit_rtl_via_referee : 심판 /arms/hit(Gazebo 접촉) 수신 시 RTL.
       #     → SITL 만 해당(실기체엔 /arms/hit 발행자 없음). 실기체는 hw_overrides 가 false.
-      #   looming_fire_enabled: 비전 τ(bbox 팽창률)로 충돌 임박 판정 → FIRE.
-      #     → 실기체 자동 요격 경로. 아직 비활성(false). 실기체 검증 뒤 hw_overrides 에서 true.
-      # 조합: SITL=(true,false) / 실기체 현재=(false,false) / 실기체 요격=(false,true).
+      #   looming_rtl_enabled: 비전 τ(bbox 팽창률)로 충돌 임박 판정 → RTL.
+      # 조합: SITL=(true,false) / 실기체 현재=(false,false) / 자동 종말=(false,true).
       hit_rtl_via_referee: true
-      looming_fire_enabled: false
+      looming_rtl_enabled: false
 
     # =====================================================================
     # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs)
@@ -286,9 +282,9 @@ arms_control_node:
       # 위 near_size 스케줄링은 "화면 속 크기"만 보고 "접근 속도"는 모른다 — 같은
       # 크기라도 천천히 다가오면 여유, 빠르게 다가오면 임박인데 구분을 못 한다.
       #
-      # τ = bbox크기/팽창률 = 몇 초 뒤 충돌(mission.tau_fire_sec 과 같은 신호,
+      # τ = bbox크기/팽창률 = 몇 초 뒤 충돌(mission.tau_rtl_sec 과 같은 신호,
       # update_looming() 에서 항상 계산됨). 스케일 불변이라 표적 실제 크기가
-      # 없어도 된다(위 tau_fire_sec 설명과 동일한 이유).
+      # 없어도 된다(위 tau_rtl_sec 설명과 동일한 이유).
       #
       # 겨냥(guidance_mode 2, IBVS)이 좋아질수록 접근이 빨라지는데, 추력은 여전히
       # "정렬 품질"(center_q)만 보고 최대로 밀어붙인다 → 정렬이 완벽해도 관성 때문에
@@ -303,7 +299,7 @@ arms_control_node:
       #   시간 기반 스칼라 감속의 구조적 한계로 보임(대화 기록 참고). 코드 수정은
       #   보류 중이며 이 값은 "정지 표적 명중" 상태를 저장하기 위한 스냅샷이다.
       tau_ease_start: 2.5      # 이 초 전부터 서서히 감속 시작[s]
-      tau_ease_full: 0.3       # 이 초에서 최소 배율 적용[s] (tau_fire_sec=0.3 과 맞춤)
+      tau_ease_full: 0.3       # 이 초에서 최소 배율 적용[s] (tau_rtl_sec=0.3 과 맞춤)
       tau_ease_min_scale: 0.0  # τ 임박시 추력 배율 하한 (0=완전 hover, 1=끔=효과 없음)
       #   여전히 지나치면(관성이 안 잡히면) ↓ / 너무 일찍·세게 주저앉으면(못 따라붙으면) ↑
       #   또는 tau_ease_start 를 낮춰 감속 시작을 더 늦춘다.
@@ -321,7 +317,7 @@ arms_control_node:
       # 자동 모드: 스위치와 분리하고 상태머신 상태로 컨트롤 노드가 결정한다.
       #   SEARCH/LOCK(throttle 0) 에서 미리 arm → TRACK 에서 throttle↑ 전에 무장
       #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
-      auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]
+      auto_arm_states: ["SEARCH", "LOCK", "TRACK", "RTL"]
 
       # 수동 모드: arm 하는 순간 스틱이 idle 이어야만 실제로 무장한다 (급상승/오발 방지).
       prearm_check: true

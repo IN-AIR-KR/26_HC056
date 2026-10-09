@@ -31,12 +31,11 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image, Joy
 from std_msgs.msg import Float32MultiArray
 
-from arms_msgs.msg import CrsfTelemetry, DetectionArray, MissionState
+from arms_msgs.msg import CrsfTelemetry, DetectionArray, GpsTelemetry, MissionState
 from geometry_msgs.msg import Vector3
 
 # /arms/command Joy 버튼 인덱스 (arms_command_uart_node.cpp / arms_control_node.cpp 와 일치)
-#   buttons[0]=kill, [1]=arm, [2]=mode, [3]=launch
-KILL_BUTTON_IDX = 0
+#   buttons[1]=arm, [2]=mode, [3]=launch, [4]=rtl
 MODE_BUTTON_IDX = 2
 
 STATE_COLORS = {
@@ -45,7 +44,6 @@ STATE_COLORS = {
     "LOCK":   (0,   140, 255),
     "BOOST":  (0,   110, 255),
     "TRACK":  (0,   0,   220),
-    "FIRE":   (0,   0,   220),
     "RTL":    (255, 180, 0),
 }
 
@@ -132,8 +130,6 @@ class ArmsUINode(Node):
         self.declare_parameter("ui.sound_disarm", os.path.join(_snd_dir, "disarm.mp3"))
         self.declare_parameter("ui.sound_search", os.path.join(_snd_dir, "search.mp3"))
         self.declare_parameter("ui.sound_idle", os.path.join(_snd_dir, "idle.mp3"))
-        # 킬 스위치 ON(engage) 경고음
-        self.declare_parameter("ui.sound_kill", os.path.join(_snd_dir, "kill.mp3"))
         # ELRS 텔레메트리 연결/끊김 효과음
         self.declare_parameter("ui.sound_telm_connected", os.path.join(_snd_dir, "telm_connected.mp3"))
         self.declare_parameter("ui.sound_telm_lost", os.path.join(_snd_dir, "telm_lost.mp3"))
@@ -146,7 +142,7 @@ class ArmsUINode(Node):
 
 
         # ── 탐지 비프음 (mp3 없이 ffplay lavfi 사인파로 생성) ──────────────
-        #   SEARCH: 느린 간격, LOCK/TRACK/FIRE: 빠른 간격으로 삑삑거린다.
+        #   SEARCH: 느린 간격, LOCK/TRACK: 빠른 간격으로 삑삑거린다.
         #   IDLE/RTL 등에선 울리지 않고, 자동(AUTO) 모드에서만 동작한다.
         self.declare_parameter("ui.beep_enabled", True)
         self.declare_parameter("ui.beep_search_interval", 0.8)   # SEARCH 비프 간격[s]
@@ -174,6 +170,8 @@ class ArmsUINode(Node):
         self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
         # arms_control 이 CRSF 수신 텔레메트리를 통합 발행 (/arms/crsf_rx). 배터리 필드를 여기서 읽는다.
         self.create_subscription(CrsfTelemetry, "/arms/crsf_rx", self._cb_battery, 10)
+        # GPS는 CRSF 0x02를 control 노드가 별도 변환해 발행한다.
+        self.create_subscription(GpsTelemetry, "/arms/gps", self._cb_gps, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
         self.create_subscription(Float32MultiArray, "/arms/detector_status",
                                  self._cb_detstatus, 10)
@@ -184,6 +182,8 @@ class ArmsUINode(Node):
         self._latest_roi = None
         self._latest_hsv_debug = None
         self._latest_battery = None   # /arms/crsf_rx 최신값 (None=아직 미수신)
+        self._latest_gps = None       # /arms/gps 최신값 (CRSF GPS frame 기준)
+        self._gps_received_t = 0.0    # GPS telemetry가 끊긴 상태를 표시하기 위한 monotonic 시각
         self._elrs_connected = None   # ELRS 연결 여부 (None=미수신). 화면 표시는 이 값으로 즉시 반영
         self._elrs_sound_state = None # 효과음 기준 상태(디바운스로 확정된 값). None=아직 안 알림
         self._elrs_changed_t = 0.0    # raw 표시값이 마지막으로 바뀐 시각(디바운스용)
@@ -202,9 +202,6 @@ class ArmsUINode(Node):
         self._det_hold = {}
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
-        self._kill = False          # buttons[0]==1 → kill 스위치 ON (모드 무관 경고 표시)
-        self._kill_blink = 0        # kill 경고 점멸용 프레임 카운터
-        self._prev_kill = None      # kill 이전값 (off→on 상승 엣지에만 경고음, 첫 수신 skip)
         # mission_state 기반 상태 변경 효과음 엣지 추적
         self._prev_manual_state = None  # MissionState.manual_mode 이전값 (모드전환 틱 억제용)
         self._prev_armed = None         # MissionState.armed 이전값 (수동 arm/disarm)
@@ -213,6 +210,7 @@ class ArmsUINode(Node):
         # 실기체 런치에서만 fullscreen:=true → 전체화면. SITL 등은 기본값 False(창 모드).
         self.declare_parameter("ui.fullscreen", False)
         self._fullscreen = self.get_parameter("ui.fullscreen").value
+        self.declare_parameter("ui.gps_timeout_sec", 2.0)
         self._keep_aspect = True    # True=레터박스(비율 유지, 잘림 없음), False=강제 스트레치
 
         # 터치(=마우스 클릭)로 누르는 전원 종료 버튼. 누르면 즉시 끄지 않고 확인 받는다.
@@ -327,6 +325,10 @@ class ArmsUINode(Node):
     def _cb_battery(self, msg: CrsfTelemetry):
         self._latest_battery = msg
 
+    def _cb_gps(self, msg: GpsTelemetry):
+        self._latest_gps = msg
+        self._gps_received_t = time.monotonic()
+
     def _cb_detstatus(self, msg: Float32MultiArray):
         vals = list(msg.data)
         self._det_status = vals
@@ -343,12 +345,6 @@ class ArmsUINode(Node):
     def _cb_command(self, msg: Joy):
         if len(msg.buttons) <= MODE_BUTTON_IDX:
             return
-        kill = bool(msg.buttons[KILL_BUTTON_IDX])
-        self._kill = kill
-        # 킬 스위치 ON(off→on 상승 엣지)에만 경고음. 첫 수신(prev None)·끌 때는 재생 안 함.
-        if self._prev_kill is not None and kill and not self._prev_kill:
-            self._play_sound(self.get_parameter("ui.sound_kill").value)
-        self._prev_kill = kill
         manual = bool(msg.buttons[MODE_BUTTON_IDX])
         self._manual_mode = manual
         # 시작 안내(모드+텔레메트리)는 _maybe_startup_announce 가 순서대로 한 번에 낸다.
@@ -438,7 +434,7 @@ class ArmsUINode(Node):
             if now - self._last_beep_t >= interval:
                 self._last_beep_t = now
                 self._play_beep()
-        elif state in ("LOCK", "BOOST", "TRACK", "FIRE"):
+        elif state in ("LOCK", "BOOST", "TRACK"):
             self._start_lock_tone()  # LOCK 걸리면 삐이이——— 계속 울린다.
         else:
             self._stop_lock_tone()   # IDLE / RTL 등은 무음
@@ -622,13 +618,13 @@ class ArmsUINode(Node):
         self._draw_link_status(frame)
         # 배터리(전압/퍼센트)는 하단 중앙에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
+        # GPS fix/위성수/고도/지상속도는 하단 좌측에 표시한다.
+        self._draw_gps(frame)
         # 검출기 작동여부·confidence·모드 텍스트는 디버그 모드에서만(메인은 깔끔하게).
         if self._debug and not self._manual_mode and (
                 self._latest_state.state or "IDLE") in (
-                "SEARCH", "LOCK", "BOOST", "TRACK", "FIRE"):
+                "SEARCH", "LOCK", "BOOST", "TRACK"):
             self._draw_detector_status(frame)
-        # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
-        self._draw_kill_banner(frame)
         # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
         self._draw_power_ui(frame)
         # 화면 맞춤/우측 진단 패널을 붙이기 전 검출 화면 원본을 캡처 대상으로 쓴다.
@@ -861,13 +857,15 @@ class ArmsUINode(Node):
                     thickness, cv2.LINE_AA)
 
     def _draw_manual_arm(self, frame):
-        """수동 모드: arm/disarm 여부를 상단 중앙에 표시."""
+        """수동 모드: arm/disarm, GPS Rescue 요청 시 RTL 상태를 상단 중앙에 표시."""
         h = frame.shape[0]
         armed = bool(self._latest_state.armed)
         text = "ARMED" if armed else "DISARMED"
         color = (0, 0, 255) if armed else (0, 200, 0)   # arm=빨강(주의), disarm=초록(안전)
         scale = max(0.8, h / 600.0)
         self._put_center_text(frame, text, int(h * 0.08), color, scale, 2)
+        if (self._latest_state.state or "IDLE") == "RTL":
+            self._put_center_text(frame, "RTL", int(h * 0.15), STATE_COLORS["RTL"], scale, 2)
 
     def _draw_prearm_banner(self, frame):
         """수동: arm 스위치 올렸지만 스틱이 idle 아니어서 arm 차단됨 → 주황 경고 배너."""
@@ -883,27 +881,6 @@ class ArmsUINode(Node):
         base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 3)[0][0]
         scale = (w * 0.7) / max(1, base)
         self._put_center_text(frame, text, y0 + band_h // 2, (255, 255, 255), scale, 3)
-
-    def _draw_kill_banner(self, frame):
-        """kill 스위치 ON: 모드 무관하게 화면 중앙에 크게 점멸 경고."""
-        if not self._kill:
-            return
-        h, w = frame.shape[:2]
-        self._kill_blink = (self._kill_blink + 1) % 20
-        # 붉은 테두리는 항상, 중앙 배너/텍스트는 점멸(대략 65% 켜짐)
-        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 12)
-        if self._kill_blink >= 13:
-            return
-        band_h = int(h * 0.24)
-        y0 = (h - band_h) // 2
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, y0), (w, y0 + band_h), (0, 0, 150), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-        # 텍스트 폭이 화면의 ~80% 가 되도록 스케일 자동 계산
-        text = "KILL SWITCH ENGAGED"
-        base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 4)[0][0]
-        scale = (w * 0.8) / max(1, base)
-        self._put_center_text(frame, text, h // 2, (255, 255, 255), scale, 4)
 
     # ------------------------------------------------------------------
     # 전원 종료 버튼 (터치/클릭) + 확인 다이얼로그
@@ -1064,6 +1041,39 @@ class ArmsUINode(Node):
         cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
+    def _draw_gps(self, frame):
+        """CRSF GPS telemetry를 MAVLink GPS_FIX_TYPE 명칭으로 표시한다.
+
+        CRSF 0x02에는 fix_type 자체가 없어 2D/3D는 위성 수로 추정한다. 수신이 없거나
+        timeout이면 MAVLink의 NO_GPS다.
+        """
+        h = frame.shape[0]
+        gps = self._latest_gps
+        timeout = float(self.get_parameter("ui.gps_timeout_sec").value)
+        fresh = gps is not None and (time.monotonic() - self._gps_received_t) <= timeout
+
+        if not fresh:
+            text, color = "GPS: NO GPS", (100, 100, 255)
+        else:
+            # MAVLink GPS_FIX_TYPE: 1=NO_FIX, 2=2D_FIX, 3=3D_FIX.
+            labels = {1: "NO FIX", 2: "2D FIX", 3: "3D FIX"}
+            fix = int(gps.mavlink_fix_type)
+            label = labels.get(fix, "NO FIX")
+            color = ((0, 0, 255) if fix <= 1 else
+                     (0, 190, 255) if fix == 2 else
+                     (0, 220, 0))
+            text = (f"GPS: {label}  {int(gps.satellites)} SAT"
+                    f"  ALT {float(gps.altitude_m):.0f}m"
+                    f"  GS {float(gps.ground_speed_mps):.1f}m/s")
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.42, h / 1150.0)
+        thick = max(1, int(round(scale * 2)))
+        # 중앙 하단 배터리 표기와 겹치지 않게 한 줄 위에 둔다.
+        y = h - max(10, int(h * 0.02)) - max(20, int(h * 0.055))
+        cv2.putText(frame, text, (10, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(frame, text, (10, y), font, scale, color, thick, cv2.LINE_AA)
+
     def _draw_detector_status(self, frame):
         """검출 필터 상태(TRK)·YOLO/HSV 상태·후보 카운트를 좌상단에 표시."""
         raw = self._det_status
@@ -1077,7 +1087,7 @@ class ArmsUINode(Node):
         thick = max(1, int(round(scale * 2)))
         x = 10
         # _draw_overlay 의 err(10,60)·cmd(10,80) 숫자 디버그 텍스트 아래에서 시작해
-        # LOCK/TRACK/FIRE 에서 서로 겹치지 않게 한다.
+        # LOCK/TRACK에서 서로 겹치지 않게 한다.
         y = int(100 * max(1.0, h / 480.0))
         dy = int(cv2.getTextSize("A", font, scale, thick)[0][1] * 2.2)
 
@@ -1163,15 +1173,15 @@ class ArmsUINode(Node):
             cv2.putText(frame, "LOCK", (bar_x, bar_y - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-        # --- 오차(ERR) 화살표(노랑, 표적 방향): debug 무관하게 LOCK/TRACK/FIRE 에서 항상 ---
-        if state in ("LOCK", "TRACK", "FIRE"):
+        # --- 오차(ERR) 화살표(노랑, 표적 방향): debug 무관하게 LOCK/TRACK에서 항상 ---
+        if state in ("LOCK", "TRACK"):
             ex = int(self._latest_state.error_x * w)
             ey = int(self._latest_state.error_y * h)
             cv2.arrowedLine(frame, (cx_f, cy_f), (cx_f + ex, cy_f + ey),
                             (0, 255, 255), 2, tipLength=0.2)
 
         # --- ERR 라벨 + 제어명령(CMD) 화살표 + 숫자 텍스트: 디버그 모드에서만 ---
-        if self._debug and state in ("LOCK", "TRACK", "FIRE"):
+        if self._debug and state in ("LOCK", "TRACK"):
             ex = int(self._latest_state.error_x * w)
             ey = int(self._latest_state.error_y * h)
             cv2.putText(frame, "ERR(target)", (cx_f + ex + 5, cy_f + ey),
