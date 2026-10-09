@@ -120,6 +120,7 @@ const GENERAL_PANELS = [
     series: [
       { t: M, f: "error_x", label: "error_x" }, { t: M, f: "error_y", label: "error_y" },
       { t: M, f: "lock_elapsed_sec", label: "lock elapsed [s]", scale: "y2" },
+      { t: M, f: "manual_mode", label: "mode (0=auto, 1=manual)", step: true, scale: "y2" },
     ] },
   { title: "Control output", note: "final command before CRSF normalization",
     series: [
@@ -146,15 +147,19 @@ const GENERAL_PANELS = [
       { t: R, f: "roll_deg", label: "roll [deg]" }, { t: R, f: "pitch_deg", label: "pitch [deg]" },
       { t: R, f: "yaw_deg", label: "yaw [deg]" }, { t: R, f: "uplink_lq", label: "uplink LQ [%]", scale: "y2" },
     ] },
-  { title: "Operator command", note: "sticks from /arms/command",
+  { title: "Operator command / switches", note: "sticks and AUTO/MANUAL / ARM / RTL switch inputs",
     series: [
       { t: CMD, f: "axes_0", label: "yaw" }, { t: CMD, f: "axes_1", label: "throttle" },
       { t: CMD, f: "axes_2", label: "roll" }, { t: CMD, f: "axes_3", label: "pitch" },
+      { t: CMD, f: "buttons_2", label: "mode (0=auto, 1=manual)", step: true },
+      { t: CMD, f: "buttons_1", label: "arm switch", step: true },
+      { t: CMD, f: "buttons_4", label: "RTL switch", step: true },
     ] },
-  { title: "CRSF output", note: "channels sent to FC",
+  { title: "CRSF output", note: "channels sent to FC (CH6: auto=ACRO, manual/RTL=self-level)",
     series: [
       { t: TX, f: "data_0", label: "roll" }, { t: TX, f: "data_1", label: "pitch" },
       { t: TX, f: "data_2", label: "throttle" }, { t: TX, f: "data_4", label: "arm" },
+      { t: TX, f: "data_5", label: "flight mode CH6 (172=auto, 1811=manual/RTL)" },
       { t: TX, f: "data_6", label: "rtl" },
     ] },
 ];
@@ -436,7 +441,8 @@ function stateAt(t) {
 // ---------------------------------------------------------------- GPS/CRSF 동기화 3D 뷰
 // 좌표는 기록 첫 GPS를 원점으로 한 ENU 근사: X=east, Y=up, Z=north [m].
 const S3 = { renderer: null, scene: null, camera: null, drone: null, balloon: null,
-  path: null, origin: null, gps: null, resize: null };
+  path: null, origin: null, gps: null, resize: null, target: null,
+  radius: 30, theta: 0, phi: 1.1, pointer: null };
 const deg = (v) => (v || 0) * Math.PI / 180;
 
 function nearestAt(d, field, t) {
@@ -461,6 +467,26 @@ function gpsAt(t) {
   if (!g) return null;
   return enu(nearestAt(g, "latitude_deg", t), nearestAt(g, "longitude_deg", t), nearestAt(g, "altitude_m", t));
 }
+function applySceneCamera() {
+  if (!S3.camera || !S3.target) return;
+  const sinPhi = Math.sin(S3.phi);
+  S3.camera.position.set(
+    S3.target.x + S3.radius * sinPhi * Math.sin(S3.theta),
+    S3.target.y + S3.radius * Math.cos(S3.phi),
+    S3.target.z + S3.radius * sinPhi * Math.cos(S3.theta),
+  );
+  S3.camera.lookAt(S3.target);
+}
+function setSceneCamera(target, radius = null) {
+  if (!S3.camera) return;
+  S3.target = target.clone();
+  const offset = S3.camera.position.clone().sub(S3.target);
+  S3.radius = radius ?? Math.max(1, offset.length());
+  S3.theta = Math.atan2(offset.x, offset.z);
+  S3.phi = Math.acos(Math.max(-.98, Math.min(.98, offset.y / Math.max(.001, offset.length()))));
+  if (radius != null) { S3.theta = Math.PI / 4; S3.phi = 1.05; }
+  applySceneCamera();
+}
 function initScene() {
   const host = $("scene-canvas");
   if (!window.THREE || !host) return;
@@ -472,6 +498,7 @@ function initScene() {
   S3.scene = new THREE.Scene(); S3.scene.background = new THREE.Color(0x090c10);
   S3.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 50000);
   S3.camera.position.set(20, 16, 22); S3.camera.lookAt(0, 0, 0);
+  setSceneCamera(new THREE.Vector3(), null);
   S3.scene.add(new THREE.HemisphereLight(0xbfd7ff, 0x202a32, 2.2));
   const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.scene.add(grid);
   const worldAxes = new THREE.AxesHelper(4); S3.scene.add(worldAxes);
@@ -482,8 +509,34 @@ function initScene() {
   S3.scene.add(S3.drone);
   S3.balloon = new THREE.Mesh(new THREE.SphereGeometry(.45, 18, 14), new THREE.MeshStandardMaterial({ color: 0xef4444 }));
   S3.balloon.visible = false; S3.scene.add(S3.balloon);
+  const canvas = S3.renderer.domElement;
+  canvas.addEventListener("pointerdown", (e) => {
+    S3.pointer = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!S3.pointer || e.pointerId !== S3.pointer.id) return;
+    const dx = e.clientX - S3.pointer.x, dy = e.clientY - S3.pointer.y;
+    S3.pointer.x = e.clientX; S3.pointer.y = e.clientY;
+    S3.theta -= dx * 0.012;
+    S3.phi = Math.max(0.08, Math.min(Math.PI - 0.08, S3.phi + dy * 0.012));
+    applySceneCamera(); renderScene();
+  });
+  const releasePointer = (e) => {
+    if (S3.pointer?.id !== e.pointerId) return;
+    S3.pointer = null;
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+  };
+  canvas.addEventListener("pointerup", releasePointer);
+  canvas.addEventListener("pointercancel", releasePointer);
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    // 지수 스케일이라 트랙패드/마우스 휠 모두 자연스럽게 동작한다.
+    S3.radius = Math.max(1, Math.min(50000, S3.radius * Math.exp(e.deltaY * 0.001)));
+    applySceneCamera(); renderScene();
+  }, { passive: false });
   S3.resize?.disconnect();
-  S3.resize = new ResizeObserver(() => { if (!S3.renderer) return; const w = host.clientWidth, h = host.clientHeight; S3.camera.aspect = w / h; S3.camera.updateProjectionMatrix(); S3.renderer.setSize(w, h); renderScene(); });
+  S3.resize = new ResizeObserver(() => { if (!S3.renderer) return; const w = Math.max(1, host.clientWidth), h = Math.max(1, host.clientHeight); S3.camera.aspect = w / h; S3.camera.updateProjectionMatrix(); S3.renderer.setSize(w, h); renderScene(); });
   S3.resize.observe(host);
 }
 function buildScenePath() {
@@ -504,10 +557,11 @@ function buildScenePath() {
     S3.scene.add(S3.path);
     const box = new THREE.Box3().setFromPoints(pts); const center = box.getCenter(new THREE.Vector3());
     const span = Math.max(8, box.getSize(new THREE.Vector3()).length());
-    S3.camera.position.copy(center).add(new THREE.Vector3(span * .9, span * .65, span * .9)); S3.camera.lookAt(center);
+    setSceneCamera(center, span * 1.45);
   }
 }
 function setBalloonFromInputs() {
+  if (!S3.balloon) return;
   const lat = parseFloat($("balloon-lat").value), lon = parseFloat($("balloon-lon").value), alt = parseFloat($("balloon-alt").value);
   const p = enu(lat, lon, alt); S3.balloon.visible = !!p; if (p) S3.balloon.position.copy(p); renderScene();
 }
@@ -586,27 +640,29 @@ function renderPanels() {
 }
 
 function makePanel(p) {
-  const det = document.createElement("details");
+  const det = document.createElement("section");
   det.className = "panel";
-  const closedKey = "ibvs_viewer.closed." + p.title;
-  det.open = !loadLS(closedKey, false);
-  const sum = document.createElement("summary");
-  sum.innerHTML = `<span></span><span class="note"></span>`;
-  sum.children[0].textContent = p.title;
-  sum.children[1].textContent = p.note || "";
+  const head = document.createElement("div");
+  head.className = "panel-head";
+  const title = document.createElement("div");
+  title.className = "panel-title";
+  title.textContent = p.title;
+  const note = document.createElement("div");
+  note.className = "note";
+  note.textContent = p.note || "";
+  head.append(title, note);
   if (p.custom != null) {
     const x = document.createElement("button");
-    x.className = "btn small close";
+    x.className = "btn small panel-delete";
     x.textContent = "삭제";
-    x.onclick = (e) => {
-      e.preventDefault();
+    x.onclick = () => {
       customPanels.splice(p.custom, 1);
       saveLS("ibvs_viewer.custom", customPanels);
       renderPanels();
     };
-    sum.appendChild(x);
+    head.appendChild(x);
   }
-  det.appendChild(sum);
+  det.appendChild(head);
   const body = document.createElement("div");
   det.appendChild(body);
 
@@ -621,10 +677,6 @@ function makePanel(p) {
   body.appendChild(chartEl);
   const chart = makeChart(p, built, chartEl);
   bindToggles(p, built.specs, help, chart);
-  det.addEventListener("toggle", () => {
-    saveLS(closedKey, !det.open);
-    if (det.open) chart.setSize({ width: chartWidth(), height: CHART_H });
-  });
   return det;
 }
 
@@ -658,6 +710,7 @@ function makeHelp(p, { specs, multiTopic }) {
     chip.querySelector(".nm").textContent = seriesName(s, multiTopic) + (s.scale === "y2" ? " (R)" : "");
     chip.querySelector(".ds").textContent = (FIELD_INFO[s.f] ?? "") + (DERIVED[s.f] ? " ⚙" : "");
     chip.title = `${s.f} = ${FIELD_INFO[s.f] ?? ""}${DERIVED[s.f] ? "  (뷰어 계산)" : ""}`;
+    chip.style.setProperty("--series", seriesColor(s, i));
     box.appendChild(chip);
   });
   return box;

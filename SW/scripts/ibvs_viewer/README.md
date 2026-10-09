@@ -38,7 +38,8 @@ python3 SW/scripts/ibvs_viewer/server.py
   녹화된 영상과 3D 비행 뷰, 오른쪽에 그래프가 나온다. 영상 소스는 UI 영상과 원본
   (`/arms/ui_image/compressed`, `/arms/image_raw/compressed`) 중 기록된 것을 고를 수 있다.
   3D 뷰는 첫 GPS 위치를 원점으로 한 ENU 좌표(X=동, Y=상, Z=북)에서 GPS 경로와 CRSF
-  roll/pitch/yaw 자세를 함께 표시한다. 그래프 호버와 영상 재생 시각에 동기화된다.
+  roll/pitch/yaw 자세를 함께 표시한다. 그래프 호버와 영상 재생 시각에 동기화되며,
+  3D 화면을 마우스로 드래그하면 시점을 회전하고, 휠/트랙패드 스크롤로 확대·축소할 수 있다.
   - 3D 뷰 아래에 풍선 위도·경도·고도를 입력하고 **풍선 저장**을 누르면 빨간 풍선이 표시되며,
     해당 비행 폴더의 `manifest.json`에 `balloon` 값으로 저장된다.
   - `Play`: 영상 재생(▶/Space, 시크바, 0.25~4×). 재생 위치가 모든 그래프의 커서로 표시되고,

@@ -80,16 +80,12 @@ body {
 
 .panel {
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-  margin-top: 12px; padding: 4px 10px 6px;
+  margin-top: 12px; padding: 10px;
 }
-.panel > summary {
-  cursor: pointer; font-weight: 600; padding: 6px 0; list-style: none;
-  display: flex; align-items: center; gap: 8px;
-}
-.panel > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
-.panel[open] > summary::before { transform: rotate(90deg); }
-.panel > summary .note { font-weight: 400; color: var(--muted); font-size: 12px; }
-.panel > summary .close { margin-left: auto; }
+.panel-head { position: relative; padding: 2px 0 8px; }
+.panel-title { font-size: 17px; font-weight: 700; line-height: 1.25; }
+.panel-head .note { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.panel-delete { position: absolute; right: 0; top: 0; }
 .panel .missing { color: var(--muted); padding: 8px 0 10px; }
 
 /* uPlot 테마 보정 */
@@ -111,7 +107,7 @@ body {
   border-radius: 5px; padding: 3px 8px;
 }
 .help .chip:hover { border-color: var(--accent); }
-.help .chip .cb { margin: 0; accent-color: var(--accent); cursor: pointer; }
+.help .chip .cb { margin: 0; accent-color: var(--series, var(--accent)); cursor: pointer; }
 .help .chip .nm { font-weight: 600; white-space: nowrap; }
 .help .chip .ds { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .help .chip:has(.cb:not(:checked)) { opacity: .5; }
@@ -215,17 +211,18 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 /* ---------------- 동기화 3D 비행 뷰 ---------------- */
 #scene-pane { display: flex; flex-direction: column; gap: 7px; min-height: 0; }
 .scene-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; }
-#scene-canvas { height: 260px; background: #090c10; border-radius: 6px; overflow: hidden; }
+#scene-canvas { width: 100%; aspect-ratio: 4 / 3; background: #090c10; border-radius: 6px; overflow: hidden; cursor: grab; }
+#scene-canvas:active { cursor: grabbing; }
 #scene-canvas canvas { width: 100%; height: 100%; display: block; }
-#balloon-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 6px; align-items: end; }
-#balloon-form label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 11px; }
-#balloon-form input { width: 100%; min-width: 0; padding: 4px 6px; font-size: 12px; }
+#balloon-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
+#balloon-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+#balloon-form input { width: 100%; min-width: 0; padding: 8px 10px; font-size: 14px; }
+#balloon-save { grid-column: 1 / -1; }
 
 @media (max-width: 1000px) {
   .split #content { grid-template-columns: 1fr; }
   #video-pane { position: static; max-height: none; }
 }
 @media (max-width: 520px) {
-  #balloon-form { grid-template-columns: 1fr 1fr; }
-  #balloon-save { grid-column: span 2; }
+  #balloon-form { grid-template-columns: 1fr; }
 }
