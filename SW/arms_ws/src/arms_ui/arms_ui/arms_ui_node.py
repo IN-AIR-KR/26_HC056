@@ -1047,7 +1047,7 @@ class ArmsUINode(Node):
         CRSF 0x02에는 fix_type 자체가 없어 2D/3D는 위성 수로 추정한다. 수신이 없거나
         timeout이면 MAVLink의 NO_GPS다.
         """
-        h = frame.shape[0]
+        h, w = frame.shape[:2]
         gps = self._latest_gps
         timeout = float(self.get_parameter("ui.gps_timeout_sec").value)
         fresh = gps is not None and (time.monotonic() - self._gps_received_t) <= timeout
