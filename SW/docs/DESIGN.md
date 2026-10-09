@@ -559,6 +559,7 @@ CRSF serial (/tmp/crsf_rx)
         │       MAV_CMD_COMPONENT_ARM_DISARM (arm/disarm)
         ├─ CH6 에지 → MAV_CMD_DO_SET_MODE
         │       low(<1500)=ACRO(auto, 고정), high(≥1500)=Altitude(manual)
+        ├─ CH7 상승엣지 → MAV_CMD_NAV_RETURN_TO_LAUNCH (PX4 RTL)
         └─ CH1-4, CH7 → RC_CHANNELS_OVERRIDE (50Hz, UDP → PX4)
 ```
 
@@ -857,6 +858,7 @@ arms_control_node  (state machine + PID)
       |         sitl_bridge_node
       |           ├─ CH5 레벨 → ARM/DISARM (MAVLink)
       |           ├─ CH6 에지 → SET_MODE ACRO(low)/Altitude(high)
+      |           ├─ CH7 상승엣지 → MAV_CMD_NAV_RETURN_TO_LAUNCH
       |           └─ CH1-4,7 → RC_CHANNELS_OVERRIDE (50Hz UDP)
       |                              → PX4 (ACRO/Altitude)
       |

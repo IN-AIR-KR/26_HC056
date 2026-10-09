@@ -8,7 +8,7 @@ them to MAVLink RC_CHANNELS_OVERRIDE toward PX4.  PX4가 Gazebo NavSat 센서에
 
 Channel mapping:
   CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
-  CH5: arm sw   CH6: mode sw   CH7: kill sw   CH8: (unused)
+  CH5: arm sw   CH6: mode sw   CH7: RTL request   CH8: (unused)
 
 CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=Stabilized(수동/사람 입력).
   high=Stabilized 는 자동수평 + throttle 직결(고도유지 없음). 실기체 FC 의 수동 모드와 동작을 맞춘 것.
@@ -136,8 +136,10 @@ class ArmsSITLCommNode(Node):
         self._channels  = [CRSF_MIN] * 16
         self._channels[2] = CRSF_MIN   # throttle min
         self._prev_ch6  = CRSF_MIN     # flight-mode switch (for edge detect)
+        self._prev_ch7  = CRSF_MIN     # RTL switch (rising edge → MAV_CMD_NAV_RETURN_TO_LAUNCH)
         self._ch5_high  = False        # arm switch, level (not edge) — kept in sync with CH5
         self._mode_pending = None      # desired PX4 main mode on CH6 edge
+        self._rtl_pending = False      # CH7 rising-edge RTL command; mode 변경 뒤 전송
 
         self._armed = False            # last known FC armed state, from HEARTBEAT
         self._last_arm_send = 0.0      # throttle for arm/disarm resend
@@ -188,6 +190,10 @@ class ArmsSITLCommNode(Node):
     def _initial_setup(self):
         """Set default autonomous mode after EKF convergence; arming is done via CH5.
         Flight mode thereafter follows CH6 (low=ACRO/자동, high=Stabilized/수동)."""
+        # PX4가 이전 SITL 실행의 저장 파라미터를 복원할 수 있다. 이 경우 airframe의
+        # `set-default RC_MAP_KILL_SW 0`만으로는 CH7=kill을 해제하지 못한다.
+        # 연결 직후 강제로 지워 RTL 첫 입력부터 motor kill이 되지 않게 한다.
+        self._clear_kill_mapping()
         time.sleep(3.0)
         mode_name = "ACRO(각속도)"
         self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
@@ -299,7 +305,7 @@ class ArmsSITLCommNode(Node):
                 time.sleep(2.0)
 
     def _process_switches(self, channels):
-        """Track CH5 switch level (arm target) and CH6 flight-mode edges."""
+        """Track CH5 arm, CH6 mode, and CH7 RTL switch edges."""
         self._ch5_high = channels[4] > SWITCH_THRESH
 
         ch6 = channels[5]
@@ -309,6 +315,14 @@ class ArmsSITLCommNode(Node):
             self._mode_pending = (PX4_CUSTOM_MAIN_MODE_STABILIZED if ch6_high
                                   else PX4_CUSTOM_MAIN_MODE_ACRO)
         self._prev_ch6 = ch6
+
+        ch7 = channels[6]
+        if ch7 > SWITCH_THRESH and self._prev_ch7 <= SWITCH_THRESH:
+            # CH7은 PX4 RC kill channel이 아니다. RTL은 level mode가 아니라 명령으로
+            # 한 번만 보낸다. control 노드가 State::RTL을 유지하므로 버튼을 놓아도
+            # 상태/UI와 FC 귀환 모드가 불일치하지 않는다.
+            self._rtl_pending = True
+        self._prev_ch7 = ch7
 
     # ------------------------------------------------------------------
     # 50 Hz send timer
@@ -322,6 +336,8 @@ class ArmsSITLCommNode(Node):
             ch5_high = self._ch5_high
             mode_req = self._mode_pending
             self._mode_pending = None
+            rtl_req = self._rtl_pending
+            self._rtl_pending = False
 
         # Arm/disarm: keep resending while the FC's actual armed state doesn't match
         # CH5 yet. A single MAV_CMD_COMPONENT_ARM_DISARM can be TEMPORARILY_REJECTED
@@ -341,6 +357,12 @@ class ArmsSITLCommNode(Node):
                     PX4_CUSTOM_MAIN_MODE_ACRO:   "ACRO(각속도)"}.get(mode_req, "?")
             self.get_logger().info(f"CH6 → {name} mode")
             self._send_set_mode(mode_req)
+
+        # RTL은 CH6의 manual/stabilized 전환 *뒤*에 보낸다. 반대 순서면 같은 틱의
+        # CH6 mode 명령이 PX4 RTL을 즉시 덮어쓸 수 있다.
+        if rtl_req:
+            self.get_logger().warn("CH7 RTL request → MAV_CMD_NAV_RETURN_TO_LAUNCH")
+            self._send_rtl()
 
         # RC_CHANNELS_OVERRIDE: CRSF → microseconds
         us = [_crsf_to_us(v) for v in chs]
@@ -381,6 +403,31 @@ class ArmsSITLCommNode(Node):
             float(sub_mode),
             0, 0, 0, 0,
         )
+
+    def _send_rtl(self):
+        """CH7 RTL 요청을 PX4 Return mode로 전달한다 (RC kill과 완전히 분리)."""
+        if self._mav is None:
+            return
+        self._mav.mav.command_long_send(
+            self._mav.target_system, self._mav.target_component,
+            mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
+            0,
+            0, 0, 0, 0, 0, 0, 0,
+        )
+
+    def _clear_kill_mapping(self):
+        """SITL PX4에 남아 있을 수 있는 CH7 kill 매핑을 즉시 제거한다."""
+        if self._mav is None:
+            return
+        try:
+            self._mav.mav.param_set_send(
+                self._mav.target_system, self._mav.target_component,
+                b"RC_MAP_KILL_SW", 0.0,
+                mavutil.mavlink.MAV_PARAM_TYPE_INT32,
+            )
+        except Exception as e:
+            self.get_logger().warn(
+                f"RC_MAP_KILL_SW clear failed: {e}", throttle_duration_sec=5.0)
 
     def _request_gps_stream(self):
         """PX4에 GPS_RAW_INT 주기 전송을 요청한다.

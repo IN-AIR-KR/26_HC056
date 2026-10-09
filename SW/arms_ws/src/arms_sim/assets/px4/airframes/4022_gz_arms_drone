@@ -129,7 +129,7 @@ param set-default RC8_MAX 2000
 
 # RC 채널 매핑 (실기체: Jetson → ELRS TX → ELRS RX → FC)
 #   CH1=roll  CH2=pitch  CH3=throttle  CH4=yaw
-#   CH5=arm   CH6=land   CH7=kill      CH8=launch(AUX1)
+#   CH5=arm   CH6=flight mode   CH7=RTL request   CH8=unused
 param set-default RC_MAP_ROLL      1
 param set-default RC_MAP_PITCH     2
 param set-default RC_MAP_THROTTLE  3
@@ -141,5 +141,7 @@ param set-default RC_MAP_YAW       4
 # RC switch"가 번갈아 찍히며 즉시 재disarm되는 레이스가 실제로 발생했다 (SITL에서
 # RC_CHANNELS_OVERRIDE 타이밍 지터로 채널값이 threshold 근처에서 흔들릴 때 특히).
 param set-default RC_MAP_ARM_SW    0
-param set-default RC_MAP_KILL_SW   7
-# RC_MAP_LAND_SW: PX4 버전에 따라 지원 여부 다름 — 없으면 arms_comm이 MAVLink로 처리
+# CH7은 RC kill에 절대 연결하지 않는다. SITL bridge가 CH7 상승엣지를
+# MAV_CMD_NAV_RETURN_TO_LAUNCH으로 변환한다. `set-default`는 기존 PX4 저장 파라미터를
+# 덮지 않으므로 launch의 PX4_PARAMS에서도 RC_MAP_KILL_SW=0을 강제로 넣는다.
+param set-default RC_MAP_KILL_SW   0

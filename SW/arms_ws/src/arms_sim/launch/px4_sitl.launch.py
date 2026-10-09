@@ -44,6 +44,9 @@ PX4_PARAMS = {
     "COM_DISARM_PRFLT": 0,
     "NAV_DLL_ACT": 0,
     "NAV_RCL_ACT": 0,
+    # CH7은 control의 RTL 요청용이다. 기존 SITL 파라미터에 남은 kill mapping을
+    # 부팅마다 지워야 RC override의 CH7 high가 `Kill switch engaged`가 되지 않는다.
+    "RC_MAP_KILL_SW": 0,
     "MC_ACRO_R_MAX": 400,
     "MC_ACRO_P_MAX": 400,
     "MPC_MAN_TILT_MAX": 65,
