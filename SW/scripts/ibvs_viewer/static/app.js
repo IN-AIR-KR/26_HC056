@@ -597,7 +597,7 @@ function updateScene(t) {
     // Source-independent attitude: yaw=heading, roll/pitch=body tilt.
     const roll = nearestAt(att, "roll_deg", t), pitch = nearestAt(att, "pitch_deg", t), yaw = nearestAt(att, "yaw_deg", t);
     S3.drone.rotation.order = "YXZ";
-    S3.drone.rotation.set(deg(pitch), -deg(yaw), -deg(roll));
+    S3.drone.rotation.set(deg(pitch), -deg(yaw), deg(roll));
     if (S3.focus === "drone") { S3.target.copy(pos); applySceneCamera(); }
     const a = (v) => v == null ? "—" : v.toFixed(0) + "°";
     $("scene-info").textContent = `t=${t.toFixed(2)}s  E ${pos.x.toFixed(1)} N ${pos.z.toFixed(1)} U ${pos.y.toFixed(1)}m · R ${a(roll)} P ${a(pitch)} Y ${a(yaw)}`;
@@ -849,8 +849,10 @@ function makeChart(p, { data, specs, multiTopic }, el) {
         const t = u.posToVal(left, "x");
         const st = stateAt(t);
         $("readout").textContent = `t = ${t.toFixed(3)} s${st ? "  ·  " + st : ""}`;
-        if (videoOn() && vmode === "follow") showFrameAt(t);
-        updateScene(t);
+        if (vmode === "follow") {
+          if (videoOn()) showFrameAt(t);
+          else updateScene(t);
+        }
       }],
     },
   };
@@ -1060,6 +1062,10 @@ function bind() {
   });
   document.querySelectorAll("#vmode button").forEach((b) => b.onclick = () => {
     vmode = b.dataset.m; saveLS("ibvs_viewer.vmode", vmode); applyLayout();
+    if (vmode === "play") {
+      if (videoOn()) showFrameAt(V.t);
+      else updateScene(V.t);
+    }
   });
   $("v-play").onclick = () => setPlaying(!V.playing);
   $("v-seek").oninput = () => { setPlaying(false); seekVideo(parseFloat($("v-seek").value)); };
