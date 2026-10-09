@@ -214,6 +214,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #scene-canvas { width: 100%; aspect-ratio: 4 / 3; background: #090c10; border-radius: 6px; overflow: hidden; cursor: grab; }
 #scene-canvas:active { cursor: grabbing; }
 #scene-canvas canvas { width: 100%; height: 100%; display: block; }
+.scene-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.scene-controls .seg button { padding: 4px 9px; }
 #balloon-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
 #balloon-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
 #balloon-form input { width: 100%; min-width: 0; padding: 8px 10px; font-size: 14px; }

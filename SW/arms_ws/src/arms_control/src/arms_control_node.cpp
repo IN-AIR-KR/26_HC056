@@ -15,6 +15,7 @@
 #include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
 #include "arms_msgs/msg/battery_telemetry.hpp"
+#include "arms_msgs/msg/attitude_telemetry.hpp"
 #include "arms_msgs/msg/crsf_telemetry.hpp"
 #include "arms_msgs/msg/gps_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
@@ -510,8 +511,10 @@ class ArmsControlNode : public rclcpp::Node {
     // 배터리(CRSF 0x08)는 UI/녹화용 전용 토픽으로 발행한다. /arms/crsf_rx의 통합
     // 스냅샷에도 호환성을 위해 같은 값은 유지하되, 소비자는 /arms/battery를 쓴다.
     pub_battery_ = create_publisher<arms_msgs::msg::BatteryTelemetry>("/arms/battery", 10);
-    // CRSF 수신(RX) 통합 텔레메트리: 자세(RPY)/수직속도/비행모드/링크통계 등.
+    // CRSF 수신(RX) 통합 텔레메트리: 수직속도/비행모드/링크통계 등.
     pub_crsf_rx_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf_rx", 10);
+    // 소스와 무관한 기체 자세. 실기체는 CRSF Attitude(0x1E)에서 채운다.
+    pub_attitude_ = create_publisher<arms_msgs::msg::AttitudeTelemetry>("/arms/attitude", 10);
     // CRSF 송신(TX) 채널 로그용(구독자 있을 때만).
     // [roll,pitch,thr,yaw,arm,mode,rtl,ch8] CRSF 단위.
     pub_crsf_tx_ = create_publisher<std_msgs::msg::Int16MultiArray>("/arms/crsf_tx", 10);
@@ -918,6 +921,12 @@ class ArmsControlNode : public rclcpp::Node {
         crsf_telem_.pitch_deg = static_cast<float>(be16(0) / 10000.0 * R2D);
         crsf_telem_.roll_deg  = static_cast<float>(be16(2) / 10000.0 * R2D);
         crsf_telem_.yaw_deg   = static_cast<float>(be16(4) / 10000.0 * R2D);
+        arms_msgs::msg::AttitudeTelemetry attitude;
+        attitude.header.stamp = now();
+        attitude.roll_deg = crsf_telem_.roll_deg;
+        attitude.pitch_deg = crsf_telem_.pitch_deg;
+        attitude.yaw_deg = crsf_telem_.yaw_deg;
+        pub_attitude_->publish(attitude);
       } else if (frame.type == 0x02 && frame.payload.size() >= 15) {
         // GPS: lat/lon E7, speed 0.1 km/h, course 0.01 deg, altitude+1000 m, sats.
         auto be32 = [&](size_t i) {
@@ -1707,6 +1716,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<arms_msgs::msg::IbvsDebug>::SharedPtr pub_ibvs_dbg_;      // IBVS 디버그 → /arms/ibvs_debug
   rclcpp::Publisher<arms_msgs::msg::BatteryTelemetry>::SharedPtr pub_battery_; // CRSF battery → /arms/battery
   rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_rx_;   // CRSF 수신 텔레메트리 → /arms/crsf_rx
+  rclcpp::Publisher<arms_msgs::msg::AttitudeTelemetry>::SharedPtr pub_attitude_; // source-independent attitude → /arms/attitude
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_crsf_tx_;  // CRSF 송신 채널 로그 → /arms/crsf_tx
   rclcpp::Publisher<arms_msgs::msg::GpsTelemetry>::SharedPtr pub_gps_;        // CRSF GPS → /arms/gps
   int battery_detected_cells_{0};    // 전압으로 자동 감지한 셀 수(첫 유효 전압에서 1회 감지 후 래치)

@@ -34,7 +34,7 @@ class FlightRecorder(Node):
         # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
         #   detections_raw = 칼만 적용 전 원시 측정값(추후 KF 튜닝 재현용).
         #   ibvs_debug=유도 각 항(오차/LOS각속도/z1·배리어/항별 기여/스케줄링/명령·추력) 스냅샷.
-        #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리(링크/자세 등),
+        #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
         #   battery=배터리 전용 토픽이다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.
         self.declare_parameter("record_topics", [
@@ -47,6 +47,7 @@ class FlightRecorder(Node):
             "/arms/control_debug",
             "/arms/crsf_tx",
             "/arms/crsf_rx",
+            "/arms/attitude",
             "/arms/battery",
             "/arms/gps",
             "/arms/mission_state",

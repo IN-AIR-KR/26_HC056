@@ -3,8 +3,9 @@
 sitl_bridge_node — CRSF→MAVLink bridge for SITL
 
 Reads CRSF RC frames from a virtual serial port (socat PTY pair) and converts
-them to MAVLink RC_CHANNELS_OVERRIDE toward PX4.  PX4가 Gazebo NavSat 센서에서
-만든 GPS_RAW_INT는 /arms/gps로 다시 발행해 SITL UI도 실기체와 같은 토픽을 쓴다.
+them to MAVLink RC_CHANNELS_OVERRIDE toward PX4. PX4가 Gazebo NavSat 센서에서
+만든 GPS_RAW_INT와 ATTITUDE는 각각 /arms/gps와 /arms/attitude 호환 텔레메트리로
+다시 발행해 SITL UI/rosbag도 실기체와 같은 토픽을 쓴다.
 
 Channel mapping:
   CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
@@ -14,13 +15,14 @@ CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=S
   high=Stabilized 는 자동수평 + throttle 직결(고도유지 없음). 실기체 FC 의 수동 모드와 동작을 맞춘 것.
 """
 
+import math
 import threading
 import time
 
 import rclpy
 from rclpy.node import Node
 
-from arms_msgs.msg import GpsTelemetry
+from arms_msgs.msg import AttitudeTelemetry, GpsTelemetry
 
 try:
     from pymavlink import mavutil
@@ -47,6 +49,8 @@ ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed 
 HB_TIMEOUT_SEC = 3.0
 GPS_RAW_INT_MESSAGE_ID = 24
 GPS_STREAM_INTERVAL_US = 200_000  # 5 Hz: UI 표시에는 충분하고 MAVLink 부하는 작다.
+ATTITUDE_MESSAGE_ID = 30
+ATTITUDE_STREAM_INTERVAL_US = 33_333  # 30 Hz: 3D 자세 표현과 rosbag 분석용.
 
 
 def _crc8_dvb_s2(data: bytes) -> int:
@@ -155,6 +159,9 @@ class ArmsSITLCommNode(Node):
         # 실기체는 arms_control_node가 ELRS 수신 CRSF GPS를 발행한다. SITL은 ELRS가
         # 없으므로 여기서 PX4 MAVLink GPS_RAW_INT를 같은 인터페이스로 공급한다.
         self._gps_pub = self.create_publisher(GpsTelemetry, "/arms/gps", 10)
+        # 실기체는 arms_control_node가 CRSF Attitude(0x1E)를 /arms/attitude로 낸다.
+        # SITL은 PX4 MAVLink ATTITUDE(rad)를 같은 roll/pitch/yaw [deg] 인터페이스로 낸다.
+        self._attitude_pub = self.create_publisher(AttitudeTelemetry, "/arms/attitude", 10)
 
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
@@ -199,6 +206,7 @@ class ArmsSITLCommNode(Node):
         self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
         self._send_set_mode(PX4_CUSTOM_MAIN_MODE_ACRO)
         self._request_gps_stream()
+        self._request_attitude_stream()
         time.sleep(0.5)
 
         self._connected = True
@@ -224,16 +232,16 @@ class ArmsSITLCommNode(Node):
         threading.Thread(target=worker, daemon=True).start()
 
     # ------------------------------------------------------------------
-    # MAVLink RX (armed-state tracking via HEARTBEAT + SITL GPS telemetry)
+    # MAVLink RX (armed-state tracking + SITL GPS/attitude telemetry)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """HEARTBEAT와 GPS_RAW_INT를 수신하고 PX4 재기동을 감지한다."""
+        """HEARTBEAT·GPS_RAW_INT·ATTITUDE를 수신하고 PX4 재기동을 감지한다."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type=['HEARTBEAT', 'GPS_RAW_INT'],
+                msg = self._mav.recv_match(type=['HEARTBEAT', 'GPS_RAW_INT', 'ATTITUDE'],
                                            blocking=True, timeout=1.0)
                 now = time.monotonic()
                 if msg is None:
@@ -258,6 +266,8 @@ class ArmsSITLCommNode(Node):
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
                 elif t == 'GPS_RAW_INT':
                     self._publish_gps(msg)
+                elif t == 'ATTITUDE':
+                    self._publish_attitude(msg)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
@@ -285,6 +295,15 @@ class ArmsSITLCommNode(Node):
         gps.fix_type_inferred = False
         gps.valid_fix = fix_type >= 2  # MAVLink: 2D FIX 이상
         self._gps_pub.publish(gps)
+
+    def _publish_attitude(self, msg):
+        """PX4 MAVLink ATTITUDE(rad)를 source-independent /arms/attitude(deg)로 변환한다."""
+        att = AttitudeTelemetry()
+        att.header.stamp = self.get_clock().now().to_msg()
+        att.roll_deg = math.degrees(float(getattr(msg, 'roll', 0.0)))
+        att.pitch_deg = math.degrees(float(getattr(msg, 'pitch', 0.0)))
+        att.yaw_deg = math.degrees(float(getattr(msg, 'yaw', 0.0)))
+        self._attitude_pub.publish(att)
 
     # ------------------------------------------------------------------
     # CRSF reader
@@ -450,6 +469,23 @@ class ArmsSITLCommNode(Node):
         except Exception as e:
             self.get_logger().warn(
                 f"GPS_RAW_INT stream request failed: {e}", throttle_duration_sec=5.0)
+
+    def _request_attitude_stream(self):
+        """PX4 ATTITUDE를 30 Hz로 요청해 3D 뷰/rosbag 자세를 채운다."""
+        if self._mav is None:
+            return
+        try:
+            self._mav.mav.command_long_send(
+                self._mav.target_system, self._mav.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                float(ATTITUDE_MESSAGE_ID),
+                float(ATTITUDE_STREAM_INTERVAL_US),
+                0, 0, 0, 0, 0,
+            )
+        except Exception as e:
+            self.get_logger().warn(
+                f"ATTITUDE stream request failed: {e}", throttle_duration_sec=5.0)
 
 
 def main(args=None):

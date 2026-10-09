@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectionArray.msg"
   "msg/MissionState.msg"
   "msg/CrsfTelemetry.msg"
+  "msg/AttitudeTelemetry.msg"
   "msg/BatteryTelemetry.msg"
   "msg/GpsTelemetry.msg"
   "msg/IbvsDebug.msg"

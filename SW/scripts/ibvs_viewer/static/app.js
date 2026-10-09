@@ -9,6 +9,7 @@ const G = "/arms/gps";
 const B = "/arms/battery";
 const CMD = "/arms/command";
 const TX = "/arms/crsf_tx";
+const A = "/arms/attitude";
 const D = "/arms/detections";
 const DR = "/arms/detections_raw";
 const DS = "/arms/detector_status";
@@ -142,10 +143,15 @@ const GENERAL_PANELS = [
       { t: B, f: "voltage_v", label: "voltage [V]" }, { t: B, f: "current_a", label: "current [A]" },
       { t: B, f: "battery_remaining_pct", label: "remaining [%]", scale: "y2" },
     ] },
-  { title: "CRSF attitude / link", note: "roll, pitch, yaw / uplink quality",
+  { title: "Attitude", note: "source-independent vehicle roll / pitch / yaw",
     series: [
-      { t: R, f: "roll_deg", label: "roll [deg]" }, { t: R, f: "pitch_deg", label: "pitch [deg]" },
-      { t: R, f: "yaw_deg", label: "yaw [deg]" }, { t: R, f: "uplink_lq", label: "uplink LQ [%]", scale: "y2" },
+      { t: A, f: "roll_deg", label: "roll [deg]" }, { t: A, f: "pitch_deg", label: "pitch [deg]" },
+      { t: A, f: "yaw_deg", label: "yaw [deg]" },
+    ] },
+  { title: "CRSF link", note: "uplink telemetry received from ELRS",
+    series: [
+      { t: R, f: "uplink_rssi_dbm", label: "uplink RSSI [dBm]" },
+      { t: R, f: "uplink_lq", label: "uplink LQ [%]" }, { t: R, f: "uplink_snr_db", label: "uplink SNR [dB]" },
     ] },
   { title: "Operator command / switches", note: "sticks and AUTO/MANUAL / ARM / RTL switch inputs",
     series: [
@@ -210,11 +216,11 @@ const PANELS = [
       { f: "aim_share_x" }, { f: "lead_share_x", dash: [4, 3] },
       { f: "aim_share_y" }, { f: "lead_share_y", dash: [4, 3] },
     ] },
-  { title: "Command vs attitude", note: "왼축 [deg/s] · 오른축 CRSF 자세[deg]",
+  { title: "Command vs attitude", note: "왼축 [deg/s] · 오른축 source-independent attitude [deg]",
     series: [
       { f: "roll_rate_cmd", dash: [4, 3], width: 1 }, { f: "roll_rate_out" },
       { f: "pitch_rate_cmd", dash: [4, 3], width: 1 }, { f: "pitch_rate_out" },
-      { t: R, f: "roll_deg", scale: "y2", dash: [2, 3] }, { t: R, f: "pitch_deg", scale: "y2", dash: [2, 3] },
+      { t: A, f: "roll_deg", scale: "y2", dash: [2, 3] }, { t: A, f: "pitch_deg", scale: "y2", dash: [2, 3] },
     ] },
   { title: "Scheduling scales", note: "0~1",
     series: [
@@ -442,7 +448,8 @@ function stateAt(t) {
 // 좌표는 기록 첫 GPS를 원점으로 한 ENU 근사: X=east, Y=up, Z=north [m].
 const S3 = { renderer: null, scene: null, camera: null, drone: null, balloon: null,
   path: null, origin: null, gps: null, resize: null, target: null,
-  radius: 30, theta: 0, phi: 1.1, pointer: null };
+  radius: 30, theta: 0, phi: 1.1, pointer: null,
+  focus: loadLS("ibvs_viewer.scene_focus", "drone") };
 const deg = (v) => (v || 0) * Math.PI / 180;
 
 function nearestAt(d, field, t) {
@@ -487,6 +494,18 @@ function setSceneCamera(target, radius = null) {
   if (radius != null) { S3.theta = Math.PI / 4; S3.phi = 1.05; }
   applySceneCamera();
 }
+function updateSceneFocusControls() {
+  document.querySelectorAll("#scene-focus button").forEach((b) => b.classList.toggle("on", b.dataset.focus === S3.focus));
+}
+function setSceneFocus(focus) {
+  S3.focus = focus === "origin" ? "origin" : "drone";
+  saveLS("ibvs_viewer.scene_focus", S3.focus);
+  updateSceneFocusControls();
+  if (!window.THREE || !S3.target) return;
+  if (S3.focus === "origin") S3.target.set(0, 0, 0);
+  else if (S3.drone?.visible) S3.target.copy(S3.drone.position);
+  applySceneCamera(); renderScene();
+}
 function initScene() {
   const host = $("scene-canvas");
   if (!window.THREE || !host) return;
@@ -519,7 +538,7 @@ function initScene() {
     const dx = e.clientX - S3.pointer.x, dy = e.clientY - S3.pointer.y;
     S3.pointer.x = e.clientX; S3.pointer.y = e.clientY;
     S3.theta -= dx * 0.012;
-    S3.phi = Math.max(0.08, Math.min(Math.PI - 0.08, S3.phi + dy * 0.012));
+    S3.phi = Math.max(0.08, Math.min(Math.PI - 0.08, S3.phi - dy * 0.012));
     applySceneCamera(); renderScene();
   });
   const releasePointer = (e) => {
@@ -572,13 +591,16 @@ function loadBalloon() {
 }
 function updateScene(t) {
   if (!S3.scene || !rec) return;
-  const pos = gpsAt(t); const att = rec.topics[R];
+  const pos = gpsAt(t); const att = rec.topics[A];
   if (pos) {
     S3.drone.visible = true; S3.drone.position.copy(pos);
-    // CRSF attitude is an approximate body visualization: yaw=heading, roll/pitch=body tilt.
+    // Source-independent attitude: yaw=heading, roll/pitch=body tilt.
+    const roll = nearestAt(att, "roll_deg", t), pitch = nearestAt(att, "pitch_deg", t), yaw = nearestAt(att, "yaw_deg", t);
     S3.drone.rotation.order = "YXZ";
-    S3.drone.rotation.set(deg(nearestAt(att, "pitch_deg", t)), -deg(nearestAt(att, "yaw_deg", t)), -deg(nearestAt(att, "roll_deg", t)));
-    $("scene-info").textContent = `t=${t.toFixed(2)}s  E ${pos.x.toFixed(1)}  N ${pos.z.toFixed(1)}  U ${pos.y.toFixed(1)} m`;
+    S3.drone.rotation.set(deg(pitch), -deg(yaw), -deg(roll));
+    if (S3.focus === "drone") { S3.target.copy(pos); applySceneCamera(); }
+    const a = (v) => v == null ? "—" : v.toFixed(0) + "°";
+    $("scene-info").textContent = `t=${t.toFixed(2)}s  E ${pos.x.toFixed(1)} N ${pos.z.toFixed(1)} U ${pos.y.toFixed(1)}m · R ${a(roll)} P ${a(pitch)} Y ${a(yaw)}`;
   } else {
     S3.drone.visible = false; $("scene-info").textContent = "GPS 위치 없음";
   }
@@ -1045,6 +1067,8 @@ function bind() {
   $("v-source").onchange = () => {
     setPlaying(false); V.topic = $("v-source").value; V.shown = V.want = -1; updateMp4Download(); showFrameAt(V.t);
   };
+  document.querySelectorAll("#scene-focus button").forEach((b) => { b.onclick = () => setSceneFocus(b.dataset.focus); });
+  updateSceneFocusControls();
   ["balloon-lat", "balloon-lon", "balloon-alt"].forEach((id) => { $(id).onchange = setBalloonFromInputs; });
   $("balloon-save").onclick = saveBalloon;
   document.addEventListener("keydown", (e) => {   // Space = 재생/일시정지 (입력창 밖에서만)

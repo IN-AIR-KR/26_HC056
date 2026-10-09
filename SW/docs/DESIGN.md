@@ -143,8 +143,8 @@ graph TD
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
 | `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>`/arms/battery`<br/>CRSF serial |
-| `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)<br/>PX4 MAVLink (`GPS_RAW_INT`)                                | MAVLink RC_CHANNELS_OVERRIDE → PX4<br/>`/arms/gps` (SITL GPS)                            |
+| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>`/arms/attitude`<br/>`/arms/battery`<br/>CRSF serial |
+| `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)<br/>PX4 MAVLink (`GPS_RAW_INT`, `ATTITUDE`)                    | MAVLink RC_CHANNELS_OVERRIDE → PX4<br/>`/arms/gps` (SITL GPS)<br/>`/arms/attitude` (SITL 자세) |
 | `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps`<br/>`/arms/battery` | —                                                                                         |
 
 ### 3.2 노드별 역할
@@ -157,8 +157,8 @@ graph TD
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. 300 ms 동안 유효 패킷이 없으면 `command_lost` 이벤트를 함께 발행. fake_mode 지원 | 호스트 (실기체)               |
 | `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
 | `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
-| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS·배터리 프레임을 각각 `/arms/gps`·`/arms/battery`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
-| `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. PX4 `GPS_RAW_INT`를 `/arms/gps`로 변환한다. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL)                 |
+| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS·Attitude·배터리 프레임을 각각 `/arms/gps`·`/arms/attitude`·`/arms/battery`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
+| `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. PX4 `GPS_RAW_INT`와 `ATTITUDE`를 실기체 호환 `/arms/gps`·`/arms/attitude`로 변환한다. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL)                 |
 | `arms_ui_node`         | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                                          | 호스트                        |
 
 ## 4. 상태 머신 (arms_control 내부)
@@ -802,7 +802,8 @@ rosbag 녹화를 시작하며 ARM을 내리면 정상 마감한다. 녹화기가
 | `/arms/ibvs_debug` | `arms_msgs/IbvsDebug` | LOS, LOS rate, 배리어 항, 스케줄링, 각속도·추력 등 IBVS 유도 내부 스냅샷 |
 | `/arms/control_debug` | `geometry_msgs/Vector3` | 최종 제어 명령: `x=roll rate [deg/s]`, `y=pitch rate [deg/s]`, `z=thrust [0..1]` |
 | `/arms/crsf_tx` | `std_msgs/Int16MultiArray` | 실제 송신한 CRSF 채널 `[roll,pitch,throttle,yaw,arm,mode,rtl,ch8]` |
-| `/arms/crsf_rx` | `arms_msgs/CrsfTelemetry` | CRSF 수신 통합 스냅샷: 링크 상태·자세·수직속도·FC 비행 모드 등 |
+| `/arms/crsf_rx` | `arms_msgs/CrsfTelemetry` | CRSF 수신 통합 스냅샷: 링크 상태·수직속도·FC 비행 모드 등 |
+| `/arms/attitude` | `arms_msgs/AttitudeTelemetry` | 기체 roll/pitch/yaw [deg]. 실기체는 CRSF Attitude, SITL은 PX4 MAVLink ATTITUDE에서 발행 |
 | `/arms/battery` | `arms_msgs/BatteryTelemetry` | 배터리 전압·전류·사용 용량·잔량·감지 셀 수 |
 | `/arms/gps` | `arms_msgs/GpsTelemetry` | 위도/경도·고도·지상속도·침로·위성 수·fix 상태 |
 | `/arms/mission_state` | `arms_msgs/MissionState` | 상태 머신 상태, 검출/오차, arm·모드 등 미션 상태 |
