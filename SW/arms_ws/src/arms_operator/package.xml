@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>arms_operator</name>
+  <version>0.1.0</version>
+  <description>A.R.M.S. 운용자 입력 → operator/input. 실기체: ESP32(ADS1115+GPIO) UART 수신 / SITL: tkinter 가상 조종기. (튜닝 콘솔은 arms_sim/panel 로 분리됨)</description>
+  <maintainer email="dev@arms.local">arms</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>arms_msgs</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

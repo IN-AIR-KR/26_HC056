@@ -19,8 +19,9 @@ SW/
 │       ├── arms_bringup/       # 런치 파일
 │       ├── arms_video/         # 영상 수신
 │       ├── arms_detection/     # YOLO 객체 인식 (Docker)
-│       ├── arms_control/       # 상태 머신 + PID + CRSF 출력
-│       ├── arms_command/       # 조종 입력 (실기체 C++ HW / SITL 가상 조종기)
+│       ├── arms_control/       # 상태 머신 + 유도 제어
+│       ├── arms_flight_io/     # CRSF(실기체) / MAVLink(SITL) FC 어댑터
+│       ├── arms_operator/      # 운용자 입력 (실기체 C++ HW / SITL 가상 조종기)
 │       ├── arms_sim/           # SITL 전용: PX4 SITL 런치 + Gazebo 자산 + 표적 심판(referee) + 튜닝 콘솔(panel)
 │       │   ├── launch/         #   px4_sitl.launch.py (PX4+Gazebo 기동/정리/파라미터)
 │       │   └── assets/         #   시뮬 자산
@@ -29,7 +30,7 @@ SW/
 │       │       └── px4/airframes/  # PX4 airframe (4022_gz_arms_drone)
 │       ├── arms_ui/            # 오퍼레이터 UI
 │       └── arms_msgs/          # 커스텀 메시지
-├── scripts/            # 테스트/도구 스크립트 (crsf / joy / servo / detection_analysis / bag_visualize / yolo 학습)
+├── scripts/            # 테스트/도구 스크립트 (crsf / joy / detection_analysis / ibvs_viewer / yolo 학습)
 ├── setup_sim.sh        # 최초 셋업 (한 번)
 └── kill_all.sh         # 비상용 전체 종료
 ```
@@ -59,7 +60,7 @@ ros2 launch arms_bringup arms_sitl.launch.py
 
 `setup_sim.sh` 가 드론 모델(arms_drone, 커스텀 x500_base 형태/무게)·월드를 PX4 트리에
 자동 심볼릭 링크하고, airframe `4022_gz_arms_drone` 등록 + PX4/ROS 빌드까지 처리한다.
-이후 `ros2 launch arms_bringup arms_sitl.launch.py` 하나로 PX4 SITL + Gazebo + socat + 전체
+이후 `ros2 launch arms_bringup arms_sitl.launch.py` 하나로 PX4 SITL + Gazebo + 전체
 ROS 스택 + 패널 GUI 가 다 뜨고, Ctrl+C 한 번에 전부 내려간다.
 
 - ROS 코드만 고쳐서 스택만 재시작하고 싶으면 (PX4/Gazebo 는 살려둔 채):

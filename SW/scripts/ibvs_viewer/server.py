@@ -70,7 +70,8 @@ def _records(root: Path) -> list:
                       if s["start_ns"] else None),
             "duration": s["duration"],
             "size": s["size"],
-            "ibvs_count": s["counts"].get("/arms/ibvs_debug", 0),
+            "ibvs_count": next((n for topic, n in s["counts"].items()
+                                if topic.endswith("/control/ibvs_debug")), 0),
             "counts": s["counts"],
         })
     out.sort(key=lambda r: r["name"], reverse=True)   # <YYYYmmdd_HHMMSS> → 최신이 위
@@ -175,7 +176,7 @@ def _write_manifest(record: Path, data: dict):
 
 def _mp4_name(record: Path, topic: str) -> str:
     """다운로드 파일명. 토픽별 UI/원본 영상을 구분한다."""
-    source = "ui" if topic == bag_reader.VIDEO_TOPIC else "raw"
+    source = "ui" if topic.endswith(bag_reader.VIDEO_SUFFIX) else "raw"
     return f"{record.name}_{source}.mp4"
 
 

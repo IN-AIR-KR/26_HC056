@@ -47,8 +47,8 @@ class SitlResetManager(Node):
         # 자기 pose(0 0 0.24)가 곧 출발점이다. 지면에 닿으며 0.19 근처로 가라앉는다.
         self.declare_parameter("spawn_pose", [0.0, 0.0, 0.24])
         self._busy = threading.Lock()
-        self._reset_pub = self.create_publisher(Empty, "/arms/reset", 10)
-        self.create_service(Trigger, "/arms/sitl/reset", self._reset)
+        self._reset_pub = self.create_publisher(Empty, "sim/reset_event", 10)
+        self.create_service(Trigger, "sim/reset", self._reset)
 
     def _reset(self, _request, response):
         if not self._busy.acquire(blocking=False):
@@ -62,12 +62,12 @@ class SitlResetManager(Node):
             #   PX4 도 없는 더 나쁜 상태가 됐다. 살릴 수 없는 리셋이면 아무것도
             #   건드리지 말고 그대로 실패를 알린다.
             self._require_gazebo()
-            # Referee/control 등이 이전 에피소드의 표적 진행 및 명령을 버리게 한다.
-            self._reset_pub.publish(Empty())
             self._stop_px4()
             self._park_drone()
             self._start_px4()
             drone = self._wait_for_px4()
+            # PX4가 새 기체에 다시 붙은 뒤에만 episode 경계를 알린다.
+            self._reset_pub.publish(Empty())
             response.success = True
             response.message = f"RESET 완료 ({drone} 원위치 + PX4 재attach)"
         except RuntimeError as exc:

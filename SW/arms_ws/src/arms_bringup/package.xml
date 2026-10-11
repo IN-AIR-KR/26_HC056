@@ -6,11 +6,23 @@
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Python launch modules and launch-time executables used directly here. -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>compressed_image_transport</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>plotjuggler</exec_depend>
+
   <exec_depend>arms_control</exec_depend>
+  <exec_depend>arms_flight_io</exec_depend>
   <exec_depend>arms_detection</exec_depend>
   <exec_depend>arms_video</exec_depend>
   <exec_depend>arms_ui</exec_depend>
-  <exec_depend>arms_command</exec_depend>
+  <exec_depend>arms_operator</exec_depend>
   <exec_depend>arms_sim</exec_depend>
 
   <export>

@@ -13,7 +13,7 @@ def generate_launch_description():
                 "/arms_drone/upward_camera/image@sensor_msgs/msg/Image[gz.msgs.Image",
             ],
             remappings=[
-                ("/arms_drone/upward_camera/image", "/arms/image_raw"),
+                ("/arms_drone/upward_camera/image", "camera/image_raw"),
             ],
         ),
     ])

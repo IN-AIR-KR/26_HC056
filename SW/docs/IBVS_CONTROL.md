@@ -1,12 +1,12 @@
 # IBVS 공선유도 제어 수식 정리 (guidance_mode 2)
 
-`arms_control_node` 의 자동요격(TRACK/FIRE)에서 **카메라 픽셀 오차 → 각속도 명령 + 추력** 이
+`arms_control_node` 의 자동요격(TRACK)에서 **카메라 픽셀 오차 → 각속도 명령 + 추력** 이
 어떻게 계산되는지 단계별로 정리한 문서다. 코드는
 [`arms_control_node.cpp`](../arms_ws/src/arms_control/src/arms_control_node.cpp) 의 `control_loop()`,
 파라미터는 [`control_params.yaml`](../arms_ws/src/arms_control/config/control_params.yaml)
 (SITL 기준) + [`hw_overrides.yaml`](../arms_ws/src/arms_control/config/hw_overrides.yaml) (실기체 덮어쓰기).
 
-각 단계 값은 비행 중 `/arms/ibvs_debug` (`arms_msgs/IbvsDebug`) 로 전부 발행되고, auto_save 로
+각 단계 값은 비행 중 `/arms/control/ibvs_debug` (`arms_msgs/IbvsDebug`) 로 전부 발행되고, auto_save 로
 녹화한 기록은 [`SW/scripts/ibvs_viewer`](../scripts/ibvs_viewer/README.md) 에서 그래프로 볼 수 있다.
 아래 각 절의 **📈** 는 그 값이 뷰어의 어느 필드인지 표시한 것이고, 그래프별로 선이 무엇이고
 각 필드의 수식은 [11. 뷰어 그래프별 필드 수식](#11-뷰어-그래프별-필드-수식) 에 정리했다.
@@ -240,7 +240,7 @@ CRSF 텔레메트리 자세와 같이 보인다)
 
 ---
 
-## 7. 추력 스케줄링 (TRACK/FIRE 에서만, 그 외 0)
+## 7. 추력 스케줄링 (TRACK에서만, 그 외 0)
 
 세 단계가 곱으로 걸린다: **근접도(크기) → 정렬 품질 → τ(충돌 임박)**. 전부 hover 와 track 사이를
 오가는 보간이고, **어떤 경우에도 hover 아래로는 안 내려간다**.
@@ -301,21 +301,6 @@ thrust = 0.51 + 0.114×0.5 = **0.567**.
 
 ---
 
-## 8. (참고) FIRE 판정 — `looming_fire_enabled: true` 일 때만
-
-TRACK 중 아래가 동시에 성립하면 FIRE:
-
-$$
-s_{bbox} \ge s_{min},\qquad 0 < \tau < \tau_{fire},\qquad |e_{raw}| < e_{tol}
-$$
-
-($s_{min}$ = `loom_s_min`, $\tau_{fire}$ = `tau_fire_sec`, $e_{tol}$ = `fire_align_tol`)
-
-현재 SITL·실기체 모두 false(SITL 은 심판 `/arms/hit` 로 RTL). τ 자체는 FIRE 여부와 무관하게
-항상 계산되어 7-3 추력 감속에 쓰인다.
-
----
-
 ## 9. 관련 파라미터
 
 "현재값" = 런치가 실제로 읽는 값(`control_params.yaml`, 실기체는 `hw_overrides.yaml` 이 덮어씀).
@@ -369,15 +354,6 @@ $$
 | `control.tau_ease_start` | 2.5 | $\tau_{start}$ | τ 감속 시작 [s]. 움직이는 표적에 늦으면 ↓ |
 | `control.tau_ease_full` | 0.3 | $\tau_{full}$ | 최대 감속 지점 [s] |
 | `control.tau_ease_min_scale` | 0.0 | $e_{min}$ | τ 임박 시 배율 하한(0 = hover 까지, 1 = 끔) |
-
-### FIRE (참고)
-
-| 파라미터 | 현재값 | 역할 |
-|---|---|---|
-| `mission.looming_fire_enabled` | false | τ 기반 FIRE on/off |
-| `mission.tau_fire_sec` | 0.3 | FIRE τ 임계 [s] |
-| `mission.fire_align_tol` | 0.2 | FIRE 정렬 허용오차 |
-| `mission.loom_s_min` | 0.1 | FIRE 최소 bbox 크기 |
 
 ### IBVS 에 영향 없는 것 (헷갈림 방지)
 
@@ -545,8 +521,8 @@ _왼축 [deg/s] · 오른축 CRSF 자세[deg]_
 | `roll_rate_out` | clamp(roll_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
 | `pitch_rate_cmd` | pitch_sign · range_gain_scale · guidance_y [deg/s] |
 | `pitch_rate_out` | clamp(pitch_rate_cmd, ±max_cmd_rate_dps) [deg/s] = 송신값 |
-| `crsf_rx.roll_deg` (오른축) | CRSF 텔레메트리 roll [deg] |
-| `crsf_rx.pitch_deg` (오른축) | CRSF 텔레메트리 pitch [deg] |
+| `vehicle/attitude.roll_deg` (오른축) | CRSF 텔레메트리 roll [deg] |
+| `vehicle/attitude.pitch_deg` (오른축) | CRSF 텔레메트리 pitch [deg] |
 
 ### Scheduling scales
 
@@ -586,8 +562,8 @@ _0/1_
 
 | 필드 | 수식 |
 |---|---|
-| `cmd_active` | state ∈ {TRACK, FIRE} |
-| `filter_active` | state ∈ {LOCK, TRACK, FIRE} |
+| `cmd_active` | state = TRACK |
+| `filter_active` | state ∈ {LOCK, TRACK} |
 | `detection_held` | 검출 끊김 → 마지막 오차 유지 |
 | `z1_clamped` | z1_raw > 0.995·kb |
 | `rate_saturated` | \|rate_cmd\| > max_cmd_rate_dps |

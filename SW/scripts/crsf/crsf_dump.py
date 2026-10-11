@@ -7,12 +7,12 @@ ELRS 하드웨어를 물리기 *전에*, Jetson UART 가 요청한 baud 로 실�
 
   Jetson 40핀 헤더에서 핀8(UART1_TXD) ↔ 핀10(UART1_RXD) 를 점퍼로 직결하고,
 
-  터미널 A:  python3 crsf_dump.py  --baud 420000
-  터미널 B:  python3 crsf_send.py  --baud 420000 --mode sweep
+  터미널 A:  python3 crsf_dump.py  --baud 400000
+  터미널 B:  python3 crsf_send.py  --baud 400000 --mode sweep
 
 디코드된 채널값이 송신값과 일치하고 CRC 에러가 0 이면 그 baud 는 신뢰 가능.
 CRC 에러가 계속 잡히면 Tegra UART 분주비 반올림으로 실제 baud 가 어긋난 것이므로
-다른 baud(460800 등)로 재시도한다.
+다른 baud로 재시도한다.
 
 (주의: ELRS 텔레메트리 파싱이 아니다. 순수하게 자기가 보낸 걸 되받는 자체 루프백.)
 """
@@ -35,7 +35,7 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--port", default="/dev/ttyTHS1", help="UART 장치")
-    p.add_argument("--baud", type=int, default=420000)
+    p.add_argument("--baud", type=int, default=400000)
     p.add_argument("--interval", type=float, default=1.0, help="채널값 출력 주기 [s]")
     p.add_argument("--channels", type=int, default=8, help="출력할 채널 개수")
     args = p.parse_args()

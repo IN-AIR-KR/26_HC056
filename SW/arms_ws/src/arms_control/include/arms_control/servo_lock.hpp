@@ -19,7 +19,7 @@ namespace arms_control {
 // 전제: 핀15 PWM1 pinmux(jetson-io) + /sys/class/pwm 쓰기 권한(99-gpio.rules udev).
 //       (README_SERVO_TEST.md 의 파이썬 경로와 동일 요건)
 //
-// sysfs 접근 실패(비-Jetson, pinmux 미설정, 권한 없음, enabled=false)에는
+// sysfs 접근 실패(비-Jetson, pinmux 미설정, 권한 없음)에는
 // 경고 1회만 남기고 이후 모든 명령을 무시(no-op)한다. → SITL/개발 PC 에서도
 // 노드가 정상 기동한다.
 // ---------------------------------------------------------------------------
@@ -28,7 +28,6 @@ class ServoLock {
   using LogFn = std::function<void(const std::string &)>;
 
   struct Params {
-    bool        enabled{true};
     std::string chip_path{"/sys/class/pwm/pwmchip0"};
     int         channel{0};
     long        period_ns{20000000};    // 50Hz = 20ms

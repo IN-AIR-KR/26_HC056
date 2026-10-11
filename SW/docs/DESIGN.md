@@ -2,8 +2,60 @@
 
 _Anti-drone Reusable Modular System — Software Architecture_
 
+## 0. I/O 경계와 namespace 계약
+
+### 0.1 Namespace
+
+새 인터페이스의 토픽은 노드 소스에서 모두 상대 이름으로 쓴다. 최상위 launch가
+`namespace` argument(기본 `arms`)를 적용하므로 기본 실행의 `vehicle/gps`는
+`/arms/vehicle/gps`로 해석된다. 다기체 실행은 같은 노드·토픽 계약에
+`namespace:=arms/uav_01`만 적용한다.
+
+### 0.2 제어와 FC 통신 분리
+
+```text
+operator/input + perception/* + vehicle/* + io/status
+  → arms_control_node
+  → control/flight_command (FlightCommand)
+  → arms_flight_io
+      ├─ arms_crsf_io_node : 실기체 CRSF/ELRS, Betaflight AUX 매핑
+      └─ sitl_bridge_node  : SITL MAVLink, PX4 arm/mode/RTL 매핑
+```
+
+`arms_control_node`는 UART, CRSF, MAVLink, Gazebo, RC 채널 번호를 직접 알지 않는다.
+`FlightCommand`는 정규화된 roll/pitch/yaw/throttle과 arm/manual/RTL 의도만 담고,
+실제 RC/AUX 변환은 `arms_flight_io`가 맡는다.
+
+| 도메인     | 공개 토픽                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| operator   | `operator/input`                                                                                |
+| control    | `control/flight_command`, `control/debug`, `control/ibvs_debug`, `control/looming_debug`        |
+| vehicle    | `vehicle/gps`, `vehicle/attitude`, `vehicle/battery`                                            |
+| I/O        | `io/status`, `io/crsf/rx`, `io/crsf/tx`                                                         |
+| perception | `perception/detections`, `perception/detections_raw`, `perception/status`, `perception/*_debug` |
+| mission    | `mission/state`                                                                                 |
+| SITL only  | `sim/hit`, `sim/reset` 서비스, `sim/reset_event`, `sim/viz/*`                                   |
+
+`io/status`는 CRSF/FC 또는 PX4 telemetry의 관측 상태만 보고한다. ESP32 입력 timeout,
+타겟 소실, RTL 판단은 `arms_control_node`가 담당한다. GPS Rescue 불가 시 fallback은
+Betaflight FC 설정에 맡긴다.
+
+### 0.3 로그 시간축과 reset
+
+ARMS Flight Analyzer의 재생·영상·3D·그래프 동기화 기준은 rosbag 저장 timestamp다.
+header stamp는 측정·수신 시각 및 지연 분석용 보조 정보이며, 현재는 `/clock`이나
+`use_sim_time`을 사용하지 않는다. manifest에는 `topic_schema_version`, namespace,
+`use_sim_time`을 남긴다.
+
+SITL reset panel은 `sim/reset` 서비스를 호출한다. `sim_reset_manager`가 Gazebo를 유지한
+채 PX4 재기동을 확인한 뒤 `sim/reset_event`를 한 번 발행하여 control/referee/UI의 상태를
+초기화한다. 실기체에는 이 서비스와 이벤트를 launch하지 않는다.
+
+구형 `/arms/...` 토픽 형식의 bag은 새 Flight Analyzer에서 지원하지 않는다.
+
 ## 목차
 
+0. [I/O 경계와 namespace 계약](#0-io-경계와-namespace-계약)
 1. [시스템 개요](#1-시스템-개요)
 2. [ROS 패키지 구조](#2-ros-패키지-구조)
 3. [노드 및 토픽 구조](#3-노드-및-토픽-구조)
@@ -11,7 +63,7 @@ _Anti-drone Reusable Modular System — Software Architecture_
 5. [영상 수신 (arms_video)](#5-영상-수신-arms_video)
 6. [객체 인식 (arms_detection)](#6-객체-인식-arms_detection)
 7. [비행 제어 및 통신 (arms_control)](#7-비행-제어-및-통신-arms_control)
-8. [조종 입력 (arms_command)](#8-조종-입력-arms_command)
+8. [운용자 입력 (arms_operator)](#8-운용자-입력-arms_operator)
 9. [오퍼레이터 UI (arms_ui)](#9-오퍼레이터-ui-arms_ui)
 10. [런치 파일 구조](#10-런치-파일-구조)
 11. [전체 데이터 흐름 요약](#11-전체-데이터-흐름-요약)
@@ -47,131 +99,202 @@ arms_ws/
     ├── arms_bringup/          # 최상위 런치 파일 및 설정
     ├── arms_video/            # 영상 소스 추상화 (v4l2_camera / gz_ros2_bridge)
     ├── arms_detection/        # 검출 노드 (HSV 후보 → ROI YOLO 검증 + KF 필터, Docker)
-    ├── arms_command/          # 조종 입력 → /arms/command (SITL 가상 조종기 / 실기체 ESP32+ADS1115+GPIO)
+    ├── arms_operator/         # 운용자 입력 → operator/input (SITL 가상 조종기 / 실기체 ESP32)
+    ├── arms_flight_io/        # FlightCommand ↔ FC I/O (CRSF 또는 MAVLink)
     ├── arms_sim/              # SITL 전용: 표적 심판(referee) + 튜닝/심판 콘솔(panel)
-    ├── arms_control/          # 상태 머신 + PID + CRSF 출력 (C++/Python hybrid)
-    │     ├── src/             #   C++: arms_control_node, crsf_output
-    │     └── arms_control/    #   Python: sitl_bridge_node (SITL 전용)
+    ├── arms_control/          # 상태 머신 + PID → control/flight_command
     ├── arms_ui/               # 오퍼레이터 디스플레이 (OpenCV 오버레이)
     └── arms_msgs/             # 커스텀 메시지 정의
 ```
 
 ## 3. 노드 및 토픽 구조
 
-### 3.1 노드 그래프
+### 3.1 공통 논리 구조
 
 ```mermaid
 graph TD
-    GAZEBO["Gazebo Camera<br/>(SITL)"]
-    V4L2["/dev/video0<br/>(USB FPV Receiver)"]
+    CAMERA["camera source"]
+    IMAGE(["camera/image_raw"])
+    DETECTIONS(["perception/detections"])
+    OP_INPUT(["operator/input"])
+    FLIGHT_CMD(["control/flight_command"])
+    VEHICLE(["vehicle/* · io/status"])
+    CONTROL_STATE(["mission/state · control/*"])
+    UI_IMAGE(["ui/image"])
 
-    subgraph arms_video ["arms_video"]
-        VN_REAL["arms_video_node<br/>(v4l2_camera) 실기체"]
-        VN_SITL["arms_video_node<br/>(gz_ros2_bridge) SITL"]
+    subgraph VIDEO["camera source adapter"]
+        VIDEO_NODE["arms_video 또는<br/>Gazebo bridge"]
     end
 
-    IMAGE(["/arms/image_raw"])
-
-    subgraph arms_detection ["arms_detection"]
-        DN_FUSION["arms_detection_node<br/>(HSV 후보 → ROI YOLO 검증<br/>+ KF 필터, Docker)"]
+    subgraph DETECTION["arms_detection"]
+        DET["arms_detection_node"]
     end
 
-    subgraph arms_command ["arms_command"]
-        CMD_GUI["arms_command_node<br/>(가상 조종기, tkinter) SITL"]
-        CMD_JOY["arms_command_hw_node<br/>(ESP32 수신) 실기체"]
+    subgraph OPERATOR["arms_operator"]
+        OPERATOR_NODE["operator implementation"]
     end
 
-    subgraph arms_sim ["arms_sim (SITL 전용)"]
-        PANEL["panel<br/>(튜닝/심판 콘솔)"]
-        REFEREE["referee<br/>(표적 비행)"]
+    subgraph CONTROL["arms_control"]
+        CTRL["arms_control_node<br/>유도 · 상태 머신 · 안전 정책"]
     end
 
-    ADS1115["ADS1115 ADC<br/>(I2C 짐벌 4축)"]
-    SWGPIO["GPIO 스위치 4개"]
-    ESP32["ESP32 모듈<br/>(USB Serial → Jetson)"]
-    JOY(["/arms/command"])
-
-    DETECTIONS(["/arms/detections"])
-    MISSION_STATE(["/arms/mission_state"])
-    CRSF_SERIAL(["CRSF serial<br/>/tmp/crsf_tx (SITL)<br/>/dev/ttyTHS1 (실기체)"])
-
-    subgraph arms_control ["arms_control"]
-        CN["arms_control_node (C++)<br/>State Machine + PID + CRSF output"]
-        BRIDGE["sitl_bridge_node (Python)<br/>CRSF→MAVLink bridge  SITL only"]
+    subgraph IO["arms_flight_io"]
+        IO_NODE["flight I/O adapter"]
     end
 
-    subgraph arms_ui ["arms_ui"]
-        UN["arms_ui_node"]
+    subgraph UI["arms_ui"]
+        DISPLAY["arms_ui_node"]
+        REC["flight_recorder"]
     end
 
-    FC_SITL["PX4 SITL<br/>(ACRO/Altitude, CH6)"]
-    FC_HW["Flight Controller<br/>(ELRS RX → ACRO/Altitude)"]
-    ELRS_TX["ELRS TX module<br/>(UART 400kbaud)"]
+    FC["Flight controller"]
 
-    V4L2 -->|V4L2 capture| VN_REAL
-    GAZEBO -->|gz topic| VN_SITL
-    ADS1115 -->|I2C| ESP32
-    SWGPIO --> ESP32
-    ESP32 -->|USB Serial| CMD_JOY
-    CMD_JOY --> JOY
-    CMD_GUI --> JOY
-    VN_REAL --> IMAGE
-    VN_SITL --> IMAGE
-    IMAGE --> DN_FUSION
-    IMAGE --> UN
-    DN_FUSION --> DETECTIONS
-    DETECTIONS --> CN
-    DETECTIONS --> UN
-    JOY --> CN
-    CN --> MISSION_STATE
-    CN --> CRSF_SERIAL
-    MISSION_STATE --> UN
-    MISSION_STATE --> PANEL
-    PANEL -.->|ros2 param set| CN
-    PANEL -.->|ros2 param set| REFEREE
-    CRSF_SERIAL -->|SITL: socat PTY| BRIDGE
-    BRIDGE -->|RC_CHANNELS_OVERRIDE UDP| FC_SITL
-    CRSF_SERIAL -->|실기체: UART| ELRS_TX
-    ELRS_TX -->|RF| FC_HW
+    CAMERA --> VIDEO_NODE
+    VIDEO_NODE --> IMAGE
+    IMAGE --> DET
+    IMAGE --> DISPLAY
+    DET --> DETECTIONS
+    DETECTIONS --> CTRL
+    DETECTIONS --> DISPLAY
+
+    OPERATOR_NODE --> OP_INPUT
+    OP_INPUT --> CTRL
+    OP_INPUT --> DISPLAY
+
+    CTRL --> FLIGHT_CMD
+    FLIGHT_CMD --> IO_NODE
+    IO_NODE <--> FC
+    IO_NODE --> VEHICLE
+    VEHICLE --> CTRL
+    VEHICLE --> DISPLAY
+
+    CTRL --> CONTROL_STATE
+    CONTROL_STATE --> DISPLAY
+    CONTROL_STATE --> REC
+    DISPLAY --> UI_IMAGE
+    UI_IMAGE --> REC
+    classDef topic fill:#f4f7fb,stroke:#5c7899,color:#17212b
+    class IMAGE,DETECTIONS,OP_INPUT,FLIGHT_CMD,VEHICLE,CONTROL_STATE,UI_IMAGE topic
 ```
 
-| 노드                   | subscribe                                                                                    | publish                                                                                   |
-| ---------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `arms_video_node`      | —                                                                                            | `/arms/image_raw`                                                                         |
-| `arms_detection_node`  | `/arms/image_raw`                                                                            | `/arms/detections`<br/>(구독 있을 때만) `/arms/debug_image`·`/arms/hsv_debug_image`·`/arms/detector_status` |
-| `arms_command_node`    | —                                                                                            | `/arms/command` (가상 조종기, SITL)                                                       |
-| `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
-| `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
-| `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>`/arms/attitude`<br/>`/arms/battery`<br/>CRSF serial |
-| `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)<br/>PX4 MAVLink (`GPS_RAW_INT`, `ATTITUDE`)                    | MAVLink RC_CHANNELS_OVERRIDE → PX4<br/>`/arms/gps` (SITL GPS)<br/>`/arms/attitude` (SITL 자세) |
-| `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps`<br/>`/arms/battery` | —                                                                                         |
+### 3.2 실행 환경별 배포 구조
 
-### 3.2 노드별 역할
+#### 3.2.1 실기체
 
-| 노드                   | 패키지           | 역할                                                                                                                                                                            | 실행 환경                     |
-| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `arms_video_node`      | `arms_video`     | 영상 소스 추상화. 실기체는 v4l2_camera, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                                                          | 호스트                        |
-| `arms_detection_node`  | `arms_detection` | HSV로 붉은 후보를 제안하고 ROI YOLO로 검증(+전체화면 fallback), KF로 평활한 단일 표적을 `/arms/detections`로 발행. **YOLO가 최종 판정자**(HSV 단독 발행 금지 → YOLO 없으면 검출 없음). GPU Docker | Docker (실기체/SITL) |
-| `arms_command_node`    | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·MODE/RTL/ARM/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지)             | 호스트 (SITL)                 |
-| `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. 300 ms 동안 유효 패킷이 없으면 `command_lost` 이벤트를 함께 발행. fake_mode 지원 | 호스트 (실기체)               |
-| `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
-| `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
-| `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS·Attitude·배터리 프레임을 각각 `/arms/gps`·`/arms/attitude`·`/arms/battery`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
-| `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. PX4 `GPS_RAW_INT`와 `ATTITUDE`를 실기체 호환 `/arms/gps`·`/arms/attitude`로 변환한다. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL)                 |
-| `arms_ui_node`         | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                                          | 호스트                        |
+```mermaid
+graph LR
+    ESP["ESP32 조종기"] --> HW["arms_operator_hardware_node"]
+    HW --> OI(["operator/input"])
+    OI --> CTRL["arms_control_node"]
+
+    CAM["USB FPV receiver"] --> VIDEO["v4l2_camera_node"]
+    VIDEO --> IMAGE(["camera/image_raw"])
+    IMAGE --> DET["arms_detection_node"]
+    DET --> DETECTIONS(["perception/detections"])
+    DETECTIONS --> CTRL
+
+    CTRL --> CMD(["control/flight_command"])
+    CMD --> CRSF["arms_crsf_io_node"]
+    CRSF <--> ELRS["ELRS TX/RX"]
+    ELRS <--> FC["Betaflight FC"]
+    CRSF --> VEH(["vehicle/* · io/status"])
+    VEH --> CTRL
+
+    IMAGE --> UI["arms_ui_node"]
+    DETECTIONS --> UI
+    VEH --> UI
+    CTRL --> STATE(["mission/state · control/*"])
+    STATE --> UI
+    UI --> UIMAGE(["ui/image"])
+    UIMAGE --> REC["flight_recorder"]
+
+    classDef topic fill:#f4f7fb,stroke:#5c7899,color:#17212b
+    class OI,IMAGE,DETECTIONS,CMD,VEH,STATE,UIMAGE topic
+```
+
+#### 3.2.2 SITL
+
+```mermaid
+graph LR
+    GZ["Gazebo"] --> BRIDGE_CAM["Gazebo camera bridge"]
+    BRIDGE_CAM --> IMAGE(["camera/image_raw"])
+    IMAGE --> DET["arms_detection_node"]
+    DET --> DETECTIONS(["perception/detections"])
+    DETECTIONS --> CTRL
+
+    CTRL --> CMD(["control/flight_command"])
+    CMD --> BRIDGE["sitl_bridge_node"]
+    BRIDGE <--> PX4["PX4 SITL"]
+    PX4 <--> GZ
+    BRIDGE --> VEH(["vehicle/gps · vehicle/attitude · io/status"])
+    VEH --> CTRL
+
+    GUI["arms_operator_gui_node"] --> OI(["operator/input"])
+    OI --> CTRL["arms_control_node"]
+
+    PANEL["panel"] -.-> RESET_MGR["sitl_reset_manager"]
+    RESET_MGR -.-> RESET(["sim/reset_event"])
+    RESET --> CTRL
+    REF["referee"] --> HIT(["sim/hit"])
+    HIT --> CTRL
+    GZ --> VIZ["sitl_viz / RViz"]
+
+    IMAGE --> UI["arms_ui_node"]
+    DETECTIONS --> UI
+    VEH --> UI
+    CTRL --> STATE(["mission/state · control/*"])
+    STATE --> UI
+    UI --> UIMAGE(["ui/image"])
+    UIMAGE --> REC["flight_recorder"]
+
+    classDef topic fill:#f4f7fb,stroke:#5c7899,color:#17212b
+    class OI,IMAGE,DETECTIONS,CMD,VEH,RESET,HIT,STATE,UIMAGE topic
+```
+
+### 3.3 노드 및 토픽 요약
+
+| 노드                                         | subscribe / service                                                                                                                                    | publish                                                                                       | 실행 환경     |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | ------------- |
+| `v4l2_camera_node` 또는 Gazebo camera bridge | 카메라 장치 또는 Gazebo                                                                                                                                | `camera/image_raw`, `camera/camera_info`                                                      | 실기체 / SITL |
+| `arms_detection_node`                        | `camera/image_raw`                                                                                                                                     | `perception/detections`, `perception/detections_raw`, `perception/status`, 디버그 영상        | 실기체 / SITL |
+| `arms_operator_hardware_node`                | ESP32 USB Serial                                                                                                                                       | `operator/input`                                                                              | 실기체        |
+| `arms_operator_gui_node`                     | tkinter 사용자 입력                                                                                                                                    | `operator/input`                                                                              | SITL          |
+| `arms_control_node`                          | `operator/input`, `perception/detections`, `vehicle/*`, `io/status`, `sim/hit`, `sim/reset_event`                                                      | `control/flight_command`, `mission/state`, `control/*_debug`                                  | 실기체 / SITL |
+| `arms_crsf_io_node`                          | `control/flight_command`, CRSF/ELRS UART                                                                                                               | `io/crsf/rx`, `io/crsf/tx`, `vehicle/gps`, `vehicle/attitude`, `vehicle/battery`, `io/status` | 실기체        |
+| `sitl_bridge_node`                           | `control/flight_command`, PX4 MAVLink                                                                                                                  | `vehicle/gps`, `vehicle/attitude`, `io/status`; MAVLink RC/AUX·arm·RTL 명령                   | SITL          |
+| `arms_ui_node`                               | `camera/image_raw`, `perception/detections`, `mission/state`, `control/debug`, `operator/input`, `vehicle/gps`, `vehicle/battery`, `perception/status` | `ui/image`                                                                                    | 실기체 / SITL |
+| `flight_recorder`                            | 기록 대상 토픽과 `operator/input`                                                                                                                      | rosbag, manifest                                                                              | 실기체 / SITL |
+| `panel`                                      | `mission/state`; `sim/reset` client                                                                                                                    | 제어·심판 파라미터 변경 요청                                                                  | SITL          |
+| `referee`                                    | `sim/reset_event`                                                                                                                                      | `sim/hit`                                                                                     | SITL          |
+| `sitl_reset_manager`                         | `sim/reset` service                                                                                                                                    | `sim/reset_event`                                                                             | SITL          |
+| `sitl_viz`                                   | `sim/reset_event`, Gazebo truth                                                                                                                        | `sim/viz/*`                                                                                   | SITL          |
+
+### 3.4 노드별 역할
+
+| 노드                                                 | 패키지                       | 책임                                                                                                     |
+| ---------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 카메라 source                                        | `arms_video` / Gazebo bridge | 카메라 프레임을 `camera/*` 계약으로 제공한다.                                                            |
+| `arms_detection_node`                                | `arms_detection`             | 영상으로부터 검출·상태·진단을 `perception/*`으로 제공한다.                                               |
+| `arms_operator_hardware_node`                        | `arms_operator`              | ESP32 패킷을 파싱·스케일 변환해 `OperatorInput`으로 전달한다. timeout·RTL·arm 정책은 수행하지 않는다.    |
+| `arms_operator_gui_node`                             | `arms_operator`              | SITL GUI 상태를 동일한 `OperatorInput`으로 발행한다.                                                     |
+| `arms_control_node`                                  | `arms_control`               | 유도, 상태 머신, 입력 timeout, arm/RTL 안전 정책을 결정하고 hardware-independent `FlightCommand`를 낸다. |
+| `arms_crsf_io_node`                                  | `arms_flight_io`             | 실기체에서 FlightCommand를 CRSF/AUX로 변환하고 CRSF telemetry를 `vehicle/*`로 정규화한다.                |
+| `sitl_bridge_node`                                   | `arms_flight_io`             | SITL에서 FlightCommand를 PX4 MAVLink 명령으로 변환하고 PX4 telemetry를 `vehicle/*`로 정규화한다.         |
+| `arms_ui_node`                                       | `arms_ui`                    | 영상·비행 상태·입력 상태를 오버레이한 `ui/image`를 생성한다.                                             |
+| `flight_recorder`                                    | `arms_ui`                    | 비행 단위 rosbag과 manifest를 저장한다.                                                                  |
+| `panel`, `referee`, `sitl_reset_manager`, `sitl_viz` | `arms_sim`                   | Gazebo 표적·reset·튜닝과 RViz 시각화를 제공한다. control 또는 FlightCommand를 우회하지 않는다.           |
 
 ## 4. 상태 머신 (arms_control 내부)
 
 ### 4.1 상태별 동작 정의
 
-| 상태       | 드론 동작                       | CRSF 출력                                                      | 서보 잠금장치              | UI 표시                   |
-| ---------- | ------------------------------- | -------------------------------------------------------------- | -------------------------- | ------------------------- |
-| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                              | **OPEN**(진입 시)          | 회색 테두리               |
-| **SEARCH** | 타겟 탐색 중                    | CH3=min, CH5=`auto_arm_states` 설정에 따름                    | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=`auto_arm_states` 설정에 따름 (클램프는 잠김)             | LOCK 유지                  | 주황색 박스, "Locking..." |
-| **TRACK**  | 위치 보정 추적                  | **CH5=arm** + PID → CH1/2 + track_throttle → CH3               | **OPEN**(LOCK→TRACK 엣지)  | 빨간 박스, "LOCKED"       |
-| **RTL**    | GPS Rescue 귀환 및 착륙 요청    | CH5=arm 유지(ARM 스위치가 올라간 경우), **CH7=RTL high**       | OPEN 유지                  | "RTL"                     |
+| 상태       | 드론 동작                       | CRSF 출력                                                | 서보 잠금장치              | UI 표시                   |
+| ---------- | ------------------------------- | -------------------------------------------------------- | -------------------------- | ------------------------- |
+| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                        | **OPEN**(진입 시)          | 회색 테두리               |
+| **SEARCH** | 타겟 탐색 중                    | CH3=min, CH5=`auto_arm_states` 설정에 따름               | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=`auto_arm_states` 설정에 따름 (클램프는 잠김)        | LOCK 유지                  | 주황색 박스, "Locking..." |
+| **TRACK**  | 위치 보정 추적                  | **CH5=arm** + PID → CH1/2 + track_throttle → CH3         | **OPEN**(LOCK→TRACK 엣지)  | 빨간 박스, "LOCKED"       |
+| **RTL**    | GPS Rescue 귀환 및 착륙 요청    | CH5=arm 유지(ARM 스위치가 올라간 경우), **CH7=RTL high** | OPEN 유지                  | "RTL"                     |
 
 > **자동 모드 arm(CH5)은 상태머신 상태로 결정**(스위치와 분리). 기본은 `SEARCH`부터 상태를 진행하되
 > CH5 무장은 `control.auto_arm_states` 설정으로 정한다(현재 기본값 `[SEARCH, LOCK, TRACK, RTL]`).
@@ -242,12 +365,12 @@ mission:
 ### 5.1 구성
 
 arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
-어느 모드든 `/arms/image_raw`를 동일하게 발행하므로 downstream 노드(detection, UI)는 소스를 알 필요가 없다.
+어느 모드든 `camera/image_raw`를 동일하게 발행하므로 downstream 노드(detection, UI)는 소스를 알 필요가 없다.
 
 **실기체 모드**
 
 - FPV 수신기 → USB Video Capture 장치 (`/dev/video0`)
-- `v4l2_camera`(C++) 노드로 프레임 수신 → `/arms/image_raw` 발행
+- `v4l2_camera`(C++) 노드로 프레임 수신 → `camera/image_raw` 발행
 - 아날로그→USB 캡처 동글(MS210x/EasierCAP)은 프레임 간격을 stepwise 로
   보고해 `usb_cam` 이 포맷 열거에 실패한다. 그래서 `v4l2_camera` 를 사용.
   (파이썬+OpenCV 캡처도 가능하나 대형 프레임에서 rclpy 오버헤드로 지연이 커
@@ -257,7 +380,7 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
 **SITL 모드**
 
 - Gazebo가 발행하는 카메라 토픽을 구독
-- `/arms/image_raw`로 relay 발행 (포맷 변환만 수행)
+- `camera/image_raw`로 relay 발행 (포맷 변환만 수행)
 
 ### 5.2 런치 파라미터
 
@@ -272,7 +395,7 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
     camera_info_url: "package://arms_video/config/camera_info.yaml"
 ```
 
-`/arms/image_raw` 로의 remapping 은 `launch/video.launch.py` 에서 수행한다.
+`camera/image_raw` 로의 remapping 은 `launch/video.launch.py` 에서 수행한다.
 캘리브레이션은 `config/camera_info.yaml`(기본 미보정 플레이스홀더)에서 로드하며,
 실측 보정 시 이 파일을 교체한다.
 
@@ -281,7 +404,7 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
 ### 6.1 Docker 통합 구조
 
 ```
-/arms/image_raw (sensor_msgs/Image)
+camera/image_raw (sensor_msgs/Image)
         |
         | DDS (network_mode: host)  — ARMS_INPUT_COMPRESSED=1 이면 압축(JPEG) 입력
         v
@@ -294,7 +417,7 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
     BoundingBox (normalized coords)
         |
         v
-/arms/detections (arms_msgs/DetectionArray)
+perception/detections (arms_msgs/DetectionArray)
   [+ 구독자 있을 때만: /arms/debug_image,
      /arms/hsv_debug_image, /arms/detector_status]
 ```
@@ -319,20 +442,18 @@ S_{\text{hue}} = \exp\!\left(-\frac{1}{2}\left(\frac{d_H}{\sigma_H}\right)^{2}\r
 d_H = \min(H,\; 180-H)
 $$
 
-   핵심은 색상항 $S_{\text{hue}}$ — 빨강이 HSV 색상환의 $0/180$ 경계에 걸쳐 있으므로 경계까지의
-   거리 $d_H$ 에 대한 **원형 Gaussian** 으로 평가해 경계 문제를 없앤다($\sigma_H$ = 허용 폭).
-   채도항 $S_{\text{sat}}$·명도항 $S_{\text{val}}$ 는 시그모이드 가중으로, 채도가 높을수록 올리고
-   너무 어둡거나 과포화된(조명) 픽셀은 낮춘다. 이 확률맵을 임계화·모폴로지 후 윤곽선을 뽑아,
-   면적 하한·원형도·질감(Laplacian 분산)으로 걸러 점수 상위 `hsv.max_candidates`개를 낸다.
-   면적 **상한은 없다** — 표적에 접근할수록 화면에서 커지는 게 정상(요격 성공 조건)이라 잘라내면 안 됨.
-2. **ROI YOLO 검증**: HSV 후보 crop 들을 YOLO로 확인해 **승인된 것만 채택**. HSV가 못 잡거나
-   ROI가 다 거부하면 `yolo.full_fallback_interval`(기본 1=매프레임)마다 전체화면 YOLO로 보완.
-3. **YOLO 승인 박스만 발행**. HSV confidence 는 후보 품질일 뿐 발행·순위에는 쓰지 않는다.
+핵심은 색상항 $S_{\text{hue}}$ — 빨강이 HSV 색상환의 $0/180$ 경계에 걸쳐 있으므로 경계까지의
+거리 $d_H$ 에 대한 **원형 Gaussian** 으로 평가해 경계 문제를 없앤다($\sigma_H$ = 허용 폭).
+채도항 $S_{\text{sat}}$·명도항 $S_{\text{val}}$ 는 시그모이드 가중으로, 채도가 높을수록 올리고
+너무 어둡거나 과포화된(조명) 픽셀은 낮춘다. 이 확률맵을 임계화·모폴로지 후 윤곽선을 뽑아,
+면적 하한·원형도·질감(Laplacian 분산)으로 걸러 점수 상위 `hsv.max_candidates`개를 낸다.
+면적 **상한은 없다** — 표적에 접근할수록 화면에서 커지는 게 정상(요격 성공 조건)이라 잘라내면 안 됨. 2. **ROI YOLO 검증**: HSV 후보 crop 들을 YOLO로 확인해 **승인된 것만 채택**. HSV가 못 잡거나
+ROI가 다 거부하면 `yolo.full_fallback_interval`(기본 1=매프레임)마다 전체화면 YOLO로 보완. 3. **YOLO 승인 박스만 발행**. HSV confidence 는 후보 품질일 뿐 발행·순위에는 쓰지 않는다.
 
-| 검출기 | 방식 | 역할 | on/off |
-| --- | --- | --- | --- |
-| **YOLO** | in-process ultralytics 추론 | **최종 판정** | 모델 로드되면 항상 on (없으면 검출 없음) |
-| **HSV** | 붉은색 확률 + 형상·질감 | 후보 제안 (단독 LOCK 금지) | `use_hsv` (off=순수 전체화면 YOLO) |
+| 검출기   | 방식                        | 역할                       | on/off                                   |
+| -------- | --------------------------- | -------------------------- | ---------------------------------------- |
+| **YOLO** | in-process ultralytics 추론 | **최종 판정**              | 모델 로드되면 항상 on (없으면 검출 없음) |
+| **HSV**  | 붉은색 확률 + 형상·질감     | 후보 제안 (단독 LOCK 금지) | `use_hsv` (off=순수 전체화면 YOLO)       |
 
 > **YOLO 로드·워밍업**: 시작 시 워밍업 `predict()` 1회로 엔진 로드·CUDA 컨텍스트·오토튜닝을
 > 끝낸다 — (1) 첫 프레임 지연 스파이크 제거, (2) OOM/버전불일치면 여기서 바로 판정. 정적 엔진은
@@ -347,7 +468,7 @@ $$
 
 매 프레임 전체 검출 결과를 **칼만 필터(등속도 모델, 정규화 좌표)로 평활**하고, 확정된 표적에서
 크게 튄 검출(오인식)을 걸러 **단일 표적**을 낸다(`_TargetFilter`). control 엔 투명 — 더 연속적인
-`/arms/detections` 를 낼 뿐이다.
+`perception/detections` 를 낼 뿐이다.
 
 > CSRT/KCF **트래커는 쓰지 않는다.** 트래커가 표적에서 드리프트해 락이 풀리는 문제가 있어,
 > 매 프레임 재검출 + KF 평활·이상치 게이트 방식으로 바꿨다.
@@ -366,23 +487,23 @@ stateDiagram-v2
     REMOVED --> NEW : 다음 검출로 새 표적 시작
 ```
 
-| 상태 | 발행 | 설명 |
-| --- | --- | --- |
-| **NEW** | 실검출 박스 | 확정 전. 직전과 중심이 가까운 검출이 연속돼야 확정(스푸리어스 배제) |
-| **TRACKED** | KF 평활 박스 | 검출이 KF 예측 근처면 채택·평활. 예측서 크게 튀면 기각(이상치 게이트) |
-| **LOST** | KF 예측 박스 | 순간 놓침. 예측으로 외삽(coast). 검출 복귀하면 TRACKED |
-| **REMOVED** | 없음(None) | `max_age` 넘게 놓침 → 표적 제거. 다음 검출은 NEW → control 이 마지막값 홀드 |
+| 상태        | 발행         | 설명                                                                        |
+| ----------- | ------------ | --------------------------------------------------------------------------- |
+| **NEW**     | 실검출 박스  | 확정 전. 직전과 중심이 가까운 검출이 연속돼야 확정(스푸리어스 배제)         |
+| **TRACKED** | KF 평활 박스 | 검출이 KF 예측 근처면 채택·평활. 예측서 크게 튀면 기각(이상치 게이트)       |
+| **LOST**    | KF 예측 박스 | 순간 놓침. 예측으로 외삽(coast). 검출 복귀하면 TRACKED                      |
+| **REMOVED** | 없음(None)   | `max_age` 넘게 놓침 → 표적 제거. 다음 검출은 NEW → control 이 마지막값 홀드 |
 
 > 좌표는 전 과정 **정규화(0~1)** 로 처리한다(해상도 독립). 중심 평활·예측(1스텝 외삽)은
 > `_CenterKalman` 이 담당한다.
 
 **파라미터** (`filter.*`)
 
-| 파라미터 | 기본 | 전이 |
-| --- | --- | --- |
+| 파라미터                                 | 기본      | 전이                                            |
+| ---------------------------------------- | --------- | ----------------------------------------------- |
 | `filter.confirm_frames` / `confirm_dist` | 3 / 0.035 | NEW→TRACKED 확정 연속수 / 중심이동 허용(정규화) |
-| `filter.jump_gate` | 0.4 | TRACKED 유지 게이트: 예측 대비 급변 차단(0=off) |
-| `filter.max_age` | 8 | LOST→REMOVED: 연속 miss 이만큼이면 제거 |
+| `filter.jump_gate`                       | 0.4       | TRACKED 유지 게이트: 예측 대비 급변 차단(0=off) |
+| `filter.max_age`                         | 8         | LOST→REMOVED: 연속 miss 이만큼이면 제거         |
 
 ### 6.4 Docker Compose
 
@@ -415,282 +536,87 @@ docker compose -f docker-compose.laptop.yml up --build
 | 노트북 (x86) | `.pt`     | PyTorch, ultralytics가 직접 로드           |
 | Jetson (ARM) | `.engine` | TensorRT 변환 후 사용 (`trtexec`, JetPack) |
 
-## 7. 비행 제어 및 통신 (arms_control)
+## 7. 비행 제어 및 통신
 
-### 7.1 아키텍처 개요
+`arms_control`은 하드웨어와 무관하게 상태 머신과 유도만 수행한다. FC 통신은 `arms_flight_io`가 단독 소유한다.
 
-`arms_control`이 제어와 통신 출력을 모두 담당한다.
-FC와의 인터페이스는 **CRSF 시리얼 프로토콜** 하나로 통일된다.
-
-```
-실기체:
-  arms_control_node → CRSF serial (UART) → ELRS TX → [RF] → ELRS RX → FC
-
-SITL:
-  arms_control_node → CRSF serial (/tmp/crsf_tx)
-                              ↓ socat PTY pair
-  sitl_bridge_node  ← CRSF serial (/tmp/crsf_rx)
-                              ↓
-                       RC_CHANNELS_OVERRIDE (MAVLink UDP) → PX4
-```
-
-### 7.2 CRSF 채널 매핑
-
-| CH  | 기능        | 값                                                        | FC 설정 |
-| --- | ----------- | --------------------------------------------------------- | ------- |
-| 1   | roll        | -1..1 → 172..1811                                         | roll 입력 |
-| 2   | pitch       | -1..1 → 172..1811                                         | pitch 입력 |
-| 3   | throttle    | 0..1 → 172..1811                                          | throttle 입력 |
-| 4   | yaw         | -1..1 → 172..1811 (auto: 992)                             | yaw 입력 |
-| 5   | arm switch  | disarm=172, arm=1811 (auto=상태머신, manual=arm 스위치)   | ARM AUX |
-| 6   | flight mode | auto/manual 모드 선택용                                    | 비행 모드 AUX |
-| 7   | RTL switch  | 정상=172, **RTL=1811** (`State::RTL`)                      | Betaflight **GPS RESCUE** AUX |
-| 8   | (미사용)    | 172 고정                                                  | —                   |
-
-> - **CH6 flight mode**는 오퍼레이터 모드 스위치(joy buttons[2])와 1:1이다.
->   auto(영상유도)=PX4 **ACRO**(172, 각속도/자동수평 없음), manual(손제어)=PX4 **Altitude**(1811).
->   실기체는 `RC_MAP_FLTMODE=6` + `COM_FLTMODE*` 슬롯에서 **CH6 low 슬롯=ACRO, high 슬롯=Altitude**
->   로 설정. SITL 은 sitl_bridge 가 CH6 low 를 **ACRO 고정**으로 매핑한다
->   (예전의 `autonomous_acro` / `control.acro_mode` 짝은 유효값이 하나뿐이라 둘 다 삭제됨).
-> - **CH5 arm**은 모드에 따라 소스가 다르다. **auto**: 스위치와 분리 — 상태머신 상태 기반
->   (`control.auto_arm_states`, 현재 기본 `[SEARCH, LOCK, TRACK, RTL]`). **manual**: arm 스위치(buttons[1]) +
->   재토글 안전장치(모드 전환/부팅 직후 재토글 전까지 disarm). 자세히는 [7.3](#73-auto--manual-모드).
->   자동 모드의 buttons[1] 은 arm 이 아니라 미션 상태(IDLE↔SEARCH)만 제어한다.
-> - **CH7 RTL**은 kill switch가 아니다. 직접 RTL 스위치, TRACK에서 타겟 소실, 선택적인 looming/hit
->   종단 조건, 또는 무장 중 command 입력 단절이 `RTL` 상태를 만들면 high가 된다. 실기체에서는
->   Betaflight Configurator의 Modes에서 이 AUX를 **GPS RESCUE**에 매핑한다. ARM 스위치를 내리면
->   RTL 중에도 CH5가 내려가므로 즉시 disarm 된다.
-> - **launch 버튼(buttons[3])** 은 CRSF 채널로 내보내지 않는다. LOCK→TRACK 전이 트리거로만 쓰이고,
->   CH8은 비워 둔다.
-
-CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`  
-전송 속도: 400000 baud (커스텀 baud, termios2 `BOTHER`. 실기체 UART에서 확정)
-
-### 7.3 auto / manual 모드
-
-모드 스위치(`joy buttons[2]`, **레벨 스위치**)로 arms_control_node 내부에서 전환한다.
-오퍼레이터 관점의 두 모드이며, 모드 스위치가 CH1-4 소스와 CH6 flight mode를 함께 결정한다.
-
-- **auto (영상유도)**: 젯슨이 FPV 영상으로 **각속도** 명령 생성. PX4는 **ACRO** 모드(자동수평 없음).
-  상태 스위치(buttons[1])는 **미션 상태(IDLE↔SEARCH)만** 제어하고, **arm(CH5)은 스위치와 분리**되어
-  상태머신 상태로 컨트롤 노드가 결정한다.
-- **manual (손제어)**: 사람이 스틱으로 직접 조종. PX4는 **Altitude** 모드(손조종 편의).
-  arm은 arm 스위치(buttons[1])를 따름(재토글 안전장치 적용).
-
-| 모드   | PX4 flight mode | CH1-4 소스                                                                 | CH5 arm                                | buttons[1] 역할 |
-| ------ | --------------- | -------------------------------------------------------------------------- | -------------------------------------- | --------------- |
-| auto   | **ACRO**        | 유도(기본 추적/PN) → **각속도**(roll/pitch), throttle=추격상승, yaw rate 0 | **상태머신 상태 기반** (스위치와 분리) | IDLE↔SEARCH     |
-| manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                                       | arm 스위치 (재토글 안전장치)           | ARM/DISARM      |
-
-> **자동 모드 = 스위치와 arm 분리**: 자동 모드에서 상태 스위치(buttons[1])는 미션 상태
-> (IDLE↔SEARCH)만 제어하고 FC arm(CH5)은 건드리지 않는다. arm 은 상태머신 상태로 컨트롤 노드가
-> 결정한다 — 현재 기본값은 `[SEARCH, LOCK, TRACK, RTL]`이며, 필요한 실험 구성에 맞춰
-> `control.auto_arm_states`만 조정한다.
->
-> **재토글 안전장치 (자동·수동 공통)**: 모드 전환/부팅 직후 상태 스위치가 올라가 있어도 즉시
-> 적용되지 않게 하는 래치(`effective_arm = joy_arm_ && !require_arm_reset_`). `require_arm_reset_`
-> 는 **모드 전환·부팅 시** 걸리고, 스위치를 **DISARM(아래)로 내리면 해제**된다.
-> · **자동**: idle/search 진입에 적용 — manual→auto 로 왔을 때 스위치가 SEARCH(위)여도 **기본 IDLE**,
-> 내렸다 다시 올려야 SEARCH 진입. (자동 모드 안에서 한 번 재토글한 뒤엔 자유롭게 idle↔search 토글)
-> · **수동**: CH5 arm 에 적용 — auto→manual 로 왔을 때 스위치가 위여도 **기본 DISARM**, 재토글해야 arm.
-> 두 경우 매커니즘이 동일하다(모드 전환 시 상태 스위치는 반드시 기본 위치에서 다시 올려야 작동).
->
-> **수동 모드 = 상태머신 IDLE 고정**: manual 에서는 미션 상태가 의미 없으므로 상태머신을 IDLE 로
-> 둔다(서보 열림). 영상/방아쇠로 미션이 멋대로 진행되는 것도 막는다.
-
-manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
-
-| CH           | joy axis | Mode2 스틱 |
-| ------------ | -------- | ---------- |
-| CH1 roll     | axes[2]  | R-stick X  |
-| CH2 pitch    | axes[3]  | R-stick Y  |
-| CH3 throttle | axes[1]  | L-stick Y  |
-| CH4 yaw      | axes[0]  | L-stick X  |
-
-> GUI 좌측 스틱의 세로(throttle, axes[1])는 실제 조종기처럼 **기본 바닥(-1.0,
-> CRSF 172 ≈ 988µs), 놓아도 그 자리 유지**한다(가로 yaw만 중앙 복귀). 나머지
-> 축(roll/pitch/yaw)은 스프링 복귀형(중앙=992 ≈ 1500µs). QGC RC 캘리브레이션은
-> 각 스틱을 최소↔최대로 끝까지 훑으면 CH별 172~1811(≈988~2012µs)이 잡힌다.
-
-### 7.4 좌표계 및 오차 정의
-
-```
-  Image Frame (sky-facing camera, drone body frame)
-
-        ^ pitch+ (drone forward)
-        |
-        |
-  ------+------> roll+ (drone right)
-        |
-  (0,0) = image center
-
-  error_x = (bbox_cx - img_cx) / img_w    [-0.5, +0.5]
-  error_y = (bbox_cy - img_cy) / img_h    [-0.5, +0.5]
+```text
+operator/input + perception/detections + io/status
+                     |
+                     v
+          arms_control_node
+                     |
+          control/flight_command
+              /              \
+             v                v
+arms_crsf_io_node       sitl_bridge_node
+  CRSF 400000 baud        MAVLink UDP
+             |                |
+        ELRS / FC          PX4 SITL
 ```
 
-### 7.5 유도·제어 (TRACK 상태에서 활성)
+### 7.1 FlightCommand과 FC 어댑터
 
-파이프라인 (매 control_rate_hz 틱):
+`control/flight_command`은 roll, pitch, throttle, yaw, arm, auto/manual, RTL의 정규화된 명령이다. 제어 노드는 CRSF 프레임, UART, MAVLink를 알지 못한다.
 
-1. **LOS = 픽셀 오차** (`filt_err_x/y`, LPF) → 중앙 데드존.
-   (예전의 자세보정 LOS는 **제거** — acro 전환으로 attitude 의존 삭제.)
-2. **alpha-beta 필터** (`pn_alpha`/`pn_beta`) 로 매끈한 LOS + **시선각속도(LOS rate)** 추정.
-3. **유도** (`control.guidance_mode`) — 출력은 **각속도[deg/s]** 다:
-   - **0 = 기본 추적 (기본값)**: `roll_pid`/`pitch_pid` PID(kp·ki·kd)로 LOS 오차
-     - 시간기반 리드(`lead_gain`) → 각속도 명령.
-   - **1 = 비례항법(PN)**: `각속도 = pn_nav_gain × 시선각속도 + pn_center_gain × LOS`.
-     시선각속도를 0으로 만들어 미래 충돌점을 앞질러 겨냥(빠른 표적에 유리). PID 미사용.
+- 실기체 `arms_crsf_io_node`: FlightCommand를 CRSF CH1--7로 변환해 ELRS TX에 400000 baud로 송신하고, 수신 CRSF를 `io/crsf/rx`, `vehicle/gps`, `vehicle/attitude`, `vehicle/battery`, `io/status`로 정규화한다.
+- SITL `sitl_bridge_node`: 같은 FlightCommand를 MAVLink RC override, arm/disarm, PX4 비행모드, RTL 명령으로 변환한다. PX4 MAVLink GPS와 자세를 `vehicle/gps`, `vehicle/attitude`로 발행한다.
 
-   출력은 `±max_cmd_rate_dps`(227.5 deg/s) 로 제한한다.
+실기체의 CH7은 Betaflight GPS Rescue AUX에 매핑한다. RTL 중에도 ARM 스위치를 내리면 disarm 명령이 우선한다. RF 상실의 Rescue는 Betaflight failsafe가 독립적으로 처리한다.
 
-4. **스로틀(추격 궤적)**: 표적이 화면 중앙에 가까울수록(`center_q↑`) `hover_throttle`→`track_throttle`
-   로 상승 → 표적을 향해 대각선 돌진.
-5. **CRSF 출력**: 각속도 명령 / `max_rate_dps`(400) → CH1/CH2.
-   CH3=스로틀, CH4=중앙(yaw rate 0). PX4 ACRO 가 그 각속도로 직접 회전한다.
-6. **수동 모드**: PX4 **Altitude**, 스틱 패스스루 (FC 자동수평·고도유지).
+### 7.2 제어와 상태 머신
 
-### 7.6 sitl_bridge_node 동작 (SITL 전용)
+`arms_control_node`는 `perception/detections`, `operator/input`, `io/status`, `sim/hit`, `sim/reset_event`를 구독한다. `mission/state`, `control/debug`, `control/looming_debug`, `control/ibvs_debug`, `control/flight_command`을 발행한다.
 
-```
-CRSF serial (/tmp/crsf_rx)
-  └─ decode frame → channels[0..15]
-        │
-        ├─ CH5 레벨 (arm 스위치) → 실제 armed 상태와 다르면 재전송
-        │       MAV_CMD_COMPONENT_ARM_DISARM (arm/disarm)
-        ├─ CH6 에지 → MAV_CMD_DO_SET_MODE
-        │       low(<1500)=ACRO(auto, 고정), high(≥1500)=Altitude(manual)
-        ├─ CH7 상승엣지 → MAV_CMD_NAV_RETURN_TO_LAUNCH (PX4 RTL)
-        └─ CH1-4, CH7 → RC_CHANNELS_OVERRIDE (50Hz, UDP → PX4)
-```
+자동 모드에서는 LOCK 뒤 LAUNCH 요청 또는 SITL 자동 시작으로 TRACK에 들어간다. TRACK에서 표적을 잃거나 RTL 요청ㆍ입력 단절ㆍ종말 조건이 발생하면 RTL로 전이한다. 수동 모드에서는 스틱 명령을 FlightCommand로 전달한다. ESP32 입력 단절의 300 ms 판정과 실제 무장 상태 확인은 control 노드가 담당한다.
 
-> 실기체는 PX4가 CRSF를 직접 읽으므로 이 브리지가 없다. flight mode는
-> PX4 `RC_MAP_FLTMODE=6` + `COM_FLTMODE*` 슬롯으로 CH6를 매핑해 처리한다.
+발사기 고정 서보는 Jetson PWM 장치가 있을 때만 구동한다. `servo.enabled=true`이면 자동 SEARCH 진입에서 LOCK 위치로, LOCK→TRACK 전이에서 OPEN 위치로 이동한다. 이를 false로 두면 상태 전이와 무관하게 OPEN PWM만 유지한다.
 
-### 7.7 arms_control_node 내부 구조
+### 7.3 유도 출력
 
-```
-arms_control_node
-  |
-  +-- [Subscribers]
-  |     /arms/detections   (DetectionArray → 검출 + 비전 looming τ)
-  |     /arms/command      (Joy → 조종 입력 + 버튼)
-  |
-  +-- [Publishers]
-  |     /arms/mission_state   (MissionState, 30Hz)
-  |     /arms/control_debug   (Vector3 — UI 화살표용. x,y = 각속도[deg/s], z = throttle)
-  |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용, 구독 중에만 발행)
-  |     /arms/ibvs_debug      (IbvsDebug — IBVS 유도 각 항/스케줄링/명령·추력 스냅샷, 구독 중에만 발행)
-  |     /arms/gps             (GpsTelemetry — CRSF GPS 위치·속도·고도·위성 수)
-  |     /arms/battery         (BatteryTelemetry — CRSF 배터리 전압·전류·사용량·잔량)
-  |
-  +-- [Serial Output]
-  |     CRSF frames → crsf.port (30Hz)
-  |
-  +-- [State Machine]
-  |     evaluate detections → update state
-  |     auto arm: effective_arm(ARM 스위치+재토글 래치) → IDLE → SEARCH
-  |     launch button (joy buttons[3]) → LOCK→TRACK
-  |     RTL button (joy buttons[4]), 무장 중 command_lost, TRACK 타겟 소실 → RTL
-  |     선택: 비전 looming τ=bbox크기/팽창률 < tau_rtl_sec + 정렬 (TRACK) → RTL
-  |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
-  |
-  +-- [유도·제어]  (TRACK 상태에서 활성)
-  |     LOS(픽셀오차) → alpha-beta 필터 → 유도(기본 추적=PID / PN)
-  |       → 각속도[deg/s] → clamp(max_cmd_rate_dps) → ÷max_rate_dps → CH1/CH2
-  |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
-  |     스로틀: hover→track (center_q 기반 추격 상승) → CH3
-  |
-  +-- [ServoLock]  (발사 잠금장치, sysfs 하드웨어 PWM)
-        상태 전이 엣지 → lock() / open()
-```
+TRACK에서는 픽셀 오차를 LOS로 사용하고, 저역통과와 alpha-beta 필터로 LOS rate를 추정한다. `guidance_mode`는 PID 추적, PN, IBVS 공선유도 중 하나를 선택하며, 출력은 roll/pitch 각속도와 추력이다. 이 값은 FlightCommand까지만 전달되고, 단위 변환은 FC 어댑터의 책임이다.
 
-### 7.8 발사 잠금장치 서보 (Servo Lock)
+## 8. 운용자 입력 (arms_operator)
 
-발사 전 기체를 발사기에 고정(LOCK)하고 발사 순간에만 놓아주는(OPEN) 클램프 서보다.
-별도 노드/토픽 없이 **`arms_control_node`(C++) 내부에 통합**되어 있다 — 개폐 판정이 상태머신
-상태·모드 스위치에 달려 있어 제어 노드가 소유하는 것이 자연스럽기 때문이다. 구동은 `ServoLock`
-클래스(`include/arms_control/servo_lock.hpp`, `src/servo_lock.cpp`)가 담당한다.
-
-**제어 규칙 (상태 전이 엣지로만 판정)**
-
-| 트리거 (전이)                  | 동작                                       |
-| ------------------------------ | ------------------------------------------ |
-| IDLE 진입 (어느 상태에서든)    | OPEN — IDLE 은 무조건 열림(기체 장착/탈거) |
-| IDLE → SEARCH (auto, 상승엣지) | LOCK — 발사기에 고정                       |
-| LOCK → TRACK (발사)            | OPEN — 기체를 놓아줌                       |
-
-- 방아쇠(launch 버튼)가 아니라 **LOCK→TRACK 전이**가 OPEN 트리거다(SEARCH 에서 방아쇠를 눌러도
-  안 풀림). SEARCH/LOCK/TRACK 은 auto 모드에서만 발생하므로 전이만으로 판정 가능.
-- LOCK→SEARCH(표적 소실)·TRACK→RTL 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
-- 판정은 `control_loop` 말미에서 in-tick 전이(arm/disarm) 반영 후 최신 `sm_->state()` 로 한다.
-
-**하드웨어 (Jetson Orin Nano)**
-
-- 물리 **핀 15 = GPIO12 / GP88_PWM1 → `3280000.pwm` → `/sys/class/pwm/pwmchip0` 채널 0**
-  (Jetson.GPIO `gpio_pin_data.py` 기준, 본 기기 sysfs 실측 확인).
-- 원본 파이썬 드라이버(`arms_command/servo/servo_motor.py`, Jetson.GPIO)와 **동일한 신호**를 C++ 에서
-  sysfs 로 직접 쓴다: 50Hz(period 20ms), 90°=1.5ms(LOCK 기본), 180°=2.5ms(OPEN 기본).
-- 시퀀스: `export` → `duty_cycle=0` → `period` → `duty_cycle` → `enable=1`. duty 는 값이 바뀔 때만 기록.
-- 노드 종료 시 unexport/disable 하지 않는다 → 마지막 잠금 위치 유지(종료·크래시에 클램프가 풀리지 않게).
-- **전제**: jetson-io 로 핀15 PWM1 pinmux 설정 + `/sys/class/pwm` 쓰기 권한(`99-gpio.rules` udev).
-  (README_SERVO_TEST.md 의 파이썬 경로와 동일 요건.) 미충족/비-Jetson/SITL 에서는 경고 1회 후 no-op.
-
-**파라미터** (`arms_control_node`, `control_params.yaml` / 실기체 `hw_overrides.yaml` 오버레이)
-
-```yaml
-servo:
-  enabled: false # 기본 off(SITL). 실기체는 hw_overrides.yaml 이 true 로 덮어씀
-  chip_path: "/sys/class/pwm/pwmchip0"
-  channel: 0
-  period_ns: 20000000 # 50Hz
-  lock_duty_ns: 1500000 # 90°  = LOCK (기본)
-  open_duty_ns: 2500000 # 180° = OPEN
-```
-
-> 조립 방향(어느 각도가 잠금인지)이 반대면 `lock_duty_ns`/`open_duty_ns` 값을 스왑한다.
-
-## 8. 조종 입력 (arms_command)
-
-오퍼레이터의 스틱·버튼 입력을 `sensor_msgs/Joy` `/arms/command` 로 발행한다.
+오퍼레이터의 스틱·버튼 입력을 `arms_msgs/OperatorInput` `operator/input`으로 발행한다.
 arms_control 이 이걸 구독해 auto/manual 모드·arm·미션을 제어한다.
 
 ### 8.1 구성 (실기체 / SITL)
 
-| 노드                                 | 환경   | 입력원                                             |
-| ------------------------------------ | ------ | -------------------------------------------------- |
-| `arms_command_hw_node` (C++)         | 실기체 | ESP32(ADS1115 짐벌 4축 + GPIO 스위치) → USB Serial |
-| `arms_command_node` (Python tkinter) | SITL   | 화면 가상 조종기 (드래그 스틱 + 버튼)              |
+| 노드                                      | 환경   | 입력원                                             |
+| ----------------------------------------- | ------ | -------------------------------------------------- |
+| `arms_operator_hardware_node` (C++)       | 실기체 | ESP32(ADS1115 짐벌 4축 + GPIO 스위치) → USB Serial |
+| `arms_operator_gui_node` (Python tkinter) | SITL   | 화면 가상 조종기 (드래그 스틱 + 버튼)              |
 
-> **발행자는 한 노드뿐.** 둘 다 `/arms/command` 를 발행하므로 동시에 띄우면 레이스가 난다.
-> 튜닝/심판 콘솔(arms_sim/panel)은 파라미터만 만지고 `/arms/command` 는 건드리지 않는다.
+> **발행자는 한 노드뿐.** 둘 다 `operator/input`을 발행하므로 동시에 띄우면 레이스가 난다.
+> 튜닝/심판 콘솔(arms_sim/panel)은 파라미터만 만지고 운용자 입력은 발행하지 않는다.
 
-### 8.2 /arms/command (Joy) 인터페이스
+### 8.2 operator/input (OperatorInput) 인터페이스
 
 ```
-axes[0] = yaw       (L-stick X)   스프링 중앙 복귀
-axes[1] = throttle  (L-stick Y)   놓아도 그 자리 유지 (SITL 기본 중앙=Altitude 호버)
-axes[2] = roll      (R-stick X)   스프링 중앙 복귀
-axes[3] = pitch     (R-stick Y)   스프링 중앙 복귀
-
-buttons[0] = reserved  buttons[1] = ARM
-buttons[2] = MODE      buttons[3] = LAUNCH
-buttons[4] = RTL       buttons[5] = command_lost (내부 이벤트)
+roll, pitch, yaw       # 정규화된 스틱 명령
+throttle               # 0~1 범위의 추력 입력
+arm_switch             # ARM 레벨 스위치
+manual_mode            # 수동/자동 모드 스위치
+rtl_switch             # RTL 레벨 스위치
+launch_request         # 발사/추적 시작 순간 요청
+input_lost             # ESP32 입력 단절 표시 (실기체만)
 ```
 
-> Mode2 조종기 배치. auto 모드에선 유도가 축을 대체하므로 스틱은 manual 전용이다.
-> `buttons[5]`는 가상 조종기가 만드는 버튼이 아니다. 실기체 command 노드가 ESP32 USB 입력
-> 단절을 control 노드에 전달하기 위한 내부 이벤트다.
+> Mode2 조종기 배치다. 자동 모드에선 유도가 축을 대체하므로 스틱은 manual 전용이다.
+> `input_lost`는 가상 조종기가 만들지 않으며, 실기체 입력 노드가 ESP32 USB 단절을 control에
+> 전달하는 상태다.
 
 ### 8.3 버튼별 역할
 
-| 버튼       | 인덱스     | 종류       | auto 모드                                                 | manual 모드                       |
-| ---------- | ---------- | ---------- | --------------------------------------------------------- | --------------------------------- |
-| **MODE**   | buttons[2] | 레벨(토글) | 모드 자체 (auto) → CH6=ACRO                               | 모드 자체 (manual) → CH6=Altitude |
-| **ARM**    | buttons[1] | 레벨(토글) | **미션 상태만** (IDLE↔SEARCH). CH5 arm 은 상태머신이 결정 | **CH5 arm 스위치**                |
-| **RTL**    | buttons[4] | 레벨(토글) | 무장 상태에서 `RTL` 전이 → CH7 GPS Rescue                 | 동일                              |
-| **LAUNCH** | buttons[3] | 순간       | LOCK→TRACK 전이 트리거 (CRSF 채널로 안 나감)              | (무의미)                          |
+| 버튼       | 인덱스           | 종류       | auto 모드                                 | manual 모드                      |
+| ---------- | ---------------- | ---------- | ----------------------------------------- | -------------------------------- |
+| **MODE**   | `manual_mode`    | 레벨(토글) | 모드 자체 (auto) → FC mode AUX            | 모드 자체 (manual) → FC mode AUX |
+| **ARM**    | `arm_switch`     | 레벨(토글) | 미션 상태와 arm 권한                      | FC arm 요청                      |
+| **RTL**    | `rtl_switch`     | 레벨(토글) | 무장 상태에서 `RTL` 전이 → GPS Rescue AUX | 동일                             |
+| **LAUNCH** | `launch_request` | 순간       | LOCK→TRACK 전이 트리거                    | (무의미)                         |
 
-- **MODE**: 0=auto(영상유도, PX4 ACRO) / 1=manual(손제어, PX4 Altitude). CH6 flight mode 와 1:1.
+- **MODE**: 0=auto(영상유도, PX4 ACRO) / 1=manual(손제어, PX4 Altitude). 자동의 SEARCH/LOCK/TRACK/RTL에서 수동으로 바꾸면 무장을 유지해 즉시 인계한다. 반대로 수동→자동은 무장을 해제하며 ARM 재토글이 필요하다.
 - **LAUNCH**: 순간 눌림(약 300ms 만 1). LOCK 상태에서 눌러야 TRACK(발사)으로 넘어간다.
 - **RTL**: 무장한 상태에서 누르면 control 노드가 `RTL` 상태로 전이하고 CH7을 GPS Rescue AUX로
   올린다. Rescue 중이라도 ARM 스위치를 내리면 disarm 된다.
@@ -706,7 +632,7 @@ buttons[4] = RTL       buttons[5] = command_lost (내부 이벤트)
 `require_arm_reset_` 래치로 구현 — 모드 전환/부팅 시 걸리고, 스위치를 내리면 풀린다.
 
 - **auto**: manual→auto 로 오면 스위치가 위여도 **기본 IDLE**, 재토글해야 SEARCH 진입.
-- **manual**: auto→manual 로 오면 스위치가 위여도 **기본 DISARM**, 재토글해야 arm.
+- **manual**: 자동의 `SEARCH`/`LOCK`/`TRACK`/`RTL`에서 실제로 무장 중이었다면 auto→manual은 무장을 유지해 즉시 인계한다. 그 밖의 auto→manual은 기본 DISARM이며 재토글해야 arm한다.
 
 **② 수동 arm pre-arm idle (급상승/오발 방지)**
 manual 모드에서 ARM 하는 순간 **스틱이 idle** 이어야만 실제로 무장된다:
@@ -719,9 +645,9 @@ manual 모드에서 ARM 하는 순간 **스틱이 idle** 이어야만 실제로 
 
 **③ RTL 및 command 입력 단절**
 
-- `buttons[4]` RTL 요청은 control 노드가 처리한다. 직전에 실제 CH5가 무장 상태였을 때만
+- `rtl_switch` RTL 요청은 control 노드가 처리한다. 직전에 실제 arm 상태였을 때만
   CH5를 유지한 채 `RTL`로 전이한다. 미무장 상태의 RTL 요청이나 입력 단절이 새 arm을 만들지 않는다.
-- ESP32 입력이 300 ms 넘게 끊기면 command 노드는 `command_lost` 이벤트만 발행하고, RTL 여부는
+- ESP32 입력이 300 ms 넘게 끊기면 control 노드가 입력 타임아웃으로 판단하고, RTL 여부는
   control 노드가 위의 실제 무장 상태로 판단한다. 이는 **Jetson–ESP32 USB 단절** 감지이며 ELRS RF
   상실 감지는 아니다.
 - ELRS RF 상실은 Betaflight failsafe가 독립적으로 GPS Rescue를 수행하도록 설정한다. 따라서
@@ -729,7 +655,7 @@ manual 모드에서 ARM 하는 순간 **스틱이 idle** 이어야만 실제로 
 
 > 제어 노드 측 처리(래치 `effective_arm`, auto/manual arm 소스 분기)는 [7.3](#73-auto--manual-모드) 참고.
 
-### 8.5 SITL 가상 조종기 (arms_command_node)
+### 8.5 SITL 가상 조종기 (arms_operator_gui_node)
 
 tkinter 창 하나 = 스틱 2개(L: yaw/throttle, R: roll/pitch) + MODE/RTL/ARM 버튼 + LAUNCH.
 throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로 yaw 만 중앙 복귀)라, 자동→수동
@@ -742,14 +668,14 @@ throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로
 오퍼레이터에게 모드·상태 변화를 소리로 알린다. `ffplay`(비동기, UI 렌더링 non-blocking)로
 `arms_ui/sounds/*.mp3` 를 재생하며, 파일 경로는 ROS 파라미터로 교체 가능하다.
 
-| 이벤트            | 소스 (콜백)                                | 파일 / 파라미터                  |
-| ----------------- | ------------------------------------------ | -------------------------------- |
-| 모드 → 수동       | `/arms/command` buttons[2] (`_cb_command`) | `manual.mp3` / `ui.sound_manual` |
-| 모드 → 자동       | `/arms/command` buttons[2] (`_cb_command`) | `auto.mp3` / `ui.sound_auto`     |
-| 수동: arm         | `MissionState.armed` 엣지 (`_cb_state`)    | `arm.mp3` / `ui.sound_arm`       |
-| 수동: disarm      | `MissionState.armed` 엣지 (`_cb_state`)    | `disarm.mp3` / `ui.sound_disarm` |
-| 자동: IDLE→SEARCH | `MissionState.state` 엣지 (`_cb_state`)    | `search.mp3` / `ui.sound_search` |
-| 자동: SEARCH→IDLE | `MissionState.state` 엣지 (`_cb_state`)    | `idle.mp3` / `ui.sound_idle`     |
+| 이벤트            | 소스 (콜백)                                    | 파일 / 파라미터                  |
+| ----------------- | ---------------------------------------------- | -------------------------------- |
+| 모드 → 수동       | `operator/input` `manual_mode` (`_cb_command`) | `manual.mp3` / `ui.sound_manual` |
+| 모드 → 자동       | `operator/input` `manual_mode` (`_cb_command`) | `auto.mp3` / `ui.sound_auto`     |
+| 수동: arm         | `MissionState.armed` 엣지 (`_cb_state`)        | `arm.mp3` / `ui.sound_arm`       |
+| 수동: disarm      | `MissionState.armed` 엣지 (`_cb_state`)        | `disarm.mp3` / `ui.sound_disarm` |
+| 자동: IDLE→SEARCH | `MissionState.state` 엣지 (`_cb_state`)        | `search.mp3` / `ui.sound_search` |
+| 자동: SEARCH→IDLE | `MissionState.state` 엣지 (`_cb_state`)        | `idle.mp3` / `ui.sound_idle`     |
 
 > - 수동 arm/disarm 은 `MissionState.armed`(= `effective_arm`, 재토글 래치 반영)를 따르므로
 >   래치로 막힌 동안엔 소리가 나지 않는다. 자동 idle/search 는 `MissionState.state` 를 따른다.
@@ -760,7 +686,7 @@ throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로
 ### 9.2 GPS 텔레메트리 표시
 
 실기체에서는 `arms_control_node`가 ELRS 수신 CRSF GPS 프레임(type `0x02`)을, SITL에서는
-`sitl_bridge_node`가 PX4 `GPS_RAW_INT`를 `/arms/gps`(`arms_msgs/GpsTelemetry`)로 발행한다.
+`sitl_bridge_node`가 PX4 `GPS_RAW_INT`를 `vehicle/gps`(`arms_msgs/GpsTelemetry`)로 발행한다.
 UI는 우상단에 다음 네 줄로 표시한다.
 
 ```
@@ -779,38 +705,38 @@ GS: 4.2 m/s
 ## 10. 비행 기록 (`auto_save`)
 
 `arms.launch.py`와 `arms_sitl.launch.py`의 `auto_save`는 기본 `false`다. `true`로 실행하면
-`flight_recorder`가 기동하고, `/arms/command`의 ARM 스위치(`buttons[1]`) **상승엣지**에서
+`flight_recorder`가 기동하고, `operator/input`의 `arm_switch` **상승엣지**에서
 rosbag 녹화를 시작하며 ARM을 내리면 정상 마감한다. 녹화기가 켜질 때 이미 ARM이 올라가 있었다면
 한 번 내렸다 다시 올려야 시작한다. 상태 머신·auto/manual 모드·RTL과는 독립적인 조건이다.
 
 저장 위치는 `~/arms_flight_logs_ibvs/<YYYYmmdd_HHMMSS>/`이며, SITL은 폴더명에 `_sitl`을
 붙인다. 저장 형식은 Jetson에서도 항상 사용할 수 있는 `sqlite3`이다.
 
-원본과 UI 영상은 모두 JPEG compressed로 기록한다. `/arms/image_raw/compressed`는 UI 오버레이 전의
-원본 프레임(quality 80)이고, `/arms/ui_image/compressed`는 바운딩박스·상태 등이 합성된 화면
+원본과 UI 영상은 모두 JPEG compressed로 기록한다. `camera/image_raw/compressed`는 UI 오버레이 전의
+원본 프레임(quality 80)이고, `ui/image/compressed`는 바운딩박스·상태 등이 합성된 화면
 (quality 60)이다. 원본 JPEG 변환 노드는 `auto_save:=true`일 때만 띄운다.
 
 ### 10.1 rosbag 토픽
 
-| 토픽 | 타입 | 기록 내용 |
-| --- | --- | --- |
-| `/arms/ui_image/compressed` | `sensor_msgs/CompressedImage` | 오버레이가 합성된 운영자 UI 영상 |
-| `/arms/image_raw/compressed` | `sensor_msgs/CompressedImage` | 오버레이 전 원본 카메라 영상. 검출·유도 재현용 |
-| `/arms/detections_raw` | `arms_msgs/DetectionArray` | 칼만 필터 전 원시 검출 결과 |
-| `/arms/detections` | `arms_msgs/DetectionArray` | 필터/단일 표적 선택 후 제어에 들어간 검출 결과 |
-| `/arms/detector_status` | `std_msgs/Float32MultiArray` | HSV·YOLO 후보/승인 수와 검출기 진단 값 |
-| `/arms/ibvs_debug` | `arms_msgs/IbvsDebug` | LOS, LOS rate, 배리어 항, 스케줄링, 각속도·추력 등 IBVS 유도 내부 스냅샷 |
-| `/arms/control_debug` | `geometry_msgs/Vector3` | 최종 제어 명령: `x=roll rate [deg/s]`, `y=pitch rate [deg/s]`, `z=thrust [0..1]` |
-| `/arms/crsf_tx` | `std_msgs/Int16MultiArray` | 실제 송신한 CRSF 채널 `[roll,pitch,throttle,yaw,arm,mode,rtl,ch8]` |
-| `/arms/crsf_rx` | `arms_msgs/CrsfTelemetry` | CRSF 수신 통합 스냅샷: 링크 상태·수직속도·FC 비행 모드 등 |
-| `/arms/attitude` | `arms_msgs/AttitudeTelemetry` | 기체 roll/pitch/yaw [deg]. 실기체는 CRSF Attitude, SITL은 PX4 MAVLink ATTITUDE에서 발행 |
-| `/arms/battery` | `arms_msgs/BatteryTelemetry` | 배터리 전압·전류·사용 용량·잔량·감지 셀 수 |
-| `/arms/gps` | `arms_msgs/GpsTelemetry` | 위도/경도·고도·지상속도·침로·위성 수·fix 상태 |
-| `/arms/mission_state` | `arms_msgs/MissionState` | 상태 머신 상태, 검출/오차, arm·모드 등 미션 상태 |
-| `/arms/command` | `sensor_msgs/Joy` | 스틱과 MODE/ARM/LAUNCH/RTL 입력. 실험 재현의 입력 기준 |
+| 토픽                         | 타입                          | 기록 내용                                                                               |
+| ---------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
+| `ui/image/compressed`  | `sensor_msgs/CompressedImage` | 오버레이가 합성된 운영자 UI 영상                                                        |
+| `camera/image_raw/compressed` | `sensor_msgs/CompressedImage` | 오버레이 전 원본 카메라 영상. 검출·유도 재현용                                          |
+| `perception/detections_raw`       | `arms_msgs/DetectionArray`    | 칼만 필터 전 원시 검출 결과                                                             |
+| `perception/detections`           | `arms_msgs/DetectionArray`    | 필터/단일 표적 선택 후 제어에 들어간 검출 결과                                          |
+| `/arms/detector_status`      | `std_msgs/Float32MultiArray`  | HSV·YOLO 후보/승인 수와 검출기 진단 값                                                  |
+| `control/ibvs_debug`           | `arms_msgs/IbvsDebug`         | LOS, LOS rate, 배리어 항, 스케줄링, 각속도·추력 등 IBVS 유도 내부 스냅샷                |
+| `control/debug`        | `geometry_msgs/Vector3`       | 최종 제어 명령: `x=roll rate [deg/s]`, `y=pitch rate [deg/s]`, `z=thrust [0..1]`        |
+| `io/crsf/tx`              | `std_msgs/Int16MultiArray`    | 실제 송신한 CRSF 채널 `[roll,pitch,throttle,yaw,arm,mode,rtl,ch8]`                      |
+| `io/crsf/rx`              | `arms_msgs/CrsfTelemetry`     | CRSF 수신 통합 스냅샷: 링크 상태·수직속도·FC 비행 모드 등                               |
+| `vehicle/attitude`             | `arms_msgs/AttitudeTelemetry` | 기체 roll/pitch/yaw [deg]. 실기체는 CRSF Attitude, SITL은 PX4 MAVLink ATTITUDE에서 발행 |
+| `vehicle/battery`              | `arms_msgs/BatteryTelemetry`  | 배터리 전압·전류·사용 용량·잔량·감지 셀 수                                              |
+| `vehicle/gps`                  | `arms_msgs/GpsTelemetry`      | 위도/경도·고도·지상속도·침로·위성 수·fix 상태                                           |
+| `mission/state`        | `arms_msgs/MissionState`      | 상태 머신 상태, 검출/오차, arm·모드 등 미션 상태                                        |
+| `operator/input`             | `arms_msgs/OperatorInput`     | 스틱과 MODE/ARM/LAUNCH/RTL 입력. 실험 재현의 입력 기준                                  |
 
 토픽 발행자가 없는 환경에서는 해당 토픽의 메시지가 기록되지 않는다. 예를 들어 현재 SITL은 PX4 GPS를
-`/arms/gps`로 공급하지만, CRSF 배터리 프레임은 없으므로 `/arms/battery`가 비어 있을 수 있다.
+`vehicle/gps`로 공급하지만, CRSF 배터리 프레임은 없으므로 `vehicle/battery`가 비어 있을 수 있다.
 
 ### 10.2 비행 폴더 manifest
 
@@ -840,98 +766,24 @@ rosbag 녹화를 시작하며 ARM을 내리면 정상 마감한다. 녹화기가
 
 ## 11. 런치 파일 구조
 
-### 11.1 SITL 런치
+- `arms_bringup/launch/arms.launch.py`: 실기체 영상ㆍoperator hardwareㆍcontrolㆍCRSF I/OㆍUI를 기동한다.
+- `arms_bringup/launch/arms_sitl.launch.py`: PX4/Gazebo와 각 패키지의 환경별 launch를 조합해 detection, control, SITL MAVLink I/O, operator GUI, panel, referee, UI, recorder를 기동한다. Gazebo 카메라 브리지는 `arms_video/launch/video_sitl.launch.py`가 소유한다.
+- `arms_bringup/launch/arms_replay.launch.py`: 저장 영상, 선택한 operator 입력, control, CRSF I/O, UI로 알고리즘을 재생 시험한다.
 
-```
-# arms_bringup/launch/arms_sitl.launch.py  (메인 SITL 런치)
-
-include:
-  - arms_sim/launch/px4_sitl.launch.py   PX4 SITL + Gazebo (px4:=false 로 생략 가능)
-      기동 전 px4/gz 잔여 프로세스 kill + 월드/모델 링크 갱신 → PX4 바이너리 -d 실행
-      → 15s 후 mavlink_shell.py 로 param set → OnShutdown 시 px4/gz sim 정리
-processes:
-  - socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx   (CRSF 가상 시리얼)
-
-nodes:
-  - arms_detection_node     (arms_detection) detection:= host(기본, ARMS_MODEL in-process) | docker
-  - arms_control_node       (arms_control)   상태머신 + PID + CRSF → /tmp/crsf_tx
-  - sitl_bridge_node        (arms_control)   /tmp/crsf_rx → MAVLink UDP → PX4
-  - arms_ui_node            (arms_ui)
-  - arms_command_node       (arms_command)   tkinter GUI → /arms/command 발행
-
-별도 실행:
-  YOLO 포함 검출(선택): docker compose -f docker-compose.laptop.yml up
-    (컨테이너의 arms_detection_node 가 YOLO 포함 → 호스트 노드와 중복 실행 금지)
-
-# arms_control/launch/control_sitl.launch.py  (단독 실행용)
-  arms_control_node + sitl_bridge_node
-```
-
-### 11.2 실기체 런치
-
-```
-# arms_bringup/launch/arms_full.launch.py
-
-nodes:
-  - arms_control_node  (arms_control)   상태머신 + PID + CRSF → /dev/ttyTHS1
-      파라미터: config/hw_overrides.yaml 오버레이 (crsf.port, servo.enabled,
-                sitl_auto_launch=false, 실기체 PID)
-  - arms_ui_node       (arms_ui)
-
-# arms_command/launch/command.launch.py  (별도 실행)
-  - arms_command_hw_node  (arms_command)  ESP32(ADS1115 + GPIO) USB Serial 수신 → /arms/command
-
-별도 실행:
-  docker compose -f docker-compose.jetson.yml up
-
-# arms_control/launch/control.launch.py  (단독 실행용)
-  arms_control_node only (control_params.yaml + hw_overrides.yaml 오버레이)
-```
+세 런치는 모두 `namespace` 인자를 기본 `arms`로 사용한다. 노드 코드는 상대 토픽만 사용하므로 실제 ROS 그래프에서는 `/arms/<domain>/<name>`으로 보인다.
 
 ## 12. 전체 데이터 흐름 요약
 
-```
-FPV Receiver (USB)          Gazebo Camera (SITL)
-      |                             |
-      | V4L2                        | gz topic
-      v                             v
-arms_video_node  ──────────────────────────────────────
-      |
-      | /arms/image_raw  [sensor_msgs/Image, 30Hz]
-      +──────────────────────────────> arms_ui_node (display)
-      |
-      v
-arms_detection_node  (Docker, HSV 후보 → ROI YOLO 검증 + KF 필터)
-      |
-      | /arms/detections  [arms_msgs/DetectionArray]
-      +──────────────────────────────> arms_ui_node (overlay boxes)
-      |
-      v
-arms_control_node  (state machine + PID)
-      |
-      | /arms/mission_state  [arms_msgs/MissionState, 30Hz]
-      +──────────────────────────────> arms_ui_node (state display)
-      |
-      | CRSF serial (30Hz)
-      |   CH1: roll   CH2: pitch      CH3: throttle   CH4: yaw
-      |   CH5: arm    CH6: flightmode CH7: RTL/GPS Rescue  CH8: (미사용)
-      |
-      +─── SITL ──────────────────────────────────────────────
-      |    /tmp/crsf_tx → [socat] → /tmp/crsf_rx
-      |         sitl_bridge_node
-      |           ├─ CH5 레벨 → ARM/DISARM (MAVLink)
-      |           ├─ CH6 에지 → SET_MODE ACRO(low)/Altitude(high)
-      |           ├─ CH7 상승엣지 → MAV_CMD_NAV_RETURN_TO_LAUNCH
-      |           └─ CH1-4,7 → RC_CHANNELS_OVERRIDE (50Hz UDP)
-      |                              → PX4 (ACRO/Altitude)
-      |
-      +─── 실기체 ─────────────────────────────────────────────
-           /dev/ttyTHS1 (UART 400000)
-                → ELRS TX module → [RF 433/868/915MHz]
-                       → ELRS RX → FC (CH6로 ACRO/Altitude 전환)
-                                     └─ ESC → Motors
-```
+```text
+camera/image_raw -> perception/detections -> arms_control_node
+                                              |
+                                      control/flight_command
+                                      /                      \
+                         arms_crsf_io_node             sitl_bridge_node
+                               |                              |
+                         ELRS -> Betaflight                 PX4 SITL
 
----
+vehicle/*, io/status, mission/state, control/* -> UI / recorder / viewer
+```
 
 _Document version: 0.11 — 2026-09-06_

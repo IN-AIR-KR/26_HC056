@@ -4,22 +4,16 @@
 #
 # 로드 순서 (뒤가 이김):
 #   control.launch.py       control_params.yaml → 이 파일
-#   arms.launch.py          control_params.yaml → 이 파일 → crsf_port 인자
+#   arms.launch.py          control_params.yaml → 이 파일
 #   *_sitl.launch.py        control_params.yaml 만  ← 이 파일 안 실림
 #
-# ELRS 모듈이 연결된 포트/속도.
-#   - USB-C(CP2102 USB-UART, full duplex): /dev/ttyUSB0   ← 현재 셋업, baud 115200
-#       번호 고정: /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
 arms_control_node:
   ros__parameters:
-    crsf:
-      port: "/dev/ttyUSB0"
-      baud: 115200
-
-    # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
-    #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
+    # 발사기 고정용 Jetson PWM 서보. 핀 mux와 sysfs 권한이 준비된 실기체에서만 켠다.
     servo:
-      enabled: false
+      # true: 자동 SEARCH에서 LOCK, LOCK→TRACK에서 OPEN.
+      # false: 상태와 무관하게 OPEN 위치 유지.
+      enabled: true
 
     mission:
       # 실기체는 자동 발진 금지. LOCK 이 걸려도 스스로 TRACK 으로 넘어가지 않고,
@@ -111,4 +105,3 @@ arms_control_node:
       #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
       # auto_arm_states: ["TRACK", "RTL"]
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "RTL"]
-

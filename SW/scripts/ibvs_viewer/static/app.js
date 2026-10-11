@@ -1,18 +1,18 @@
 /* IBVS 로그 뷰어 — uPlot 차트, 커서/줌 연동, 기록 목록 사이드바. */
 "use strict";
 
-const T = "/arms/ibvs_debug";
-const R = "/arms/crsf_rx";
-const M = "/arms/mission_state";
-const C = "/arms/control_debug";
-const G = "/arms/gps";
-const B = "/arms/battery";
-const CMD = "/arms/command";
-const TX = "/arms/crsf_tx";
-const A = "/arms/attitude";
-const D = "/arms/detections";
-const DR = "/arms/detections_raw";
-const DS = "/arms/detector_status";
+let T, R, M, C, G, B, CMD, FC, TX, A, D, DR, DS;
+function bindTopicNamespace(topics) {
+  const marker = "/control/ibvs_debug";
+  const hit = topics.find(t => t.endsWith(marker));
+  if (!hit) throw new Error("지원하지 않는 로그 schema: control/ibvs_debug 토픽이 없습니다.");
+  const ns = hit.slice(0, -marker.length);
+  const topic = suffix => `${ns}${suffix}`;
+  T = topic("/control/ibvs_debug"); R = topic("/io/crsf/rx"); M = topic("/mission/state");
+  C = topic("/control/debug"); G = topic("/vehicle/gps"); B = topic("/vehicle/battery");
+  CMD = topic("/operator/input"); FC = topic("/control/flight_command"); TX = topic("/io/crsf/tx"); A = topic("/vehicle/attitude");
+  D = topic("/perception/detections"); DR = topic("/perception/detections_raw"); DS = topic("/perception/status");
+}
 
 // ---------------------------------------------------------------- 필드 수식
 // 범례는 필드명 그대로. 수식은 패널 위 표와 범례 툴팁에 나온다.
@@ -75,8 +75,8 @@ const FIELD_INFO = {
   tau: "loom_size / loom_rate   [s]   (loom_rate ≤ 0 → 9.99)",
   throttle_up: "hover + (track − hover)·range_throttle_scale",
   thrust: "hover + (throttle_up − hover)·center_q·tau_ease",
-  cmd_active: "state ∈ {TRACK, FIRE}",
-  filter_active: "state ∈ {LOCK, TRACK, FIRE}",
+  cmd_active: "state = TRACK",
+  filter_active: "state ∈ {LOCK, TRACK}",
   detection_held: "검출 끊김 → 마지막 오차 유지",
   z1_clamped: "z1_raw > 0.995·kb",
   rate_saturated: "|rate_cmd| > max_cmd_rate_dps",
@@ -123,10 +123,12 @@ const GENERAL_PANELS = [
       { t: M, f: "lock_elapsed_sec", label: "lock elapsed [s]", scale: "y2" },
       { t: M, f: "manual_mode", label: "mode (0=auto, 1=manual)", step: true, scale: "y2" },
     ] },
-  { title: "Control output", note: "final command before CRSF normalization",
+  { title: "Flight command", note: "vehicle-independent final command before flight I/O mapping",
     series: [
-      { t: C, f: "x", label: "roll rate [deg/s]" }, { t: C, f: "y", label: "pitch rate [deg/s]" },
-      { t: C, f: "z", label: "thrust [0..1]", scale: "y2" },
+      { t: FC, f: "roll", label: "roll" }, { t: FC, f: "pitch", label: "pitch" },
+      { t: FC, f: "throttle", label: "throttle [0..1]", scale: "y2" },
+      { t: FC, f: "arm", label: "arm", step: true, scale: "y2" },
+      { t: FC, f: "rtl_request", label: "RTL", step: true, scale: "y2" },
     ] },
   { title: "GPS motion", note: "altitude / ground speed / course",
     series: [
@@ -155,11 +157,11 @@ const GENERAL_PANELS = [
     ] },
   { title: "Operator command / switches", note: "sticks and AUTO/MANUAL / ARM / RTL switch inputs",
     series: [
-      { t: CMD, f: "axes_0", label: "yaw" }, { t: CMD, f: "axes_1", label: "throttle" },
-      { t: CMD, f: "axes_2", label: "roll" }, { t: CMD, f: "axes_3", label: "pitch" },
-      { t: CMD, f: "buttons_2", label: "mode (0=auto, 1=manual)", step: true },
-      { t: CMD, f: "buttons_1", label: "arm switch", step: true },
-      { t: CMD, f: "buttons_4", label: "RTL switch", step: true },
+      { t: CMD, f: "yaw", label: "yaw" }, { t: CMD, f: "throttle", label: "throttle" },
+      { t: CMD, f: "roll", label: "roll" }, { t: CMD, f: "pitch", label: "pitch" },
+      { t: CMD, f: "manual_mode", label: "mode (0=auto, 1=manual)", step: true },
+      { t: CMD, f: "arm_switch", label: "arm switch", step: true },
+      { t: CMD, f: "rtl_switch", label: "RTL switch", step: true },
     ] },
   { title: "CRSF output", note: "channels sent to FC (CH6: auto=ACRO, manual/RTL=self-level)",
     series: [
@@ -249,7 +251,6 @@ const STATE_COLORS = {
   SEARCH: "rgba(148,163,184,0.10)",
   LOCK: "rgba(234,179,8,0.13)",
   TRACK: "rgba(34,197,94,0.11)",
-  FIRE: "rgba(239,68,68,0.18)",
   RTL: "rgba(59,130,246,0.13)",
 };
 const CHART_H = 210;
@@ -395,6 +396,9 @@ async function openRecord(id) {
   }
   if (currentId !== id) return;   // 로딩 중 다른 기록을 눌렀음
   const topics = Object.keys(rec.topics);
+  try { bindTopicNamespace(topics); } catch (e) {
+    $("errors").innerHTML = `<div></div>`; $("errors").firstChild.textContent = e.message; return;
+  }
   $("rec-meta").textContent =
     `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · ibvs_debug ${rec.topics[T]?.t.length ?? 0}개`;
   $("errors").innerHTML = "";
@@ -405,7 +409,7 @@ async function openRecord(id) {
   }
   if (!rec.topics[T]) {
     const d = document.createElement("div");
-    d.textContent = "이 기록에는 /arms/ibvs_debug 가 없습니다 (IbvsDebug 추가 전 녹화). 다른 토픽은 아래 '패널 추가' 로 볼 수 있습니다.";
+    d.textContent = "이 기록에는 control/ibvs_debug가 없습니다. 이 버전은 구형 로그를 지원하지 않습니다.";
     $("errors").appendChild(d);
   }
   stateSegs = buildStateSegs();
@@ -420,7 +424,7 @@ async function openRecord(id) {
 }
 
 function buildStateSegs() {
-  const src = rec.topics[T]?.strings?.state ? rec.topics[T] : rec.topics["/arms/mission_state"];
+  const src = rec.topics[T]?.strings?.state ? rec.topics[T] : rec.topics[M];
   const st = src?.strings?.state;
   if (!st) return [];
   const segs = [];
@@ -879,7 +883,7 @@ function makeChart(p, { data, specs, multiTopic }, el) {
   return u;
 }
 
-/* 상태머신 상태(LOCK/TRACK/FIRE…)를 배경 띠로 칠한다. */
+/* 상태머신 상태(LOCK/TRACK…)를 배경 띠로 칠한다. */
 function statePlugin() {
   return {
     hooks: {

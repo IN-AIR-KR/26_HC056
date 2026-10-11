@@ -8,8 +8,8 @@
       <plot flip_x="false" flip_y="false" line_width="1.0" mode="TimeSeries">
        <range bottom="-0.128411" left="1783538428.267940" right="1783538433.234971" top="0.364870"/>
        <limitY/>
-       <curve color="#1f77b4" name="/arms/mission_state/error_x"/>
-       <curve color="#d62728" name="/arms/mission_state/error_y"/>
+       <curve color="#1f77b4" name="/arms/mission/state/error_x"/>
+       <curve color="#d62728" name="/arms/mission/state/error_y"/>
        <curve color="#cfff1b" name="target error"/>
       </plot>
      </DockArea>
@@ -17,8 +17,8 @@
       <plot flip_x="false" flip_y="false" line_width="1.0" mode="TimeSeries">
        <range bottom="-19.807969" left="1783538428.267888" right="1783538433.234921" top="80.559756"/>
        <limitY/>
-       <curve color="#1f77b4" name="/arms/control_debug/x"/>
-       <curve color="#d62728" name="/arms/control_debug/y"/>
+       <curve color="#1f77b4" name="/arms/control/debug/x"/>
+       <curve color="#d62728" name="/arms/control/debug/y"/>
       </plot>
      </DockArea>
     </DockSplitter>
@@ -60,7 +60,7 @@
    <max_array_size value="100"/>
    <boolean_strings_to_number value="true"/>
    <remove_suffix_from_strings value="true"/>
-   <selected_topics value="/arms/control_debug;/arms/debug_looming;/arms/mission_state"/>
+   <selected_topics value="/arms/control/debug;/arms/control/looming_debug;/arms/mission/state"/>
   </plugin>
   <plugin ID="UDP Server"/>
   <plugin ID="WebSocket Server"/>
@@ -159,9 +159,9 @@ end
   <snippet language="LUA" name="target error">
    <global></global>
    <function>return 0</function>
-   <linked_source>/arms/mission_state/error_x</linked_source>
+   <linked_source>/arms/mission/state/error_x</linked_source>
    <additional_sources>
-    <v1>/arms/mission_state/error_x</v1>
+    <v1>/arms/mission/state/error_x</v1>
    </additional_sources>
   </snippet>
  </customMathEquations>

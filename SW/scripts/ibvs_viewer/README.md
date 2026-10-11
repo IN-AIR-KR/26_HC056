@@ -1,7 +1,8 @@
 # ibvs_viewer — IBVS 비행 로그 웹뷰어
 
 `auto_save:=true` 로 녹화한 `~/arms_flight_logs_ibvs/<일시>/` 기록의 비행 텔레메트리와
-`/arms/ibvs_debug`를 브라우저에서 uPlot 그래프로 본다.
+`control/ibvs_debug`를 브라우저에서 uPlot 그래프로 본다. 토픽은 rosbag에 기록된
+namespace에서 자동으로 찾는다.
 **ROS 불필요** — sqlite3 로 bag 을 직접 열고 `rosbags`(순수 파이썬)로 역직렬화한다.
 젯슨에서 기록 폴더만 노트북으로 복사해 와서 봐도 된다.
 
@@ -36,9 +37,9 @@ python3 SW/scripts/ibvs_viewer/server.py
     (게인 곱한 값 · 항별 비중). 구 기록에도 나온다.
 - **화면 영상 + 3D 뷰**: 우상단 `Graphs` / `Video + Graphs` 로 전환. `Video + Graphs` 는 왼쪽에
   녹화된 영상과 3D 비행 뷰, 오른쪽에 그래프가 나온다. 영상 소스는 UI 영상과 원본
-  (`/arms/ui_image/compressed`, `/arms/image_raw/compressed`) 중 기록된 것을 고를 수 있다.
+  (`ui/image/compressed`, `camera/image_raw/compressed`) 중 기록된 것을 고를 수 있다.
   3D 뷰는 첫 GPS 위치를 원점으로 한 ENU 좌표(X=동, Y=상, Z=북)에서 GPS 경로와
-  `/arms/attitude`의 roll/pitch/yaw 자세를 함께 표시한다. 그래프 호버와 영상 재생 시각에 동기화되며,
+  `vehicle/attitude`의 roll/pitch/yaw 자세를 함께 표시한다. 그래프 호버와 영상 재생 시각에 동기화되며,
   3D 화면을 마우스로 드래그하면 시점을 회전하고, 휠/트랙패드 스크롤로 확대·축소할 수 있다.
   **회전/줌 중심** 토글로 GPS 원점 또는 해당 시각의 드론을 중심으로 선택한다.
   - 3D 뷰 아래에 풍선 위도·경도·고도를 입력하고 **풍선 저장**을 누르면 빨간 풍선이 표시되며,
@@ -50,7 +51,7 @@ python3 SW/scripts/ibvs_viewer/server.py
     변환은 뷰어를 실행한 컴퓨터에서 이뤄지며 `ffmpeg`가 필요하다.
   - 영상 토픽이 없는 기록(SITL 구버전 녹화 등)은 영상 칸에 안내만 뜬다.
 - **패널 추가**(맨 아래): `토픽 필드` 를 쉼표로 여러 개 입력하면 새 패널이 생긴다
-  (예: `/arms/ibvs_debug barrier, /arms/crsf_rx roll_deg`). 토픽을 생략하면 ibvs_debug.
+  (예: `/arms/control/ibvs_debug barrier, /arms/io/crsf/rx roll_deg`). 토픽을 생략하면 ibvs_debug.
 
 ## 참고
 

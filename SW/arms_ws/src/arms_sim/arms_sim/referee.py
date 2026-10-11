@@ -156,13 +156,9 @@ class BalloonReferee(Node):
         # 한 번이라도 발사됐는지. 발사 전(초기 대기)엔 숨기고, 발사 후 정지는 제자리 멈춤.
         self._launched_once = False
         self._new_pass()
-        # /arms/mission_state 는 구독하지 않는다. 예전에는 종말 상태를 보고
-        # 명중을 선언했는데, 그러면 심판이 응시자의 답을 보고 채점하는 셈이라
-        # "영상이 발사 판정했다" 와 "실제로 닿았다" 가 같은 값이 되어버린다.
-        # 이제 둘은 독립이고, 어긋나는 것 자체가 정보다.
-        # /arms/hit 은 통지용 — arms_control 은 이걸 로그로만 쓴다.
-        self._hit_pub = self.create_publisher(Empty, "/arms/hit", 10)
-        self.create_subscription(Empty, "/arms/reset", self._on_reset, 10)
+        # 접촉 판정은 Gazebo 좌표만으로 완결하고, 결과만 sim/hit으로 통지한다.
+        self._hit_pub = self.create_publisher(Empty, "sim/hit", 10)
+        self.create_subscription(Empty, "sim/reset_event", self._on_reset, 10)
         self._last_dist_log = 0.0     # 접근거리 로그 스로틀
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
         self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)

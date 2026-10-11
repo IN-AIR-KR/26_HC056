@@ -2,11 +2,11 @@
 arms_ui_node — OpenCV overlay display
 
 Subscribes to:
-  /arms/image_raw      sensor_msgs/Image
-  /arms/detections     arms_msgs/DetectionArray
-  /arms/mission_state  arms_msgs/MissionState
-  /arms/control_debug  geometry_msgs/Vector3
-  /arms/command        sensor_msgs/Joy   (buttons[2]: 0=AUTO, 1=MANUAL)
+  camera/image_raw      sensor_msgs/Image
+  perception/detections     arms_msgs/DetectionArray
+  mission/state  arms_msgs/MissionState
+  control/debug  geometry_msgs/Vector3
+  operator/input       arms_msgs/OperatorInput (manual_mode: false=AUTO, true=MANUAL)
 
 오버레이(바운딩박스/십자선/상태/ROI 등)는 AUTO 모드에서만 그린다.
 MANUAL 모드(buttons[2]==1)에서는 원본 영상만 표시한다.
@@ -28,15 +28,13 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage, Image, Joy
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Float32MultiArray
 
-from arms_msgs.msg import BatteryTelemetry, DetectionArray, GpsTelemetry, MissionState
+from arms_msgs.msg import BatteryTelemetry, DetectionArray, GpsTelemetry, MissionState, OperatorInput
 from geometry_msgs.msg import Vector3
 
-# /arms/command Joy 버튼 인덱스 (arms_command_uart_node.cpp / arms_control_node.cpp 와 일치)
-#   buttons[1]=arm, [2]=mode, [3]=launch, [4]=rtl
-MODE_BUTTON_IDX = 2
+# operator/input은 명명 필드로 운용자 의도를 전달한다.
 
 STATE_COLORS = {
     "IDLE":   (128, 128, 128),
@@ -59,7 +57,7 @@ class ArmsUINode(Node):
             depth=1,
         )
         self._image_qos = best_effort_qos
-        # UI raw(/arms/ui_image)는 RELIABLE 로 발행한다. image_transport republish 가 RELIABLE
+        # UI raw(ui/image)는 RELIABLE 로 발행한다. image_transport republish 가 RELIABLE
         #   로 구독하므로 BEST_EFFORT 면 QoS 불일치로 프레임을 못 받는다(로컬이라 부담 없음).
         reliable_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -67,10 +65,10 @@ class ArmsUINode(Node):
             depth=1,
         )
 
-        # UI 화면 스트리밍: 합성 화면을 raw(/arms/ui_image)로 발행(구독자 있을 때만, lazy).
-        #   compressed(/arms/ui_image/compressed)는 launch 의 image_transport 'republish' 가
+        # UI 화면 스트리밍: 합성 화면을 raw(ui/image)로 발행(구독자 있을 때만, lazy).
+        #   compressed(ui/image/compressed)는 launch 의 image_transport 'republish' 가
         #   이 raw 를 받아 '정식으로' 만든다(파이썬 rclpy 는 image_transport 퍼블리셔가 없어
-        #   compressed 를 직접 내면 rqt 와 타입 충돌하기 때문). rqt 는 base(/arms/ui_image) 하나로
+        #   compressed 를 직접 내면 rqt 와 타입 충돌하기 때문). rqt 는 base(ui/image) 하나로
         #   raw/compressed 를 골라 본다. 노트북은 compressed 를 구독해 경량 스트리밍/녹화.
         #   여기서 resize·fps 를 걸면 raw 가 작아져 그걸 압축한 compressed 도 자동 경량.
         #   (JPEG 품질은 이 노드가 아니라 republish 의 compressed.jpeg_quality 로 조절한다.)
@@ -81,7 +79,7 @@ class ArmsUINode(Node):
         self.declare_parameter("ui.stream_fps", 15.0)           # 0=제한 없음(렌더 fps 그대로)
         self._last_stream_t = 0.0
         self.pub_ui_raw = self.create_publisher(
-            Image, "/arms/ui_image", reliable_qos)
+            Image, "ui/image", reliable_qos)
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
@@ -154,26 +152,26 @@ class ArmsUINode(Node):
         self._lock_tone_proc = None                             # LOCK 이상: 끊기지 않는 연속 톤 프로세스
         self._last_image_t = 0.0                                # 마지막 영상 프레임 수신 시각(monotonic)
 
-        self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
-        self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
-        self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
-        self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
+        self.create_subscription(Image, "camera/image_raw", self._cb_image, best_effort_qos)
+        self.create_subscription(DetectionArray, "perception/detections", self._cb_detections, 10)
+        self.create_subscription(MissionState, "mission/state", self._cb_state, 10)
+        self.create_subscription(Vector3, "control/debug", self._cb_debug, 10)
         # hsv_debug_image(≈500KB raw)는 cv_debug 패널일 때만 구독한다. 아니면
         # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
         if self._cv_debug:
             self._hsv_subscription = self.create_subscription(
-                Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
+                Image, "perception/hsv_debug_image", self._cb_hsv_debug,
                 best_effort_qos)
-        # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
+        # 실기체 operator 입력 노드가 BEST_EFFORT 라서 구독도 맞춰야
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
-        self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
+        self.create_subscription(OperatorInput, "operator/input", self._cb_command, best_effort_qos)
         # 배터리는 CRSF 통합 스냅샷이 아니라 전용 토픽을 구독한다.
-        self.create_subscription(BatteryTelemetry, "/arms/battery", self._cb_battery, 10)
+        self.create_subscription(BatteryTelemetry, "vehicle/battery", self._cb_battery, 10)
         # GPS는 CRSF 0x02를 control 노드가 별도 변환해 발행한다.
-        self.create_subscription(GpsTelemetry, "/arms/gps", self._cb_gps, 10)
+        self.create_subscription(GpsTelemetry, "vehicle/gps", self._cb_gps, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
-        self.create_subscription(Float32MultiArray, "/arms/detector_status",
+        self.create_subscription(Float32MultiArray, "perception/status",
                                  self._cb_detstatus, 10)
 
         self._latest_detections = DetectionArray()
@@ -181,8 +179,8 @@ class ArmsUINode(Node):
         self._latest_cmd = Vector3()
         self._latest_roi = None
         self._latest_hsv_debug = None
-        self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
-        self._latest_gps = None       # /arms/gps 최신값 (CRSF GPS frame 기준)
+        self._latest_battery = None   # vehicle/battery 최신값 (None=아직 미수신)
+        self._latest_gps = None       # vehicle/gps 최신값 (CRSF GPS frame 기준)
         self._gps_received_t = 0.0    # GPS telemetry가 끊긴 상태를 표시하기 위한 monotonic 시각
         self._elrs_connected = None   # ELRS 연결 여부 (None=미수신). 화면 표시는 이 값으로 즉시 반영
         self._elrs_sound_state = None # 효과음 기준 상태(디바운스로 확정된 값). None=아직 안 알림
@@ -342,10 +340,8 @@ class ArmsUINode(Node):
             for name, value in zip(names, vals[2:11]):
                 self._diag_history[name].append(float(value))
 
-    def _cb_command(self, msg: Joy):
-        if len(msg.buttons) <= MODE_BUTTON_IDX:
-            return
-        manual = bool(msg.buttons[MODE_BUTTON_IDX])
+    def _cb_command(self, msg: OperatorInput):
+        manual = bool(msg.manual_mode)
         self._manual_mode = manual
         # 시작 안내(모드+텔레메트리)는 _maybe_startup_announce 가 순서대로 한 번에 낸다.
         #   그 이후의 모드 전환 엣지에만 개별 효과음을 낸다.
@@ -560,7 +556,7 @@ class ArmsUINode(Node):
         if self._hsv_subscription is None:
             self._latest_hsv_debug = None
             self._hsv_subscription = self.create_subscription(
-                Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
+                Image, "perception/hsv_debug_image", self._cb_hsv_debug,
                 self._image_qos)
             self._transient_hsv_subscription = True
         self.get_logger().info("S pressed: waiting for one HSV debug frame...")
@@ -643,11 +639,11 @@ class ArmsUINode(Node):
             self._request_capture(detection_capture)
 
     def _publish_ui_stream(self, frame):
-        """합성된 UI 화면을 raw(/arms/ui_image)로 발행(rqt 뷰·republish 입력용).
+        """합성된 UI 화면을 raw(ui/image)로 발행(rqt 뷰·republish 입력용).
 
         구독자가 있을 때만 발행해 평소 비용을 0 으로 둔다. 발행 전 최대 폭으로 축소하고
         fps 상한으로 발행률을 제한한다(그러면 이를 압축한 compressed 도 자동 경량).
-        compressed(/arms/ui_image/compressed)는 launch 의 image_transport republish 가 만든다."""
+        compressed(ui/image/compressed)는 launch 의 image_transport republish 가 만든다."""
         if not bool(self.get_parameter("ui.stream_enabled").value):
             return
         if self.pub_ui_raw.get_subscription_count() == 0:
@@ -1016,7 +1012,7 @@ class ArmsUINode(Node):
 
     def _draw_battery(self, frame):
         """배터리 전압/잔량을 하단 중앙에 표시 — 자동/수동·디버그 무관하게 항상
-        (데이터 있을 때만; /arms/crsf_rx 미수신이면 표시할 값이 없어 생략)."""
+        (데이터가 아직 없으면 표시하지 않는다)."""
         bat = self._latest_battery
         if bat is None:
             return

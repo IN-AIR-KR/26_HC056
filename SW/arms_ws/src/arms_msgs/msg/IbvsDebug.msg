@@ -1,4 +1,4 @@
-# IBVS(guidance_mode 2) 튜닝/디버깅용 스냅샷 — arms_control_node 가 제어 틱마다 발행(/arms/ibvs_debug).
+# IBVS(guidance_mode 2) 튜닝/디버깅용 스냅샷 — arms_control_node 가 제어 틱마다 발행(control/ibvs_debug).
 #   구독자 있을 때만 발행(flight_recorder 가 구독하면 자동 on).
 #   각 항은 control_loop() 계산 순서대로다. 적용되지 않은 단계(IDLE/SEARCH 등)는 0/기본값.
 #   *_x = roll 축, *_y = pitch 축. 명령 단위는 각속도[deg/s] (ACRO, 각도 아님).

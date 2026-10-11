@@ -28,7 +28,7 @@ Visualization Manager:
       Name: Models
       Enabled: true
       Topic:
-        Value: /arms/viz/markers
+        Value: /arms/sim/viz/markers
         Depth: 1
         Durability Policy: Volatile
         Reliability Policy: Reliable
@@ -41,7 +41,7 @@ Visualization Manager:
       Line Width: 0.1
       Alpha: 1
       Topic:
-        Value: /arms/viz/drone_path
+        Value: /arms/sim/viz/drone_path
         Depth: 1
         Durability Policy: Volatile
         Reliability Policy: Reliable
@@ -54,7 +54,7 @@ Visualization Manager:
       Line Width: 0.1
       Alpha: 1
       Topic:
-        Value: /arms/viz/target_path
+        Value: /arms/sim/viz/target_path
         Depth: 1
         Durability Policy: Volatile
         Reliability Policy: Reliable

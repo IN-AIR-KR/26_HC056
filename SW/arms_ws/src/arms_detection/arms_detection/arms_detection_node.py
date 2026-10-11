@@ -9,12 +9,12 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 
 검출 결과는 칼만 필터로 평활하고, 표적을 확정한 뒤에는 예측 위치에서 크게 튄
 검출(오인식)을 걸러낸다. 순간 놓침은 KF 예측으로 잠시 외삽(coast)한다. control
-엔 완전히 투명 — 더 연속적인 /arms/detections 를 낼 뿐이다.
+엔 완전히 투명 — 더 연속적인 perception/detections 를 낼 뿐이다.
 
 토픽
-  구독 : /arms/image_raw        sensor_msgs/Image
-  발행 : /arms/detections       arms_msgs/DetectionArray
-  발행 : /arms/detections_raw   arms_msgs/DetectionArray (KF 적용 전 원시 측정값; 로그/튜닝용)
+  구독 : camera/image_raw        sensor_msgs/Image
+  발행 : perception/detections       arms_msgs/DetectionArray
+  발행 : perception/detections_raw   arms_msgs/DetectionArray (KF 적용 전 원시 측정값; 로그/튜닝용)
   발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, HSV 후보 전체+최종 선택 시각화)
   발행 : /arms/hsv_debug_image  sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
   발행 : /arms/detector_status  std_msgs/Float32MultiArray (검출·처리시간 진단값)
@@ -133,7 +133,7 @@ class _TargetFilter:
       LOST     확정 + 순간 놓침 — KF 예측으로 외삽(coast). 검출 복귀 시 TRACKED
       REMOVED  놓침이 max_age 만큼 지속 → 표적 제거. 다음 검출은 NEW 로 시작
     전이:  NEW → TRACKED ⇄ LOST → REMOVED → (다음 검출) NEW
-    control 엔 투명 — 더 연속적인 /arms/detections 를 낼 뿐이다."""
+    control 엔 투명 — 더 연속적인 perception/detections 를 낼 뿐이다."""
     NEW, TRACKED, LOST, REMOVED = "NEW", "TRACKED", "LOST", "REMOVED"
 
     def __init__(self):
@@ -318,24 +318,24 @@ class ArmsDetectionNode(Node):
         # 입력 전송: ARMS_INPUT_COMPRESSED=1 이면 압축(CompressedImage)을 구독·디코드
         # → 컨테이너로 오는 UDP 데이터량 급감(조각 드롭↓). 아니면 raw Image.
         if os.environ.get("ARMS_INPUT_COMPRESSED", "0") == "1":
-            self.create_subscription(CompressedImage, "/arms/image_raw/compressed",
+            self.create_subscription(CompressedImage, "camera/image_raw/compressed",
                                      self._cb_compressed, qos)
-            self.get_logger().info("입력: 압축(/arms/image_raw/compressed)")
+            self.get_logger().info("입력: 압축(camera/image_raw/compressed)")
         else:
-            self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
+            self.create_subscription(Image, "camera/image_raw", self._cb_image, qos)
 
-        self.pub_det     = self.create_publisher(DetectionArray, "/arms/detections",    10)
+        self.pub_det     = self.create_publisher(DetectionArray, "perception/detections",    10)
         # KF/필터 적용 '전' 원시 검출(측정값 z_k) 로그용. 구독자 있을 때만 발행(bag record 시 on).
         #   추후 칼만 파라미터를 오프라인 재현/튜닝하려고 그대로 남긴다.
-        self.pub_det_raw = self.create_publisher(DetectionArray, "/arms/detections_raw", 10)
+        self.pub_det_raw = self.create_publisher(DetectionArray, "perception/detections_raw", 10)
         # debug_image: HSV 후보 전체 + 최종 선택 오버레이. hsv_debug_image: HSV 확률 마스크+후보.
         #   둘 다 구독자 있을 때만 발행(cv_debug 패널은 hsv_debug_image 를 구독).
-        self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
+        self.pub_debug   = self.create_publisher(Image,          "perception/debug_image",   10)
         self.pub_hsv_debug = self.create_publisher(
-            Image, "/arms/hsv_debug_image", 10)
+            Image, "perception/hsv_debug_image", 10)
         # 진단 배열: [0]YOLO conf [1]HSV conf [2]hsv_count [3]yolo_inputs [4]yolo_accepted
         #   [5]frame_interval_ms [6]resize_ms [7]hsv_ms [8]yolo_ms [9]filter_ms [10]total_ms [11]state_code.
-        self.pub_detstatus = self.create_publisher(Float32MultiArray, "/arms/detector_status", 10)
+        self.pub_detstatus = self.create_publisher(Float32MultiArray, "perception/status", 10)
 
         self.get_logger().info(
             "arms_detection_node ready [HSV proposals → batched ROI YOLO + full fallback, KF filter]")
@@ -429,7 +429,7 @@ class ArmsDetectionNode(Node):
             out.detections.append(target)
         self.pub_det.publish(out)
 
-        # ROI 확대 뷰(PiP)는 UI 노드가 /arms/detections bbox 로 직접 크롭한다
+        # ROI 확대 뷰(PiP)는 UI 노드가 perception/detections bbox 로 직접 크롭한다
         #   (컨테이너→호스트 roi_image 전송 제거로 발행 부하·대역폭 절감).
 
         # 검출 오버레이(HSV 후보 전체+최종)는 구독자 있을 때만 그려서 발행.

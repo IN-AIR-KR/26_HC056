@@ -125,7 +125,7 @@ ros2 launch arms_bringup arms.launch.py model:=/models/drone_small.engine
 
 저장된 샘플 영상으로 detection → control → UI 파이프라인을 검증합니다. 캡처 동글이나
 FC 없이 검출·추적·UI를 그대로 돌려볼 수 있어, 검출 튜닝이나 UI 확인에 유용합니다.
-라이브 카메라 대신 `image_publisher` 가 영상 파일을 `/arms/image_raw` 로 스트리밍합니다.
+라이브 카메라 대신 `image_publisher` 가 영상 파일을 `/arms/camera/image_raw` 로 스트리밍합니다.
 
 detection 은 `arms.launch.py` 와 동일하게 **GPU 도커 컨테이너로 자동 기동**됩니다
 (`docker compose up -d`, 멱등). 즉 실기체와 같은 YOLO 검출을 샘플 영상에 그대로 적용합니다.
@@ -133,9 +133,9 @@ detection 은 `arms.launch.py` 와 동일하게 **GPU 도커 컨테이너로 자
 조종기는 `controller:=` 인자로 고릅니다(기본 `gui`):
 
 - **`controller:=gui`** (기본) — **SITL 가상 조종기(tkinter GUI)** 가 함께 떠서, 그 창에서
-  arm / 모드 / kill / launch 를 클릭으로 넣어 상태 전이(SEARCH→LOCK→…)를 테스트합니다.
+  ARM / 모드 / RTL / LAUNCH를 클릭으로 넣어 상태 전이(SEARCH→LOCK→…)를 테스트합니다.
   실기체 조종기·수신기 없이 파이프라인만 돌려볼 때 편합니다.
-- **`controller:=real`** — 실기체 **ESP32 조종기(UART → `/arms/command`)** 를 그대로 씁니다.
+- **`controller:=real`** — 실기체 **ESP32 조종기(UART → `operator/input`)** 를 그대로 씁니다.
   실제 조종기 입력으로 replay 영상 검증 시 사용합니다(ESP32 시리얼 연결 필요).
 
 ```bash
@@ -162,7 +162,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | 인자              | 기본값                            | 설명                                      |
 | ----------------- | --------------------------------- | ----------------------------------------- |
 | `video_path`      | `SW/sample_viedo/sample1.mov`     | 재생할 영상 파일 (절대경로 권장)          |
-| `publish_rate`    | `30.0`                            | `/arms/image_raw` 발행 fps                |
+| `publish_rate`    | `30.0`                            | `/arms/camera/image_raw` 발행 fps                |
 | `model`           | `/models/balloon_nano_v9.engine`     | detection 컨테이너가 로드할 가중치 (컨테이너 경로 `/models/…`) |
 | `start_detection` | `true`                            | detection 도커 컨테이너 자동 기동 여부    |
 | `controller`      | `gui`                             | 조종기 소스: `gui`(SITL 가상 조종기) / `real`(실기체 ESP32) |
@@ -170,7 +170,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
 | `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |
 | `cv_debug`        | `false`                           | 검출 진단 패널(HSV+그래프) (A-4)          |
-| `auto_save`      | `false` — **`arms.launch.py`(실기체) / `arms_sitl.launch.py`** | 비행 로그 자동 녹화(영상+검출 raw+CRSF 송·수신+상태). ARM 스위치 ON~OFF 를 `~/arms_flight_logs_ibvs/<일시>/` 에 bag(sqlite3) 저장 (모드·kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
+| `auto_save`      | `false` — **`arms.launch.py`(실기체) / `arms_sitl.launch.py`** | 비행 로그 자동 녹화. ARM 스위치 ON~OFF를 기준으로 `~/arms_flight_logs_ibvs/<일시>/`에 bag(sqlite3)과 manifest를 저장 |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
@@ -328,7 +328,7 @@ source arms_ws/install/setup.bash     # 새 터미널이면 한 번
 ros2 launch arms_bringup arms_sitl.launch.py
 ```
 
-런치 하나로 PX4 SITL(arms_drone) + Gazebo + socat 가상 시리얼 + 전체 ROS 스택 + 패널 GUI 가 다 뜨고,
+런치 하나로 PX4 SITL(arms_drone) + Gazebo + 전체 ROS 스택 + 패널 GUI 가 다 뜨고,
 Ctrl+C 한 번에 PX4/Gazebo 까지 전부 내려갑니다. PX4 쪽은 `arms_sim/launch/px4_sitl.launch.py` 가 담당하며
 기동 때마다 월드/모델 링크 갱신 → PX4 바이너리 직접 실행(`-d` 데몬 모드) → 부팅 후 파라미터 세팅(페일세이프 해제 등)을 합니다.
 
@@ -366,7 +366,7 @@ source ~/ros_gz_harmonic_ws/install/setup.bash
 ros2 launch arms_bringup arms_sitl.launch.py px4:=false
 ```
 
-`arms_sitl.launch.py` 가 socat + gz 카메라 브리지 + arms_control_node + sitl_bridge_node + arms_ui_node + arms_detection_node + 패널 GUI 를 한 번에 기동합니다.
+`arms_sitl.launch.py`가 gz 카메라 브리지, control, SITL MAVLink I/O, UI, detection, 패널 GUI를 한 번에 기동합니다.
 이 경우 PX4 파라미터(페일세이프 해제 등)는 세팅되지 않으니 필요하면 `Tools/mavlink_shell.py` 로 직접 넣으세요.
 
 #### 3D 시각화 — `rviz:=true`
@@ -400,7 +400,7 @@ ros2 launch arms_bringup arms_sitl.launch.py detection:=docker
 ```
 
 - ⚠️ **`host` 와 `docker` 를 동시에 쓰면 안 됩니다.** 둘 다 `/arms_detection_node` 라는 같은
-  이름으로 `/arms/detections` 를 발행해서 서로를 덮어씁니다.
+  이름으로 `/arms/perception/detections` 를 발행해서 서로를 덮어씁니다.
 - **가중치 인자는 `det_model:=` 입니다** — 다른 런치처럼 `model:=` 이 아닙니다. 이 런치는
   `px4_sitl.launch.py` 를 include 하는데 거기서 `model:=` 은 **PX4 airframe 이름**
   (`gz_arms_drone`)이고, 부모 런치 인자는 include 된 런치로 그대로 새어 들어가기 때문입니다.
@@ -412,7 +412,7 @@ ros2 launch arms_bringup arms_sitl.launch.py detection:=docker
 - **가중치는 git-lfs 로 관리됩니다.** `git lfs install && git lfs pull` 을 하지 않으면 파일이
   200바이트짜리 포인터 텍스트라 로드에 실패합니다 — 런치가 기동 전에 미리 경고합니다.
 - **YOLO 없이는 검출이 아예 안 나옵니다.** HSV 는 후보 제안일 뿐 발행 권한이 없어
-  (`use_hsv` 는 그 후보 단계만 끕니다), 모델이 없으면 `/arms/detections` 가 계속 빕니다.
+  (`use_hsv` 는 그 후보 단계만 끕니다), 모델이 없으면 `/arms/perception/detections` 가 계속 빕니다.
 - `detection:=docker` 는 SITL gz 카메라가 raw 만 내보내므로 `ARMS_INPUT_COMPRESSED=0` 을
   자동으로 넣어 줍니다 (compose 기본은 압축 입력 `1`).
 
@@ -422,16 +422,16 @@ ros2 launch arms_bringup arms_sitl.launch.py detection:=docker
 
 ```bash
 # 상태 머신 상태 확인
-ros2 topic echo /arms/mission_state
+ros2 topic echo /arms/mission/state
 
 # detection 확인
-ros2 topic echo /arms/detections
+ros2 topic echo /arms/perception/detections
 
 # 발사 판정용 looming 확인 (x=τ, y=bbox크기, z=팽창률)
-ros2 topic echo /arms/debug_looming
+ros2 topic echo /arms/control/looming_debug
 
 # 카메라 영상 확인
-ros2 run rqt_image_view rqt_image_view /arms/image_raw
+ros2 run rqt_image_view rqt_image_view /arms/camera/image_raw
 ```
 
 ### 검출 화면 캡처 (`S` 키)
@@ -453,8 +453,8 @@ A.R.M.S. UI 창이 떠 있을 때 **`S`(또는 `s`) 키**를 누르면 현재 �
 
 UI 노드는 화면을 두 토픽으로 발행한다(둘 다 구독자 있을 때만, lazy):
 
-- `/arms/ui_image` (raw `sensor_msgs/Image`) — rqt 로 바로 보기용.
-- `/arms/ui_image/compressed` (JPEG) — 경량 녹화·원격 스트리밍용. **launch 의 image_transport
+- `/arms/ui/image` (raw `sensor_msgs/Image`) — rqt 로 바로 보기용.
+- `/arms/ui/image/compressed` (JPEG) — 경량 녹화·원격 스트리밍용. **launch 의 image_transport
   `republish` 노드가 만든다**(파이썬 노드는 image_transport 규약 compressed 를 직접 못 냄).
 
 발행 화질/대역폭은 파라미터로 조절: `ui.stream_max_width`(기본 480), `ui.stream_fps`(기본 15),
@@ -463,7 +463,7 @@ JPEG 품질은 republish 의 `compressed.jpeg_quality`(launch 에 60).
 #### 1) 녹화 (compressed = 경량)
 
 ```bash
-ros2 bag record -o ui_rec /arms/ui_image/compressed
+ros2 bag record -o ui_rec /arms/ui/image/compressed
 ```
 
 > mcap 으로 저장하려면 `--storage mcap` (플러그인 필요: `sudo apt install ros-humble-rosbag2-storage-mcap`).
@@ -479,42 +479,23 @@ ros2 bag play ui_rec --loop
 
 # ② compressed → raw 디코딩
 ros2 run image_transport republish compressed raw \
-  --ros-args -r in/compressed:=/arms/ui_image/compressed -r out:=/arms/ui_view
+  --ros-args -r in/compressed:=/arms/ui/image/compressed -r out:=/arms/ui_view
 
 # ③ raw 보기
 ros2 run rqt_image_view rqt_image_view /arms/ui_view
 ```
 
 > ⚠️ 라이브 스택(UI 노드)이 돌고 있으면 재생과 같은 토픽에 섞인다. 스택을 끄거나, 재생 시
-> `--remap /arms/ui_image/compressed:=/pb/ui_image/compressed` 로 토픽명을 바꿔 충돌을 피한다.
+> `--remap /arms/ui/image/compressed:=/pb/ui_image/compressed` 로 토픽명을 바꿔 충돌을 피한다.
 
-#### 3) bag 시각화 (mp4 + CSV + 그래프)
+#### 3) 비행 자동 저장 모드 (`auto_save:=true`, 실기체 / SITL)
 
-`SW/scripts/bag_visualize/bag_visualize.py` 마스터 스크립트 하나로 CSV 변환 + 오버뷰
-그래프 + mp4 영상까지 한 번에 만든다(결과는 `<bag>_viz/`).
-
-```bash
-python3 SW/scripts/bag_visualize/bag_visualize.py ui_rec
-#  → ui_rec_viz/{csv/*.csv, target_plane.png, attitude_cmd.png, ui_rec.mp4}
-```
-
-- **target_plane.png**: 화면(정규화 좌표) 상 표적 위치 — detection_raw vs KF 적용값.
-- **attitude_cmd.png**: roll/pitch/yaw 자세(수신) + 제어명령(송신) 6개 시계열.
-- 영상만 원하면 `--no-csv --no-plots`, 그래프만 원하면 `--no-video`.
-
-개별 스크립트(`bag_to_csv.py` / `plot_overview.py` / `bag_to_mp4.py`)도 따로 실행 가능.
-storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
-필요: `ffmpeg`(영상), `matplotlib`·`pandas`(그래프). 자세한 옵션은
-`SW/scripts/bag_visualize/README.md` 참고.
-
-#### 4) 비행 자동 저장 모드 (`auto_save:=true`, 실기체 / SITL)
-
-실기체 비행 중 로그(영상+검출 raw+CRSF 송·수신+상태)를 **자동으로** 녹화한다.
+실기체 비행 중 로그(영상, 검출, 정규화 텔레메트리, 제어 상태)를 **자동으로** 녹화한다.
 `arms.launch.py` 에 `auto_save:=true` 를 주면 `flight_recorder` 노드가 함께 떠서:
 
-- **시작**: 조종기 **ARM 스위치를 올릴 때**(`/arms/command` buttons[1] 0→1).
-- **종료**: **ARM 스위치를 내릴 때**(buttons[1]→0). 한 번 올림~내림 = 기록 폴더 하나.
-  - 모드(auto/manual)·상태머신·kill 과 무관하다. kill 이 걸려도 ARM 이 위면 계속 녹화.
+- **시작**: 조종기 **ARM 스위치를 올릴 때**(`operator/input.arm_switch` false→true).
+- **종료**: **ARM 스위치를 내릴 때**. 한 번 올림~내림 = 기록 폴더 하나.
+  - 모드(auto/manual)와 상태 머신에 독립적이다.
   - 녹화기가 뜰 때 이미 ARM 이 위였다면 한 번 내렸다 올려야 시작된다(상승엣지).
 - **SITL**: `arms_sitl.launch.py auto_save:=true` 도 같은 조건(가상 조종기 ARM 스위치).
   폴더명이 `<일시>_sitl` 이다. UI 화면 영상도 실기체와 똑같이 저장된다.
@@ -525,15 +506,9 @@ storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
 ros2 launch arms_bringup arms.launch.py auto_save:=true
 ```
 
-기본값은 `false`(녹화 안 함). 저장된 bag(sqlite3, `<일시>/bag`)의 영상은 위 3) 방법으로
-mp4 변환하거나 재생하면 된다(스크립트엔 `<일시>/bag` 경로를 넘긴다). 녹화 토픽은 영상 `/arms/ui_image/compressed` 외에 `/arms/detections_raw`
-(칼만 전 원시 검출 — 추후 KF 튜닝용), `/arms/detections`, `/arms/detector_status`,
-`/arms/ibvs_debug`(IBVS 유도 각 항 스냅샷 — `arms_msgs/IbvsDebug`),
-`/arms/crsf_tx`(송신 채널), `/arms/crsf_rx`(수신 텔레메트리: 배터리/링크/자세),
-`/arms/mission_state`, `/arms/command` 이며, 목록은 `flight_recorder` 의 `record_topics`
-파라미터로 조정한다. 스택을 정상 종료하면 진행 중이던 bag 도 안전하게 마감된다.
+기본값은 `false`(녹화 안 함). 저장된 bag은 `ibvs_viewer`에서 열어 영상, 3D 궤적, 텔레메트리와 제어 그래프를 함께 분석한다. 녹화 토픽은 UIㆍ원본 compressed 영상, 검출 결과, `control/*`, `control/flight_command`, `io/status`, `vehicle/*`, `mission/state`, `operator/input`이다. 실제 목록은 `flight_recorder`의 `record_topics` 파라미터와 비행 폴더 `manifest.json`에 남는다.
 
-IBVS 디버그(`/arms/ibvs_debug`)는 웹뷰어로 보면 편하다(ROS 불필요, 그래프 호버/줌 연동):
+비행 로그는 웹뷰어에서 분석한다(ROS 불필요, 그래프 호버/줌 연동):
 
 ```bash
 python3 SW/scripts/ibvs_viewer/server.py --data ~/arms_flight_logs_ibvs
@@ -545,12 +520,11 @@ python3 SW/scripts/ibvs_viewer/server.py --data ~/arms_flight_logs_ibvs
 
 ```
 시작         →  IDLE
-arm 완료     →  SEARCH   (드론 호버링, detection 대기)
-연속 인식    →  LOCK     (잠금 타이머 → arm)
-launch 버튼  →  TRACK    (PID 추적, P 게인 시간 램프)
-거리 < 5m    →  FIRE     (페이로드 발사)
-발사 완료    →  RTL      (귀환/착륙)
-착륙         →  IDLE
+ARM 요청     →  SEARCH   (검출 대기)
+연속 인식    →  LOCK     (잠금 타이머)
+LAUNCH       →  TRACK    (유도·추력 제어)
+타겟 소실/RTL 조건 → RTL
+ARM 해제     →  IDLE
 ```
 
 ### 노드 그래프 확인
@@ -569,7 +543,7 @@ ffplay -f v4l2 -framerate 30 -video_size 720x480 -i /dev/video0
 
 ### PlotJuggler 실시간 그래프 (제어 튜닝용)
 
-오차(`/arms/mission_state`)·유도 출력(`/arms/control_debug`)·발사 τ(`/arms/debug_looming`)를
+오차(`/arms/mission/state`)·유도 출력(`/arms/control/debug`)·발사 τ(`/arms/control/looming_debug`)를
 실시간 플롯한다. SITL 튜닝 시 오버슈트·발산을 눈으로 본다.
 
 설치:

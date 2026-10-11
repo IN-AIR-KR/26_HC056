@@ -100,8 +100,8 @@ param set-default CBRK_SUPPLY_CHK 894281
 # 항상 그 지점보다 크므로 채널 값이 실제로 뭘 보내든 상관없이 항상 +1.0(최댓값)으로 읽힌다.
 # → throttle이 0을 보내도 PX4는 "최대 throttle"로 인식 → arm 시 "throttle not in safe
 #   position"으로 항상 거부(직전 5초 이내 재arm이라 프리체크가 스킵된 우연한 경우만 통과).
-# sitl_bridge_node의 _crsf_to_us()가 172~1811(CRSF) → 1000~2000us로 변환하므로,
-# 그 범위와 정확히 맞춰 MIN/TRIM/MAX를 채워서 -1..1 스케일링이 실제로 의미있게 만든다.
+# sitl_bridge_node가 MAVLink RC override를 1000~2000us 값으로 보내므로, 그 범위와
+# 정확히 맞춰 MIN/TRIM/MAX를 채워서 -1..1 스케일링이 실제로 의미있게 만든다.
 param set-default RC1_MIN 1000
 param set-default RC1_TRIM 1500
 param set-default RC1_MAX 2000

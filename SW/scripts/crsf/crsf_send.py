@@ -5,14 +5,14 @@ crsf_send.py — Jetson UART → ELRS TX 모듈 CRSF 송신 테스트
 ROS 스택 없이 "UART로 CRSF 프레임이 제대로 나가는가"만 따로 검증하기 위한 스크립트.
 배선/baud/프레임 포맷을 벤치에서 확인한 뒤 실기체에 올린다.
 
-채널 맵은 arms_control_node.cpp 의 CRSF 출력과 동일:
+채널 맵은 arms_flight_io의 CRSF 출력과 동일:
   CH1 roll  CH2 pitch  CH3 throttle  CH4 yaw
-  CH5 arm   CH6 land   CH7 kill      CH8 launch/fire
+  CH5 arm   CH6 mode   CH7 RTL       CH8 unused
 
 사용:
-  python3 crsf_send.py                          # /dev/ttyTHS1, 420000, hold 모드
+  python3 crsf_send.py                          # /dev/ttyTHS1, 400000, hold 모드
   python3 crsf_send.py --mode sweep             # roll/pitch 사인파
-  python3 crsf_send.py --baud 460800 --mode arm # baud 비교 실험
+  python3 crsf_send.py --mode arm
 
 !! 안전: 기본적으로 스로틀(CH3)은 항상 CRSF_MIN 으로 강제된다.
    --allow-throttle 을 명시적으로 주지 않는 한 절대 스로틀이 올라가지 않는다.
@@ -33,8 +33,8 @@ except ImportError:
 
 # baud 탐색 후보 — 흔한 것부터.
 #   400000 : ELRS/EdgeTX 계열에서 가장 흔함
-#   420000 : CRSF 표준으로 널리 인용되는 값
-#   460800 : 현재 crsf_output.cpp 가 쓰는 값 (표준 baud 중 420000 에 가장 가까움)
+#   400000 : ARMS 실기체 CRSF 링크 기준값
+#   나머지 값: UART/모듈 문제를 분리할 때만 비교
 SWEEP_BAUDS = [400000, 420000, 416666, 460800, 115200, 921600]
 
 BANNER = """
@@ -51,7 +51,7 @@ BANNER = """
 def open_port(port: str, baud: int) -> "serial.Serial":
     """
     시리얼 포트 열기.
-    420000 같은 비표준 baud 는 pyserial 이 Linux 에서 TCSETS2 + BOTHER ioctl 로
+    400000 같은 비표준 baud 는 pyserial 이 Linux 에서 TCSETS2 + BOTHER ioctl 로
     처리한다. 드라이버가 거부하면 여기서 예외가 난다.
     """
     try:
@@ -158,7 +158,7 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--port", default="/dev/ttyTHS1", help="UART 장치 (Orin Nano 40핀 = UART1)")
-    p.add_argument("--baud", type=int, default=420000, help="ELRS CRSF 표준은 420000")
+    p.add_argument("--baud", type=int, default=400000, help="ARMS CRSF 링크 기본값")
     p.add_argument("--rate", type=float, default=100.0, help="프레임 송신 주기 [Hz]")
     p.add_argument("--mode", choices=["hold", "sweep", "arm"], default="hold")
     p.add_argument("--duration", type=float, default=0.0, help="송신 시간 [s], 0 = 무한")

@@ -2,10 +2,7 @@
 """
 crsf.py — CRSF (Crossfire) RC 프레임 인코더/디코더
 
-arms_control 의 C++ 구현과 와이어 포맷이 반드시 일치해야 테스트 의미가 있으므로,
-아래 로직은 그대로 옮긴 것이다:
-  - 프레임 빌드 / CRC / 11bit 패킹 : arms_control/src/crsf_output.cpp
-  - 디코드(CRC 검증 포함)           : arms_control/arms_control/sitl_bridge_node.py
+`arms_flight_io/crsf_io_node.py`와 같은 CRSF RC 프레임 포맷을 사용한다.
 
 프레임 구조 (RC channels packed, 총 26바이트):
   [0]     0xC8   sync / FC address
@@ -24,26 +21,26 @@ CRSF_MAX = 1811
 
 FRAME_LEN = 26  # sync + length + (type + payload + crc)
 
-# 채널 인덱스 — arms_control_node.cpp 의 CRSF 출력 맵과 동일
+# 채널 인덱스 — arms_flight_io의 Betaflight AETR/AUX 매핑과 동일
 CH_ROLL = 0
 CH_PITCH = 1
 CH_THROTTLE = 2
 CH_YAW = 3
 CH_ARM = 4
-CH_LAND = 5
-CH_KILL = 6
-CH_FIRE = 7
+CH_MODE = 5
+CH_RTL = 6
+CH_UNUSED = 7
 
 CH_NAMES = [
     "roll", "pitch", "throttle", "yaw",
-    "arm", "land", "kill", "fire",
+    "arm", "mode", "rtl", "unused",
     "ch9", "ch10", "ch11", "ch12",
     "ch13", "ch14", "ch15", "ch16",
 ]
 
 
 def crc8_dvb_s2(data: bytes) -> int:
-    """CRC8/DVB-S2 (poly 0xD5). crsf_output.cpp 의 crc8_dvb_s2 와 동일."""
+    """CRC8/DVB-S2 (poly 0xD5)."""
     crc = 0
     for byte in data:
         crc ^= byte

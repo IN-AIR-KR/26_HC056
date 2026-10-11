@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-log_detections.py — /arms/detections 토픽을 1분간 CSV로 기록
+log_detections.py — /arms/perception/detections 토픽을 1분간 CSV로 기록
 
 출력: detections_<timestamp>.csv
   columns: time_sec, x_center, y_center, confidence, class_name
@@ -32,7 +32,7 @@ class DetectionLogger(Node):
         self._rows = []
         self._done = False
 
-        self.create_subscription(DetectionArray, "/arms/detections", self._cb, 10)
+        self.create_subscription(DetectionArray, "/arms/perception/detections", self._cb, 10)
         self.create_timer(1.0, self._status)
         self.get_logger().info(f"로깅 시작 → {out_path}  ({LOG_DURATION_SEC:.0f}초)")
         self._out_path = out_path

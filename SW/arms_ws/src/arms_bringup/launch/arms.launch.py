@@ -1,7 +1,7 @@
 """
-Full real-hardware launch: arms_video + arms_command + arms_detection + arms_control + arms_ui
-- arms_command (ESP32 UART) → /arms/command → arms_control
-- arms_control → CRSF serial (crsf.port 파라미터) → ELRS TX → [RF] → ELRS RX → FC
+Full real-hardware launch: arms_video + arms_operator + arms_detection + arms_control + arms_ui
+- arms_operator (ESP32 UART) → operator/input → arms_control
+- arms_control → control/flight_command → arms_flight_io(CRSF serial) → ELRS TX → [RF] → ELRS RX → FC
 - Detection(HSV 후보 → ROI YOLO 검증)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
-                            IncludeLaunchDescription, LogInfo)
+                            IncludeLaunchDescription, LogInfo, PushRosNamespace)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -48,17 +48,20 @@ def _find_detection_compose():
 def generate_launch_description():
     control_dir = Path(get_package_share_directory("arms_control")) / "config"
     control_config = control_dir / "control_params.yaml"
-    # 실기체 CRSF 오버레이: crsf.port=/dev/ttyUSB0(USB-C CP2102), crsf.baud=115200
+    # FC I/O 포트는 launch arg로 주입한다. CRSF 링크 속도는 400000 baud 고정이다.
     hw_config = control_dir / "hw_overrides.yaml"
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
-    command_launch = (
-        Path(get_package_share_directory("arms_command")) / "launch" / "command.launch.py"
+    operator_launch = (
+        Path(get_package_share_directory("arms_operator")) / "launch" / "operator.launch.py"
     )
     detection_compose = _find_detection_compose()
 
     actions = [
+        DeclareLaunchArgument("namespace", default_value="arms",
+                              description="ROS namespace. Node code uses relative topic names."),
+        PushRosNamespace(LaunchConfiguration("namespace")),
         DeclareLaunchArgument("crsf_port", default_value="/dev/ttyUSB0",
                               description="ELRS CRSF serial port (USB-C CP2102=/dev/ttyUSB0, 40핀 UART=/dev/ttyTHS1)"),
         DeclareLaunchArgument("start_detection", default_value="true",
@@ -80,17 +83,18 @@ def generate_launch_description():
         DeclareLaunchArgument("auto_save", default_value="false",
                               description="비행 로그 녹화. true 면 ARM 스위치 ON~"
                                           "OFF 까지 영상(UI)+검출 raw+CRSF 송·수신+상태를 "
-                                          "~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3)으로 저장(kill 되어도 유지)."),
+                                          "~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3)으로 저장."),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
-    # 가 /arms/detections 를 발행하므로 호스트에선 detection 노드를 따로 띄우지 않는다.
+    # 가 perception/detections 를 발행하므로 호스트에선 detection 노드를 따로 띄우지 않는다.
     #   model:= 런치 인자를 ARMS_MODEL 로 주입 → compose 의 ${ARMS_MODEL:-...} 가 이를 읽는다.
     if detection_compose:
         actions.append(ExecuteProcess(
             cmd=["docker", "compose", "-f", detection_compose, "up", "-d"],
             output="screen",
-            additional_env={"ARMS_MODEL": LaunchConfiguration("model")},
+            additional_env={"ARMS_MODEL": LaunchConfiguration("model"),
+                            "ARMS_NAMESPACE": LaunchConfiguration("namespace")},
             condition=IfCondition(LaunchConfiguration("start_detection")),
         ))
     else:
@@ -103,11 +107,11 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(video_launch)),
         ),
-        # 실기체 조종기 입력 (ESP32 UART → /arms/command)
+        # 실기체 조종기 입력 (ESP32 UART → operator/input)
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(command_launch)),
+            PythonLaunchDescriptionSource(str(operator_launch)),
         ),
-        # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
+        # 제어는 FlightCommand만 출력한다.
         Node(
             package="arms_control",
             executable="arms_control_node",
@@ -115,9 +119,17 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 str(control_config),
-                str(hw_config),                                   # 실기체 델타 (포트/서보/게인/자동발진)
-                {"crsf.port": LaunchConfiguration("crsf_port")},  # 필요시 포트만 오버라이드
+                str(hw_config),
             ],
+        ),
+        # FC 통신의 유일한 owner: FlightCommand ↔ CRSF/ELRS telemetry.
+        Node(
+            package="arms_flight_io", executable="arms_crsf_io_node",
+            name="arms_crsf_io_node", output="screen",
+            parameters=[{
+                "port": LaunchConfiguration("crsf_port"),
+                "baud": 400000,
+            }],
         ),
         # OpenCV UI. fullscreen/debug 는 런치 인자로 제어(실기체 기본: 전체화면·메인만).
         #   ui.debug=false → hsv_debug_image 미구독 → detection 발행 부하 최소.
@@ -135,8 +147,8 @@ def generate_launch_description():
                     LaunchConfiguration("cv_debug"), value_type=bool),
             }],
         ),
-        # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image)를 image_transport republish 로
-        #   compressed(/arms/ui_image/compressed)로 만든다 → rqt/원격에서 볼 수 있다.
+        # UI 화면 스트림: arms_ui_node 가 낸 raw(ui/image)를 image_transport republish 로
+        #   compressed(ui/image/compressed)로 만든다 → rqt/원격에서 볼 수 있다.
         #   (파이썬 노드로는 compressed 정식 발행이 안 되므로 republish 가 담당. lazy: 구독 시만.)
         #   ★ out 베이스 리맵은 파생 서브토픽에 전파 안 되므로 out/compressed 를 직접 리맵한다.
         Node(
@@ -145,8 +157,8 @@ def generate_launch_description():
             name="ui_image_republish",
             arguments=["raw", "compressed"],
             remappings=[
-                ("in", "/arms/ui_image"),
-                ("out/compressed", "/arms/ui_image/compressed"),
+                ("in", "ui/image"),
+                ("out/compressed", "ui/image/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
@@ -158,14 +170,14 @@ def generate_launch_description():
             name="raw_image_republish",
             arguments=["raw", "compressed"],
             remappings=[
-                ("in", "/arms/image_raw"),
-                ("out/compressed", "/arms/image_raw/compressed"),
+                ("in", "camera/image_raw"),
+                ("out/compressed", "camera/image_raw/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 80}],
             condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). ARM 스위치 ON~OFF 동안
-        #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3) 저장(kill 무관).
+        #   영상, 검출, 정규화 텔레메트리와 상태를 ~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3) 저장.
         Node(
             package="arms_ui",
             executable="flight_recorder",

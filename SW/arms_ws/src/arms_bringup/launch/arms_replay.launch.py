@@ -21,7 +21,7 @@ from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
-                            IncludeLaunchDescription, LogInfo)
+                            IncludeLaunchDescription, LogInfo, PushRosNamespace)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -66,13 +66,13 @@ def generate_launch_description():
         Path(get_package_share_directory("arms_video")) / "launch" / "video_replay.launch.py"
     )
     # 조종기: controller:= 로 고른다.
-    #   gui(기본) = SITL 가상 조종기(tkinter) — 창에서 arm/모드/kill/launch 클릭
-    #   real      = 실기체 ESP32 조종기(UART → /arms/command)
-    command_gui_launch = (
-        Path(get_package_share_directory("arms_command")) / "launch" / "command_sitl.launch.py"
+    #   gui(기본) = SITL 가상 조종기(tkinter) — 창에서 arm/모드/RTL/launch 입력
+    #   real      = 실기체 ESP32 조종기(UART → operator/input)
+    operator_gui_launch = (
+        Path(get_package_share_directory("arms_operator")) / "launch" / "operator_sitl.launch.py"
     )
-    command_real_launch = (
-        Path(get_package_share_directory("arms_command")) / "launch" / "command.launch.py"
+    operator_real_launch = (
+        Path(get_package_share_directory("arms_operator")) / "launch" / "operator.launch.py"
     )
     detection_compose = _find_detection_compose()
 
@@ -85,8 +85,10 @@ def generate_launch_description():
     )
 
     actions = [
+        DeclareLaunchArgument("namespace", default_value="arms"),
+        PushRosNamespace(LaunchConfiguration("namespace")),
         DeclareLaunchArgument("crsf_port", default_value="/dev/ttyUSB0",
-                              description="ELRS TX serial port (CRSF output)"),
+                              description="ELRS TX CRSF serial port (400000 baud)"),
         DeclareLaunchArgument("controller", default_value="gui",
                               description="조종기 소스: gui(SITL 가상 조종기, 기본) | real(실기체 ESP32 UART)"),
         DeclareLaunchArgument("video_path", default_value=default_video,
@@ -112,13 +114,14 @@ def generate_launch_description():
     ]
 
     # 검출: arms.launch.py 와 동일하게 도커 컨테이너를 자동 기동한다(멱등). 컨테이너의
-    # arms_detection_node 가 /arms/detections 를 발행하므로 호스트에서 detection 노드를
+    # arms_detection_node 가 perception/detections 를 발행하므로 호스트에서 detection 노드를
     # 따로 띄우지 않는다(둘이 발행하면 충돌). model:= → ARMS_MODEL 로 주입.
     if detection_compose:
         actions.append(ExecuteProcess(
             cmd=["docker", "compose", "-f", detection_compose, "up", "-d"],
             output="screen",
-            additional_env={"ARMS_MODEL": LaunchConfiguration("model")},
+            additional_env={"ARMS_MODEL": LaunchConfiguration("model"),
+                            "ARMS_NAMESPACE": LaunchConfiguration("namespace")},
             condition=IfCondition(LaunchConfiguration("start_detection")),
         ))
     else:
@@ -127,7 +130,7 @@ def generate_launch_description():
             "ARMS_SW 를 SW 폴더로 export 하거나 수동으로 'docker compose up -d' 하세요.")))
 
     actions += [
-        # 영상 소스: 샘플 비디오 replay (→ /arms/image_raw)
+        # 영상 소스: 샘플 비디오 replay (→ camera/image_raw)
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(replay_launch)),
             launch_arguments={
@@ -135,20 +138,20 @@ def generate_launch_description():
                 "publish_rate": LaunchConfiguration("publish_rate"),
             }.items(),
         ),
-        # 조종기 입력 (→ /arms/command). controller:= 로 gui/real 택일.
+        # 조종기 입력 (→ operator/input). controller:= 로 gui/real 택일.
         #   gui  = SITL 가상 조종기(tkinter GUI). 기본.
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(command_gui_launch)),
+            PythonLaunchDescriptionSource(str(operator_gui_launch)),
             condition=IfCondition(PythonExpression(
                 ["'", LaunchConfiguration("controller"), "' == 'gui'"])),
         ),
-        #   real = 실기체 ESP32 조종기(UART → /arms/command).
+        #   real = 실기체 ESP32 조종기(UART → operator/input).
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(command_real_launch)),
+            PythonLaunchDescriptionSource(str(operator_real_launch)),
             condition=IfCondition(PythonExpression(
                 ["'", LaunchConfiguration("controller"), "' == 'real'"])),
         ),
-        # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
+        # 제어는 FlightCommand만 발행하고, FC I/O가 CRSF로 변환한다.
         Node(
             package="arms_control",
             executable="arms_control_node",
@@ -156,11 +159,15 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 str(control_config),
-                {"crsf.port": LaunchConfiguration("crsf_port")},
                 # 자동 track 비활성 (LOCK 이 자동으로 TRACK 안 감 → LAUNCH 버튼 눌러야 TRACK).
                 #   control_params(SITL 기준)는 true 라 여기서 실기체처럼 false 로 덮는다.
                 {"mission.sitl_auto_launch": False},
             ],
+        ),
+        Node(
+            package="arms_flight_io", executable="arms_crsf_io_node",
+            name="arms_crsf_io_node", output="screen",
+            parameters=[{"port": LaunchConfiguration("crsf_port"), "baud": 400000}],
         ),
         # OpenCV UI (replay 기본: 메인 화면 디버그 오버레이 on). cv_debug:=true 를 주면
         #   우측 HSV 진단+성능 그래프 패널도 붙는다(그때만 hsv_debug_image 구독 →
@@ -179,8 +186,8 @@ def generate_launch_description():
                     LaunchConfiguration("cv_debug"), value_type=bool),
             }],
         ),
-        # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image)를 image_transport republish 로
-        #   compressed(/arms/ui_image/compressed)로 만든다 → rqt 에서 base(/arms/ui_image)를 열고
+        # UI 화면 스트림: arms_ui_node 가 낸 raw(ui/image)를 image_transport republish 로
+        #   compressed(ui/image/compressed)로 만든다 → rqt 에서 base(ui/image)를 열고
         #   raw(노드) 또는 compressed(republish) 트랜스포트 선택. 파이썬 노드로는 compressed 정식
         #   발행이 안 되므로 republish 가 담당. lazy(구독 시만).
         Node(
@@ -189,10 +196,10 @@ def generate_launch_description():
             name="ui_image_republish",
             arguments=["raw", "compressed"],
             # ★ image_transport 는 out 베이스 리맵을 파생 서브토픽(out/compressed)에 전파하지
-            #   않는다 → 반드시 out/compressed 를 직접 리맵해야 /arms/ui_image/compressed 로 나간다.
+            #   않는다 → 반드시 out/compressed 를 직접 리맵해야 ui/image/compressed 로 나간다.
             remappings=[
-                ("in", "/arms/ui_image"),
-                ("out/compressed", "/arms/ui_image/compressed"),
+                ("in", "ui/image"),
+                ("out/compressed", "ui/image/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),

@@ -21,7 +21,7 @@ MSG_DIR = Path(__file__).resolve().parents[2] / "arms_ws" / "src" / "arms_msgs" 
 # 영상은 그래프 대상이 아니고 무거우므로 역직렬화하지 않는다(프레임 색인만 만든다).
 SKIP_TYPES = {"sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image"}
 VIDEO_TYPE = "sensor_msgs/msg/CompressedImage"
-VIDEO_TOPIC = "/arms/ui_image/compressed"   # 우선 사용할 화면 영상 토픽
+VIDEO_SUFFIX = "/ui/image/compressed"   # namespace와 무관한 기본 UI 영상 식별자
 # 평탄화에서 버릴 필드 (시각은 bag 수신시각으로 통일, MultiArray layout 은 잡음).
 SKIP_FIELDS = {"header", "layout"}
 MAX_ARRAY = 16
@@ -239,7 +239,7 @@ def load_record(record: Path) -> dict:
         t_end = max(t_end, fr[-1][0])
         videos[name] = {"topic": name, "t": [round((t - t0) / 1e9, 6) for t, _, _ in fr]}
         frame_indexes[name] = [(db, mid) for _, db, mid in fr]
-    vname = VIDEO_TOPIC if VIDEO_TOPIC in videos else next(iter(videos), None)
+    vname = next((name for name in videos if name.endswith(VIDEO_SUFFIX)), next(iter(videos), None))
     video = videos.get(vname)
     return {
         "t0_ns": t0,

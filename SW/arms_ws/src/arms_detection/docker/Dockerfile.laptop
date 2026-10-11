@@ -4,7 +4,7 @@
 # Model: YOLOv11 .pt (PyTorch)
 #
 # ★ 배포판은 호스트와 반드시 같아야 한다. 커스텀 메시지(arms_msgs)는 배포판마다
-#   타입 해시가 달라서, 배포판이 어긋나면 topic list 엔 보여도 /arms/detections 가
+#   타입 해시가 달라서, 배포판이 어긋나면 topic list 엔 보여도 perception/detections 가
 #   호스트에 도착하지 않는다. (예전 ros:jazzy 베이스는 compose 의 실행 명령이
 #   /opt/ros/humble/setup.bash 를 source 하는 것과도 어긋나 아예 뜨지 않았다.)
 #

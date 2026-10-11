@@ -1,0 +1,11 @@
+# Operator intent, normalized independently of the physical controller transport.
+std_msgs/Header header
+float32 roll
+float32 pitch
+float32 throttle
+float32 yaw
+bool arm_switch
+bool manual_mode
+bool rtl_switch
+bool launch_request
+bool input_lost

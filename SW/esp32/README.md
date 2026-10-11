@@ -5,7 +5,7 @@ ESP32-S3에서 짐벌 4축과 스위치 4개의 입력을 읽고, USB CDC를 통
 ## 주요 기능
 
 - 조종축: `Throttle`, `Roll`, `Pitch`, `Yaw`
-- 스위치: `Fire`, `Mode`, `Emergency Landing`, `Kill`
+- 스위치: `Launch`, `Mode`, `RTL`, `Arm`
 - 모든 스위치는 실제 ON/OFF 상태를 `0` 또는 `1`로 전송
 - 짐벌 입력에 1차 LPF와 중앙 데드밴드 적용
 - USB CDC 장치 `/dev/ttyACM0` 사용
@@ -48,10 +48,10 @@ true   // 출력 부호 반전
 
 | 기능 | ESP32-S3 핀 |
 |---|---:|
-| Kill | GPIO15 |
-| Emergency Landing | GPIO16 |
+| Arm | GPIO15 |
+| RTL | GPIO16 |
 | Mode | GPIO17 |
-| Fire | GPIO18 |
+| Launch | GPIO18 |
 
 각 스위치는 해당 GPIO와 GND 사이에 연결합니다.
 
@@ -139,7 +139,7 @@ Arduino Serial Monitor, Python 테스트, ROS2 노드는 `/dev/ttyACM0`을 동�
 ## 전송 패킷
 
 ```text
-CTRL,seq,throttle,roll,pitch,yaw,fire,mode,eland,kill
+CTRL,seq,throttle,roll,pitch,yaw,launch,mode,rtl,arm
 ```
 
 예시:
@@ -155,16 +155,16 @@ CTRL,1523,642,-35,120,8,1,1,0,0
 | `roll` | -1000~1000 |
 | `pitch` | -1000~1000 |
 | `yaw` | -1000~1000 |
-| `fire` | 0 또는 1 |
+| `launch` | 0 또는 1 |
 | `mode` | 0 또는 1 |
-| `eland` | 0 또는 1 |
-| `kill` | 0 또는 1 |
+| `rtl` | 0 또는 1 |
+| `arm` | 0 또는 1 |
 
 모든 스위치는 현재 물리 상태를 그대로 전송합니다.
 
 ## ROS2 실행
 
-`arms_command/config/command_params.yaml`:
+`arms_operator/config/operator_params.yaml`:
 
 ```yaml
 serial.device: /dev/ttyACM0
@@ -175,9 +175,9 @@ serial.baud: 115200
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-up-to arms_command
+colcon build --symlink-install --packages-up-to arms_operator
 source install/setup.bash
-ros2 launch arms_command command.launch.py
+ros2 launch arms_operator operator.launch.py
 ```
 
 새 터미널에서 확인합니다.
@@ -185,27 +185,20 @@ ros2 launch arms_command command.launch.py
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 topic echo /joy
+ros2 topic echo /arms/operator/input
 ```
 
 전송 주기 확인:
 
 ```bash
-ros2 topic hz /joy
+ros2 topic hz /arms/operator/input
 ```
 
-ROS2 출력 순서:
+ROS2 `OperatorInput` 의미:
 
 ```text
-axes[0] = roll
-axes[1] = pitch
-axes[2] = throttle
-axes[3] = yaw
-
-buttons[0] = kill
-buttons[1] = eland
-buttons[2] = mode
-buttons[3] = fire
+roll, pitch, throttle, yaw
+arm_switch, rtl_switch, manual_mode, launch_request
 ```
 
 ## RAW 보정 모드
@@ -219,7 +212,7 @@ static constexpr bool RAW_DEBUG_MODE = true;
 출력 형식:
 
 ```text
-RAW,roll,pitch,throttle,yaw,kill,eland,mode,fire
+RAW,roll,pitch,throttle,yaw,arm,rtl,mode,launch
 ```
 
 보정 후 반드시 `false`로 되돌립니다.

@@ -2,19 +2,17 @@
 <package format="3">
   <name>arms_control</name>
   <version>0.1.0</version>
-  <description>State machine, PID control, and MAVLink interface for A.R.M.S. (C++).</description>
+  <description>Hardware-independent state machine and guidance control for A.R.M.S. (C++).</description>
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
-  <exec_depend>rclpy</exec_depend>
   <depend>rclcpp</depend>
-  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>arms_msgs</depend>
+  <exec_depend>arms_flight_io</exec_depend>
 
   <!-- MAVSDK: install via https://mavsdk.mavlink.io or apt -->
   <!-- sudo apt install libmavsdk-dev -->

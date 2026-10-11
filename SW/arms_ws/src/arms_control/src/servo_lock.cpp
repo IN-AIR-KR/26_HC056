@@ -29,8 +29,10 @@ static bool path_exists(const std::string & path) {
 }
 
 void ServoLock::init() {
-  if (!params_.enabled) {
-    log("[ServoLock] disabled (servo.enabled=false) — 서보 제어 비활성.");
+  // 실제 PWM 디바이스가 없는 SITL/개발 PC에서는 즉시 no-op으로 끝낸다.
+  // servo.enabled는 제어 시퀀스의 on/off이며, 하드웨어 유무 판단에는 쓰지 않는다.
+  if (!path_exists(params_.chip_path)) {
+    log("[ServoLock] PWM 장치 없음 (" + params_.chip_path + ") — 서보 제어 비활성.");
     available_ = false;
     return;
   }

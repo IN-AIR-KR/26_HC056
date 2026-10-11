@@ -3,7 +3,7 @@
 
 조종기 ARM 스위치를 올리면(DOWN→UP) record_topics(UI/원본 영상 + 검출 raw/필터/진단 + IBVS 디버그
 + 제어·CRSF·GPS·배터리 + 상태/조종)를 rosbag 으로 녹화하기 시작하고, 내리면 멈추고 저장한다.
-모드(auto/manual)·상태머신·kill 과는 무관하게 ARM 스위치 하나로만 결정한다.
+모드(auto/manual)와 상태 머신에 독립적으로 ARM 스위치 하나로만 결정한다.
 저장 포맷은 sqlite3(항상 사용 가능). mcap 은 젯슨에 플러그인이 없어 쓰지 않는다.
   · 시작은 상승엣지에서만 → 녹화기가 뜰 때 이미 ARM 이 위였다면 한 번 내렸다 올려야 녹화된다.
   · 저장 위치: ~/arms_flight_logs_ibvs/<YYYYmmdd_HHMMSS>/ (비행 시작 일시). 이 폴더 안에
@@ -11,8 +11,8 @@
   · detections_raw = 칼만 적용 전 원시 검출 → 추후 KF 파라미터 오프라인 재현/튜닝용.
   · tag 파라미터를 주면 폴더명 뒤에 붙는다 (SITL: <일시>_sitl).
 
-/arms/command(Joy) 스위치: buttons[1]=arm, [2]=mode(0=auto/1=manual),
-buttons[3]=launch, [4]=rtl(GPS Rescue 요청), [5]=command UART timeout.
+operator/input(OperatorInput): arm_switch, manual_mode, launch_request, rtl_switch,
+input_lost를 포함한다. 녹화 시작·종료는 arm_switch만 사용한다.
 """
 import os
 import json
@@ -25,33 +25,34 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Joy
+from arms_msgs.msg import OperatorInput
 
 
 class FlightRecorder(Node):
     def __init__(self):
         super().__init__("flight_recorder")
-        # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
+        # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + 상태/조종.
         #   detections_raw = 칼만 적용 전 원시 측정값(추후 KF 튜닝 재현용).
         #   ibvs_debug=유도 각 항(오차/LOS각속도/z1·배리어/항별 기여/스케줄링/명령·추력) 스냅샷.
-        #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
-        #   battery=배터리 전용 토픽이다.
+        #   vehicle/*은 정규화된 기체 텔레메트리다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.
         self.declare_parameter("record_topics", [
-            "/arms/ui_image/compressed",
-            "/arms/image_raw/compressed",
-            "/arms/detections_raw",
-            "/arms/detections",
-            "/arms/detector_status",
-            "/arms/ibvs_debug",
-            "/arms/control_debug",
-            "/arms/crsf_tx",
-            "/arms/crsf_rx",
-            "/arms/attitude",
-            "/arms/battery",
-            "/arms/gps",
-            "/arms/mission_state",
-            "/arms/command",
+            "ui/image/compressed",
+            "camera/image_raw/compressed",
+            "perception/detections_raw",
+            "perception/detections",
+            "perception/status",
+            "control/ibvs_debug",
+            "control/debug",
+            "control/flight_command",
+            "io/crsf/tx",
+            "io/crsf/rx",
+            "io/status",
+            "vehicle/attitude",
+            "vehicle/battery",
+            "vehicle/gps",
+            "mission/state",
+            "operator/input",
         ])
         self.declare_parameter("save_dir", "~/arms_flight_logs_ibvs")
         # 저장 포맷. 젯슨엔 mcap 플러그인이 없어 sqlite3 로 고정(항상 사용 가능).
@@ -61,11 +62,16 @@ class FlightRecorder(Node):
         # 런치가 실제로 해석한 인자와 사용한 제어 설정의 원본 경로. 비행 시작 시
         # manifest.json 및 control_params.yaml 사본으로 남긴다.
         self.declare_parameter("manifest.control_params_path", "")
+        self.declare_parameter("manifest.use_sim_time", False)
         for name in (
                 "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save",
                 "crsf_port", "start_detection", "model", "fullscreen", "debug", "cv_debug"):
             self.declare_parameter(f"manifest.arg_{name}", "")
         self._topics = list(self.get_parameter("record_topics").value)
+        namespace = self.get_namespace().rstrip("/")
+        self._record_topics_resolved = [
+            topic if topic.startswith("/") else f"{namespace}/{topic}" for topic in self._topics
+        ]
         self._save_dir = os.path.expanduser(self.get_parameter("save_dir").value)
         os.makedirs(self._save_dir, exist_ok=True)
 
@@ -79,7 +85,7 @@ class FlightRecorder(Node):
 
         best = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                           history=HistoryPolicy.KEEP_LAST, depth=1)
-        self.create_subscription(Joy, "/arms/command", self._cb_cmd, best)
+        self.create_subscription(OperatorInput, "operator/input", self._cb_cmd, best)
         self.get_logger().info(
             "flight_recorder ready — ARM 스위치 올리면 녹화 시작, "
             f"내리면 종료. 저장: {self._save_dir}")
@@ -87,8 +93,8 @@ class FlightRecorder(Node):
     def _recording(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def _cb_cmd(self, msg: Joy):
-        arm = msg.buttons[1] if len(msg.buttons) > 1 else 0
+    def _cb_cmd(self, msg: OperatorInput):
+        arm = bool(msg.arm_switch)
         if arm and not self._arm and not self._recording():
             self._start()                      # ARM 올림 → 녹화 시작
         elif not arm and self._recording():
@@ -108,7 +114,8 @@ class FlightRecorder(Node):
         self._write_manifest()
         storage = str(self.get_parameter("storage").value).strip().lower() or "sqlite3"
         # ros2 bag record 는 -o 경로가 없어야 새로 만든다. 그룹세션으로 띄워 SIGINT 를 그룹째 보낸다.
-        cmd = ["ros2", "bag", "record", "--storage", storage, "-o", self._bag_dir, *self._topics]
+        cmd = ["ros2", "bag", "record", "--storage", storage, "-o", self._bag_dir,
+               *self._record_topics_resolved]
         try:
             self._log_fh = open(self._log_path, "wb")
             self._proc = subprocess.Popen(
@@ -164,12 +171,16 @@ class FlightRecorder(Node):
                 self.get_logger().warn(f"[REC] control_params.yaml 사본 저장 실패: {e}")
                 config_copy = None
         manifest = {
+            "topic_schema_version": 2,
+            "namespace": self.get_namespace(),
+            "use_sim_time": bool(self.get_parameter("manifest.use_sim_time").value),
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "git_commit": self._git_commit(),
             "launch_arguments": args,
             "control_params_source": config_source or None,
             "control_params_copy": config_copy,
             "record_topics": self._topics,
+            "resolved_record_topics": self._record_topics_resolved,
         }
         try:
             with open(os.path.join(self._flight_dir, "manifest.json"), "w", encoding="utf-8") as f:

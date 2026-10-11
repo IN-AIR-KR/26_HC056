@@ -6,9 +6,9 @@
 
 | 노드                  | 확인 항목                                                    | SITL | 실기체 |
 | --------------------- | ------------------------------------------------------------ | ---- | ------ |
-| `arms_video_node`     | 기동 확인, `/arms/image_raw` 발행                            | ■    | ☐      |
-| `arms_detection_node` | Docker 컨테이너 기동, `/arms/detections` 발행                | ☐    | ☐      |
-| `arms_control_node`   | 기동 확인, 전체 제어 시퀀스 작동, `/arms/mission_state` 발행 | ☐    | ☐      |
+| `arms_video_node`     | 기동 확인, `/arms/camera/image_raw` 발행                     | ■    | ☐      |
+| `arms_detection_node` | Docker 컨테이너 기동, `/arms/perception/detections` 발행                | ☐    | ☐      |
+| `arms_control_node`   | 기동 확인, 전체 제어 시퀀스 작동, `/arms/mission/state` 발행 | ☐    | ☐      |
 | `arms_ui_node`        | 기동 확인, 영상 + 박스 오버레이 표시                         | ☐    | ☐      |
 
 ### 상태 전이 확인
@@ -20,9 +20,7 @@
 | SEARCH → LOCK  | 연속 감지 >= T_lock (confidence > 0.32) | ☐    | ☐      |
 | LOCK → SEARCH  | 타겟 소실 (N 프레임 감지 없음)          | ☐    | ☐      |
 | LOCK → TRACK   | launch 버튼 입력 (GPIO)                 | ☐    | ☐      |
-| TRACK → SEARCH | 타겟 소실                               | ☐    | ☐      |
-| TRACK → FIRE   | 거리 < D_fire (초음파)                  | ☐    | ☐      |
-| FIRE → RTL     | 발사 완료                               | ☐    | ☐      |
+| TRACK → RTL    | 타겟 소실 또는 RTL 조건                  | ☐    | ☐      |
 | RTL → IDLE     | 착륙 / 임무 완료                        | ☐    | ☐      |
 
 ## SITL 개발 순서
@@ -30,11 +28,11 @@
 ```
 Phase 1: Infra
   [x] ROS workspace + package baseline 구축
-  [x] arms_video: Gazebo 카메라 영상 수신 + /arms/image_raw 발행 검증
+  [x] arms_video: Gazebo 카메라 영상 수신 + /arms/camera/image_raw 발행 검증
 
 Phase 2: Perception
   [x] Roboflow Dataset 기반으로 YOLOv11 small 모델 학습
-  [ ] arms_detection: Docker로 실행해서 /arms/detections 발행 검증
+  [ ] arms_detection: Docker로 실행해서 /arms/perception/detections 발행 검증
   [ ] arms_ui: 영상 + 바운딩박스 오버레이 표시 확인
 
 Phase 3: Control
@@ -42,7 +40,7 @@ Phase 3: Control
   [ ] PID 구현 + MAVLink 연결
   [ ] PID 튜닝
   [ ] launch 버튼 GPIO 입력 대체 (topic?)
-  [ ] search ~ fire까지의 전체 과정 테스트
+  [ ] search ~ rtl까지의 전체 과정 테스트
 ```
 
 ## 기타 메모 및 이슈
