@@ -17,8 +17,8 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - referee                 (표적 풍선/드론 비행 + 명중 판정)          [arms_sim]
   - launcher                (견착 발사기: 각도 조절·분리 발사·재장전)    [arms_sim]
   - arms_ui_node            (OpenCV 영상 오버레이)
-  - sitl_viz + rviz2        (3D 궤적/기체/표적, 기본 기동; rviz:=false 로 생략) [arms_sim]
-  - plotjuggler             (5초 뒤)
+  - sitl_viz + rviz2        (3D 궤적/기체/표적, 기본 끔; rviz:=true 로 기동) [arms_sim]
+  - plotjuggler             (기본 끔; plotjuggler:=true 면 5초 뒤 기동)
   - flight_recorder         (auto_save:=true 일 때만. ~/arms_flight_logs_ibvs/<일시>_sitl/) [arms_ui]
 
 스택 노드들은 PX4 부팅을 기다리지 않는다 — sitl_bridge 는 heartbeat 올 때까지 재접속,
@@ -140,9 +140,13 @@ def generate_launch_description():
         PushRosNamespace(LaunchConfiguration("namespace")),
         DeclareLaunchArgument("px4_dir", default_value=os.environ.get("PX4_DIR", "~/PX4-Autopilot"),
                               description="PX4-Autopilot 경로 (px4:=true 일 때)"),
-        DeclareLaunchArgument("rviz", default_value="true",
+        # rviz/PlotJuggler 는 기본 끔: 노트북(내장그래픽)에서 Gazebo·YOLO 와 같이 돌리면
+        #   카메라·검출이 끊기고 TELM 이 흔들린다. 필요할 때만 :=true 로 켠다.
+        DeclareLaunchArgument("rviz", default_value="false",
                               description="rviz 3D 시각화(기체·표적·궤적) 기동 여부. "
-                                          "기본 true. sitl_viz(진실값 발행) + rviz2 가 같이 뜬다."),
+                                          "기본 false. true 면 sitl_viz(진실값 발행) + rviz2 가 같이 뜬다."),
+        DeclareLaunchArgument("plotjuggler", default_value="false",
+                              description="PlotJuggler 기동 여부. 기본 false. true 면 5초 뒤 기동."),
         DeclareLaunchArgument("detection", default_value="host",
                               description="검출 실행 위치: host(기본, 호스트 in-process YOLO) | "
                                           "docker(검출 컨테이너). 동시에 띄우면 노드 이름이 "
@@ -281,7 +285,8 @@ def generate_launch_description():
 
     # PlotJuggler — 노드 startup 후 5초 지연해서 실행
     actions.append(TimerAction(period=5.0, actions=[
-        ExecuteProcess(cmd=pj_cmd, output="screen"),
+        ExecuteProcess(cmd=pj_cmd, output="screen",
+                       condition=IfCondition(LaunchConfiguration("plotjuggler"))),
     ]))
 
     return LaunchDescription(actions)
