@@ -610,6 +610,11 @@ class ArmsControlNode : public rclcpp::Node {
     // Control loop timer
     // ----------------------------------------------------------------
     last_tick_ = now();
+    // last_operator_input_time_ 도 now() 로 초기화해야 한다. 기본 생성자({})는
+    // now()(RCL_ROS_TIME)와 clock_type 이 다른 Time 을 만들어서, 첫 operator/input
+    // 메시지가 오기 전에 control_loop 가 한 번이라도 먼저 돌면
+    // (now_t - last_operator_input_time_) 가 "different time sources" 로 즉시 abort 한다.
+    last_operator_input_time_ = now();
     auto period = std::chrono::duration<double>(1.0 / control_rate_hz_);
     timer_ = create_wall_timer(
         std::chrono::duration_cast<std::chrono::nanoseconds>(period),
