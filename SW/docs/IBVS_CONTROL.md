@@ -20,7 +20,7 @@
 
 ```mermaid
 flowchart LR
-  A[검출 bbox 중심] -->|"① 오차 + LPF"| B[filt_err]
+  A[검출 bbox 중심] -->|"① 정규화 오차 → 카메라 tan 좌표 + LPF"| B[filt_err]
   B -->|"② alpha-beta"| C[LOS각속도 losf_dot]
   B -->|"③ tan 좌표 → z1, 배리어"| D[배리어항 + 선형항]
   C -->|"④ × los_rate_gain"| E[LOS각속도항]
@@ -59,10 +59,14 @@ e_{raw} = \frac{\text{bbox 중심}}{\text{화면 크기}} - 0.5 \quad(\pm 0.5 = 
 $$
 
 $$
-e_{filt} \leftarrow \alpha_{e}\, e_{raw} + (1-\alpha_{e})\, e_{filt}
+x_m,y_m = \operatorname{camera\_model}(e_{raw,x}, e_{raw,y})
 $$
 
-- **역할**: 검출 좌표의 프레임 간 떨림을 걸러낸다. 이 $e_{filt}$ (= 코드의 `los_x`)가 IBVS 의 입력이다.
+$$
+e_{filt} \leftarrow \alpha_{e}\, (x_m,y_m) + (1-\alpha_{e})\, e_{filt}
+$$
+
+- **역할**: bbox raw 값은 해상도 독립 전달용으로만 유지하고, control 경계에서 먼저 카메라 tan 좌표로 변환한다. 이 $e_{filt}$ (= 코드의 `los_x`)가 IBVS 의 입력이다.
 - $\alpha_e$ 가 크면 민첩하지만 떨림이 그대로, 작으면 매끈하지만 늦다.
 - **LOCK 단계부터** 미리 갱신한다(명령은 아직 안 나감). 발사(TRACK 진입) 순간 필터가 0 에서
   다시 시작하는 콜드스타트를 없애기 위함.
@@ -86,10 +90,10 @@ $$
 
 그다음 근거리 폭주 방지로 한 번 더 자른다: $\dot\lambda_{use} = \text{clamp}(\dot\lambda, \pm c_{los})$ ($c_{los}$ = `pn_los_clamp`).
 
-- 단위는 **[화면(정규화)/s]** — 0.5/s 면 "1초에 화면 반폭만큼 이동".
+- 단위는 **[tan/s]** — 카메라의 수평·수직 화각과 종횡비를 반영한 시선 좌표 변화율이다.
 - $\alpha$: 위치를 얼마나 측정 쪽으로 당길지, $\beta$: 속도를 얼마나 빨리 고칠지.
   $\beta$ 를 낮추면 리드가 매끈해지지만 늦게 반응한다.
-- ⚠ **자기회전 오염**: 이 값은 순수 픽셀 변화라서 "표적이 움직여서" 와 "내가 회전해서
+- ⚠ **자기회전 오염**: 이 값은 카메라 좌표 변화라서 "표적이 움직여서" 와 "내가 회전해서
   카메라가 같이 돌아서" 가 섞여 있다(자이로 보정 미구현). 4절 LOS각속도항 진동의 원인.
 
 📈 `losf_x/y`, `losf_x_dot/y_dot`, `los_rate_x/y`(clamp 후 = 실제 사용값)
@@ -409,18 +413,18 @@ los_rate_term_x = ibvs_los_rate_gain · los_rate_x     (los_rate_x = ldx)
 
 ### Error
 
-_정규화 ±0.5_
+`raw_err_*`는 정규화 화면 오차, `filt_err_*`는 카메라 tan 좌표다.
 
 | 필드 | 수식 |
 |---|---|
 | `raw_err_x` | bbox_cx/W − 0.5 (±0.5 = 화면 끝) |
-| `filt_err_x` | α·raw_err_x + (1−α)·filt_err_x (α = error_lpf_alpha) |
+| `filt_err_x` | α·camera_tan_x + (1−α)·filt_err_x (α = error_lpf_alpha) |
 | `raw_err_y` | bbox_cy/H − 0.5 |
-| `filt_err_y` | α·raw_err_y + (1−α)·filt_err_y |
+| `filt_err_y` | α·camera_tan_y + (1−α)·filt_err_y |
 
 ### Error angle
 
-_[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
+_[deg] · 카메라 광축 기준_
 
 | 필드 | 수식 |
 |---|---|
@@ -430,11 +434,11 @@ _[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
 
 ### LOS rate
 
-_[화면/s]_
+_[tan/s]_
 
 | 필드 | 수식 |
 |---|---|
-| `losf_x_dot` | alpha-beta 속도 추정 [화면/s], clamp ±3 |
+| `losf_x_dot` | alpha-beta 속도 추정 [tan/s], clamp ±3 |
 | `los_rate_x` | ldx = clamp(losf_x_dot, ±pn_los_clamp) |
 | `losf_y_dot` | alpha-beta 속도 추정 [화면/s], clamp ±3 |
 | `los_rate_y` | ldy = clamp(losf_y_dot, ±pn_los_clamp) |

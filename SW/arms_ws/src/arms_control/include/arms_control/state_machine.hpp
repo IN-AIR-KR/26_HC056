@@ -23,7 +23,7 @@ struct SMParams {
   double confidence_threshold{0.65};
   double lock_duration_sec{2.0};
   double detection_timeout_sec{1.0};
-  double intercept_align_tol{0.2}; // 종말 RTL 조건: 이 오차 이내로 중앙 정렬
+  double intercept_align_tol{0.2}; // 종말 RTL 조건: tan 좌표 정렬 오차 이내
   double tau_rtl_sec{0.3};         // 비전 looming: 충돌 임박 시 이 값 미만이면 RTL
   double loom_s_min{0.1};          // 종말 RTL 최소 bbox 크기(정규화). 원거리/노이즈 차단
 };
@@ -37,8 +37,9 @@ public:
   // ---------- external events ----------
   void on_detection(const std::vector<arms_msgs::msg::BoundingBox> & detections);
   void on_launch_button();
-  // 비전 looming(τ) 기반 종말 RTL 판정. τ=충돌까지 시간, bbox_size=현재 표적 크기(정규화).
-  void on_intercept(double tau_sec, double bbox_size);
+  // 비전 looming(τ) 기반 종말 RTL 판정. align_error는 control이 카메라 좌표계에서
+  // 계산한 광축 정렬 오차(tan 단위)다.
+  void on_intercept(double tau_sec, double bbox_size, double align_error);
   void on_hit();   // 심판 직격 명중(/arms/hit) → RTL
   void request_rtl();  // 조종기/페일세이프의 명시적 귀환 요청
   void arm();

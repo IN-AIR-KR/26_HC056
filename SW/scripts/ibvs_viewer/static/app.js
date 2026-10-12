@@ -2,6 +2,11 @@
 "use strict";
 
 let T, R, M, C, G, B, CMD, FC, TX, A, D, DR, DS;
+// rosbag 원본 토픽을 바꾸지 않고 브라우저에서 계산해 붙이는 스트림 발행률 시계열.
+const RATE_VIDEO = "__arms_rate_video";
+const RATE_DETECTION = "__arms_rate_detection";
+const RATE_CONTROL = "__arms_rate_control";
+const RATE_WINDOW_SEC = 1.0;
 function bindTopicNamespace(topics) {
   const marker = "/control/ibvs_debug";
   const hit = topics.find(t => t.endsWith(marker));
@@ -19,15 +24,16 @@ function bindTopicNamespace(topics) {
 // 기호: B = barrier, N = √(1+x_n²+y_n²), ldx/ldy = los_rate_x/y.
 //   IBVS roll 명령 = [ ibvs_gain·B + ibvs_center_gain ] · x_n/N  +  ibvs_los_rate_gain · ldx
 const FIELD_INFO = {
+  hz: "최근 1초 창에서 계산한 rosbag 메시지 빈도 [Hz]",
   raw_err_x: "bbox_cx/W − 0.5   (±0.5 = 화면 끝)",
   raw_err_y: "bbox_cy/H − 0.5",
-  filt_err_x: "α·raw_err_x + (1−α)·filt_err_x   (α = error_lpf_alpha)",
-  filt_err_y: "α·raw_err_y + (1−α)·filt_err_y",
-  emag: "√(filt_err_x² + filt_err_y²)",
+  filt_err_x: "LPF(camera_tan_x)   (α = error_lpf_alpha)",
+  filt_err_y: "LPF(camera_tan_y)",
+  emag: "√(filt_err_x² + filt_err_y²)   [tan]",
   losf_x: "alpha-beta 위치 추정 (입력 filt_err_x)",
   losf_y: "alpha-beta 위치 추정 (입력 filt_err_y)",
-  losf_x_dot: "alpha-beta 속도 추정 [화면/s], clamp ±3",
-  losf_y_dot: "alpha-beta 속도 추정 [화면/s], clamp ±3",
+  losf_x_dot: "alpha-beta 속도 추정 [tan/s], clamp ±3",
+  losf_y_dot: "alpha-beta 속도 추정 [tan/s], clamp ±3",
   los_rate_x: "ldx = clamp(losf_x_dot, ±pn_los_clamp)",
   los_rate_y: "ldy = clamp(losf_y_dot, ±pn_los_clamp)",
   err_dot_x: "LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp   (mode 0 전용)",
@@ -107,6 +113,12 @@ const DERIVED = {
 
 // ---------------------------------------------------------------- 일반 비행 정보 (IBVS 세부 그래프보다 위에 배치)
 const GENERAL_PANELS = [
+  { title: "Stream rates", note: "최근 1초 창의 rosbag 메시지 빈도 [Hz]",
+    series: [
+      { t: RATE_VIDEO, f: "hz", label: "video" },
+      { t: RATE_DETECTION, f: "hz", label: "detection" },
+      { t: RATE_CONTROL, f: "hz", label: "control" },
+    ] },
   { title: "Detection", note: "raw / filtered target count and selected target confidence",
     series: [
       { t: DR, f: "detections_count", label: "raw count" }, { t: D, f: "detections_count", label: "filtered count" },
@@ -176,14 +188,15 @@ const GENERAL_PANELS = [
 // series: {t: 토픽(기본 T), f: 필드(또는 DERIVED 이름), scale: "y"|"y2", dash, width, step, show,
 //          mul/add: 표시용 변환(범례에는 원값 표시)}
 const PANELS = [
-  { title: "Error", note: "정규화 ±0.5",
+  { title: "Raw image error", note: "bbox 정규화 좌표 · ±0.5 = 화면 끝",
     series: [
-      { f: "raw_err_x", dash: [4, 3], width: 1 }, { f: "filt_err_x" },
-      { f: "raw_err_y", dash: [4, 3], width: 1 }, { f: "filt_err_y" },
+      { f: "raw_err_x" }, { f: "raw_err_y" },
     ] },
-  { title: "Error angle", note: "[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)",
+  { title: "Camera LOS", note: "tan 좌표 · 검출 직후 카메라 모델로 변환한 뒤 LPF",
+    series: [{ f: "filt_err_x" }, { f: "filt_err_y" }] },
+  { title: "Error angle", note: "[deg] · 카메라 광축 기준",
     series: [{ f: "err_angle_x" }, { f: "err_angle_y" }, { f: "theta_deg", width: 2 }] },
-  { title: "LOS rate", note: "[화면/s]",
+  { title: "LOS rate", note: "[tan/s]",
     series: [
       { f: "losf_x_dot" }, { f: "los_rate_x", dash: [4, 3] },
       { f: "losf_y_dot" }, { f: "los_rate_y", dash: [4, 3] },
@@ -399,6 +412,7 @@ async function openRecord(id) {
   try { bindTopicNamespace(topics); } catch (e) {
     $("errors").innerHTML = `<div></div>`; $("errors").firstChild.textContent = e.message; return;
   }
+  buildStreamRateTopics();
   $("rec-meta").textContent =
     `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · ibvs_debug ${rec.topics[T]?.t.length ?? 0}개`;
   $("errors").innerHTML = "";
@@ -421,6 +435,40 @@ async function openRecord(id) {
   loadBalloon();
   resetVideo();
   updateScene(0);
+}
+
+function rollingRate(times, windowSec = RATE_WINDOW_SEC) {
+  const rates = new Array(times.length).fill(null);
+  let first = 0;
+  for (let i = 0; i < times.length; i++) {
+    while (first < i && times[first] < times[i] - windowSec) first++;
+    const span = times[i] - times[first];
+    if (i > first && span > 1e-6) rates[i] = (i - first) / span;
+  }
+  return rates;
+}
+
+function addStreamRateTopic(name, source) {
+  const times = source?.t;
+  if (!Array.isArray(times) || !times.length) return;
+  rec.topics[name] = {
+    type: "viewer/StreamRate",
+    t: times,
+    fields: { hz: rollingRate(times) },
+    strings: {},
+  };
+}
+
+function buildStreamRateTopics() {
+  // auto_save가 남긴 원본 compressed 영상이 있으면 그것을 우선한다. 구형 bag 등
+  // 원본이 없을 때만 UI 합성 영상을 사용한다.
+  const rawVideo = Object.keys(rec.videos || {}).find((name) =>
+    name.endsWith("/camera/image_raw/compressed"));
+  const video = (rawVideo && rec.videos[rawVideo]) || rec.video;
+  addStreamRateTopic(RATE_VIDEO, video);
+  addStreamRateTopic(RATE_DETECTION, rec.topics[D]);
+  // final flight_command가 제어 루프가 실제로 낸 명령의 빈도다.
+  addStreamRateTopic(RATE_CONTROL, rec.topics[FC]);
 }
 
 function buildStateSegs() {

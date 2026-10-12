@@ -94,7 +94,7 @@ void StateMachine::on_launch_button()
   }
 }
 
-void StateMachine::on_intercept(double tau_sec, double bbox_size)
+void StateMachine::on_intercept(double tau_sec, double bbox_size, double align_error)
 {
   if (state_ != State::TRACK) return;
   // ① 최소 크기 게이트: 표적이 화면에서 충분히 커야(=가까워야) 종말 처리. 원거리/노이즈 배제.
@@ -102,8 +102,7 @@ void StateMachine::on_intercept(double tau_sec, double bbox_size)
   // ② τ 유효성: 표적이 커지는(닫히는) 중일 때만 τ>0.
   if (!(tau_sec > 0.0)) return;
   // ③ 곧 충돌(τ 작음) + 정면 정렬이면 추가 payload 단계 없이 바로 RTL.
-  double emag = std::hypot(error_x_, error_y_);
-  if (tau_sec < params_.tau_rtl_sec && emag < params_.intercept_align_tol) {
+  if (tau_sec < params_.tau_rtl_sec && align_error < params_.intercept_align_tol) {
     transition(State::RTL);
   }
 }

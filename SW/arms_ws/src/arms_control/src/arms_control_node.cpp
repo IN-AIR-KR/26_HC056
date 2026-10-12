@@ -36,7 +36,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.detection_confidence_threshold", 0.32);
     declare_parameter("mission.lock_duration_sec", 1.0);
     declare_parameter("mission.detection_timeout_sec", 1.0);
-    declare_parameter("mission.intercept_align_tol", 0.2);  // 종말 RTL 정렬 허용오차
+    declare_parameter("mission.intercept_align_tol", 0.2);  // 종말 RTL 정렬 허용오차 [tan]
     // 비전 looming(τ) 기반 종말 RTL — bbox 팽창률로 충돌 임박을 판정한다.
     declare_parameter("mission.tau_rtl_sec", 0.3);       // 충돌까지 시간(τ) 임계 [s]
     declare_parameter("mission.loom_s_min", 0.1);        // 종말 RTL 최소 bbox 크기(정규화)
@@ -292,11 +292,11 @@ class ArmsControlNode : public rclcpp::Node {
     lead_gain_ = get_parameter("control.lead_gain").as_double();
     roll_sign_ = get_parameter("control.roll_sign").as_double();
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
-    mode0_aim_above_offset_ = std::clamp(
+    mode0_aim_above_offset_raw_ = std::clamp(
         get_parameter("control.mode0_aim_above_offset").as_double(), -0.5, 0.5);
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
     control_rate_hz_ = get_parameter("control.control_rate_hz").as_double();
-    deadzone_ = get_parameter("control.deadzone").as_double();
+    deadzone_raw_ = get_parameter("control.deadzone").as_double();
     deriv_lpf_alpha_ = get_parameter("control.deriv_lpf_alpha").as_double();
     pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
     pid_pitch_->set_deriv_alpha(deriv_lpf_alpha_);
@@ -371,12 +371,16 @@ class ArmsControlNode : public rclcpp::Node {
               track_throttle_ = p.as_double();
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
-            else if (n == "control.mode0_aim_above_offset")
-              mode0_aim_above_offset_ = std::clamp(p.as_double(), -0.5, 0.5);
+            else if (n == "control.mode0_aim_above_offset") {
+              mode0_aim_above_offset_raw_ = std::clamp(p.as_double(), -0.5, 0.5);
+              update_camera_coordinate_scales();
+            }
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
-            else if (n == "control.deadzone")
-              deadzone_ = p.as_double();
+            else if (n == "control.deadzone") {
+              deadzone_raw_ = p.as_double();
+              update_camera_coordinate_scales();
+            }
             else if (n == "control.max_rate_dps")
               max_rate_dps_ = p.as_double();
             else if (n == "control.hover_throttle")
@@ -659,10 +663,6 @@ class ArmsControlNode : public rclcpp::Node {
                    ? (loom_s_ema_ / loom_rate_ema_)
                    : std::numeric_limits<double>::infinity();
     tau_sec_ = tau;   // control_loop() 의 추력 스케줄링이 재사용
-    if (looming_rtl_enabled_) {
-      sm_->on_intercept(tau, loom_s_ema_);
-    }
-
     geometry_msgs::msg::Vector3 lm;
     lm.x = std::isfinite(tau) ? std::min(tau, 9.99) : 9.99;  // 무한대(미접근)는 9.99로 표시
     lm.y = loom_s_ema_;
@@ -679,6 +679,7 @@ class ArmsControlNode : public rclcpp::Node {
     const double t = std::tan(std::clamp(half, 1e-3, 1.5533));  // <89°로 제한(tan 발산 방지)
     ibvs_kx_ = 2.0 * t;
     ibvs_ky_ = 2.0 * t * ibvs_aspect_;
+    update_camera_coordinate_scales();
     double cxn = 0.0, cyn = 0.0;
     error_to_tan(0.5, 0.5, cxn, cyn);   // 화면 모서리
     RCLCPP_INFO(get_logger(),
@@ -687,6 +688,18 @@ class ArmsControlNode : public rclcpp::Node {
                 cam_calibrated_ ? "[캘리 사용 — hfov/aspect 무시]" : "[hfov 근사]",
                 ibvs_hfov_deg_, ibvs_aspect_, ibvs_kx_, ibvs_ky_,
                 1.0 - 1.0 / std::sqrt(1.0 + cxn * cxn + cyn * cyn), ibvs_kb_);
+  }
+
+  /* YAML의 기존 정규화 화면 단위 설정값을 제어 내부의 tan 좌표계로 바꾼다.
+     설정 파일의 사용자 인터페이스는 그대로 유지하되, 이후 LPF·deadzone·미분·PN은
+     모두 카메라 기하가 반영된 좌표에서만 동작하게 한다. */
+  void update_camera_coordinate_scales() {
+    double unused = 0.0;
+    error_to_tan(0.0, mode0_aim_above_offset_raw_, unused, mode0_y_reference_);
+    error_to_tan(deadzone_raw_, 0.0, deadzone_x_, unused);
+    error_to_tan(0.0, deadzone_raw_, unused, deadzone_y_);
+    deadzone_x_ = std::abs(deadzone_x_);
+    deadzone_y_ = std::abs(deadzone_y_);
   }
 
   /* 카메라 캘리 파라미터 로드 + 검증. 값이 이상하면 hfov 근사로 되돌린다
@@ -786,7 +799,6 @@ class ArmsControlNode : public rclcpp::Node {
   }
 
   // ----------------------------------------------------------------
-  // 30 Hz control loop
   // ----------------------------------------------------------------
   void control_loop() {
 
@@ -819,27 +831,39 @@ class ArmsControlNode : public rclcpp::Node {
     // 실제 회전/추력 명령은 TRACK에서만 나가지만(아래 안쪽 if),
     // TRACK 진입 순간 filt_err_x_/y_ 등이 0부터 다시 시작하는 콜드스타트를 없애기 위함.
     if (state == State::LOCK || state == State::TRACK) {
-      double raw_ex = sm_->current_error_x();
-      double raw_ey = sm_->current_error_y();
+      // Detection/StateMachine은 해상도 독립 bbox 정규화 좌표를 유지한다. 제어
+      // 경계에서만 카메라 모델(tan 좌표)로 변환한다. 이 뒤의 LPF·deadzone·미분·
+      // alpha-beta·PN/IBVS는 모두 같은 물리 좌표계에서 돈다.
+      const double raw_ex = sm_->current_error_x();
+      const double raw_ey = sm_->current_error_y();
+      double measured_x = 0.0, measured_y = 0.0;
+      error_to_tan(raw_ex, raw_ey, measured_x, measured_y);
       filt_err_x_ =
-          error_lpf_alpha_ * raw_ex + (1.0 - error_lpf_alpha_) * filt_err_x_;
+          error_lpf_alpha_ * measured_x + (1.0 - error_lpf_alpha_) * filt_err_x_;
       filt_err_y_ =
-          error_lpf_alpha_ * raw_ey + (1.0 - error_lpf_alpha_) * filt_err_y_;
+          error_lpf_alpha_ * measured_y + (1.0 - error_lpf_alpha_) * filt_err_y_;
 
-      // ---- LOS = 픽셀 오차 ----
+      // ---- LOS = 카메라 tan 좌표 ----
       //   (예전엔 실제 자세로 카메라-기울기 성분을 보정했으나, acro 제어 전환으로 attitude
       //    의존을 제거함. FC 가 ACRO 로 각속도를 직접 처리하므로 젯슨 자세 루프 불필요.)
       double los_x = filt_err_x_;
       double los_y = filt_err_y_;
 
-      // ---- 중앙 데드존 (보정된 LOS 기준) ----
-      double ex = apply_deadzone(los_x, deadzone_);
+      // 종말 RTL의 정렬 판정도 raw 화면 비율이 아니라 현재 제어와 같은 카메라
+      // 좌표계에서 수행한다. 전이는 이 틱의 TRACK 명령 생성 전에 반영한다.
+      if (looming_rtl_enabled_ && state == State::TRACK) {
+        sm_->on_intercept(tau_sec_, loom_s_ema_, std::hypot(los_x, los_y));
+        state = sm_->state();
+      }
+
+      // ---- 중앙 데드존 (카메라 좌표 LOS 기준) ----
+      double ex = apply_deadzone(los_x, deadzone_x_);
       // Mode 0에서 양의 offset은 풍선이 화면 중심보다 아래(raw_err_y>0)에
       // 머물도록 만든다. 즉 카메라 중심/추력축은 풍선보다 화면 위를 조준한다.
       // 상수항은 미분 전에 넣지 않아 err_dot/PN/IBVS 추정을 오염시키지 않는다.
       const double mode0_y_reference =
-          guidance_mode_ == 0 ? mode0_aim_above_offset_ : 0.0;
-      double ey = apply_deadzone(los_y - mode0_y_reference, deadzone_);
+          guidance_mode_ == 0 ? mode0_y_reference_ : 0.0;
+      double ey = apply_deadzone(los_y - mode0_y_reference, deadzone_y_);
       if (dt > 1e-6) {
         // 표적 시선각속도(LOS rate) 추정 = 예측조준의 핵심 신호 (보정 LOS 의 미분).
         const double DOT_A = err_dot_alpha_;
@@ -906,10 +930,10 @@ class ArmsControlNode : public rclcpp::Node {
         //   목표: 추력축을 시선에 정렬 = "표적을 겨누면 곧 표적으로 가속한다".
         //   자세/거리/속도 없이 픽셀과 화각만으로 계산된다 (자세 R_b^e 가 상쇄됨).
 
-        // ① 픽셀오차 → tan 단위 정규화 이미지좌표. error=±0.5 가 화면 가장자리.
-        //    실기체는 캘리(fx,fy,cx,cy,왜곡)로, SITL 은 hfov 근사로 환산한다.
-        double x_n = 0.0, y_n = 0.0;
-        error_to_tan(los_x, los_y, x_n, y_n);
+        // ① LOS는 이미 카메라 모델로 변환한 tan 단위 이미지좌표다. 실기체는
+        //    캘리(fx,fy,cx,cy,왜곡), SITL은 hfov/aspect 근사로 제어 경계에서 환산했다.
+        const double x_n = los_x;
+        const double y_n = los_y;
         const double Nn  = std::sqrt(1.0 + x_n * x_n + y_n * y_n);
 
         // ② 공선 오차 z1 = 1 - cos(theta). theta = 광축에서 벗어난 각도.
@@ -1346,15 +1370,20 @@ class ArmsControlNode : public rclcpp::Node {
   double lead_gain_{0.0};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
-  double mode0_aim_above_offset_{0.03};  // 정규화 영상 높이, 양수=표적보다 화면 위 조준
+  // YAML 입력은 기존 호환을 위해 정규화 화면 단위로 받고, 제어에는 tan 단위만 쓴다.
+  double mode0_aim_above_offset_raw_{0.03};
+  double mode0_y_reference_{0.0};
   double error_lpf_alpha_{0.25};
+  // 아래 필터/미분/추정기의 좌표 단위는 모두 카메라 tan 좌표다.
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
   double prev_err_x_{0.0};
   double prev_err_y_{0.0};
   double err_dot_x_{0.0};
   double err_dot_y_{0.0};
-  double deadzone_{0.04};
+  double deadzone_raw_{0.04};
+  double deadzone_x_{0.0};
+  double deadzone_y_{0.0};
   double deriv_lpf_alpha_{0.25};
 
   // 비전 looming(τ) 상태 — bbox 크기 EMA 와 팽창률 EMA 로 충돌까지 시간 추정
