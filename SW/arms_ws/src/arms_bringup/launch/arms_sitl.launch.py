@@ -152,12 +152,12 @@ def generate_launch_description():
         #   그대로 새어 들어간다 — 여기서 model 을 선언하면 PX4 가 가중치 경로를
         #   PX4_SIM_MODEL 로 받아 8ms 만에 exit 255 로 죽는다(Gazebo 도 안 뜬다).
         DeclareLaunchArgument(
-            "det_model", default_value="/models/balloon_nano_v9.pt",
+            "det_model", default_value="/models/balloon_nano_v8.pt",
             description="YOLO 가중치. 다른 런치의 model:= 과 같은 컨테이너 경로(/models/x) "
                         "표기이며 host 모드에선 docker/models/x 로 자동 치환된다. "
                         "호스트 절대경로를 직접 줘도 된다."),
 
-        DeclareLaunchArgument("auto_save", default_value="false",
+        DeclareLaunchArgument("auto_save", default_value="true",
                               description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "
                                           "~/arms_flight_logs_ibvs/<일시>_sitl/ "
                                           "에 bag(sqlite3) 저장(UI 화면 영상 포함)."),

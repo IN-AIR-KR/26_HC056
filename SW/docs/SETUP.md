@@ -93,7 +93,7 @@ detection 이 로드할 가중치는 `model:=` 로 고릅니다. 경로는 **컨
 마운트되므로 파일명만 `/models/` 뒤에 붙이면 됩니다(호스트 절대경로 아님).
 
 ```bash
-# 기본(balloon_nano_v9.engine) — 그냥 실행
+# 기본 모델 — 그냥 실행
 ros2 launch arms_bringup arms.launch.py
 
 # 다른 모델 지정 (아래 ⚠️ — 컨테이너가 이미 떠 있으면 이것만으론 안 바뀝니다)
@@ -112,7 +112,7 @@ ros2 launch arms_bringup arms.launch.py model:=/models/drone_small.engine
 >
 > 그 다음(또는 컨테이너가 아직 안 떠 있을 때)만 런치의 `model:=` 이 그대로 적용됩니다.
 
-- **기본값은 `/models/balloon_nano_v9.engine`** (`arms.launch.py` / `arms_replay.launch.py` 공통).
+- 기본 모델은 각 launch의 `model` 기본값을 따릅니다.
 - Jetson 은 **`.engine`(TensorRT)** 만 로드합니다. `.pt` 는 먼저 변환하세요:
   `python3 SW/yolo/export_trt.py`(모델 지정: `ARMS_PT=/models/<파일>.pt`). 변환된 `.engine`
   은 `.../docker/models/` 에 생기고 컨테이너 `/models/` 에서 바로 보입니다.
@@ -144,7 +144,7 @@ ros2 launch arms_bringup arms_replay.launch.py controller:=real   # 실기체 ES
 ```
 
 ```bash
-# 기본 샘플(sample1.mov) + 기본 모델(balloon_nano_v9.engine)
+# 기본 샘플(sample1.mov) + 기본 모델
 ros2 launch arms_bringup arms_replay.launch.py
 
 # 다른 영상 지정 (절대경로 권장)
@@ -155,7 +155,7 @@ ros2 launch arms_bringup arms_replay.launch.py \
 ros2 launch arms_bringup arms_replay.launch.py publish_rate:=15.0
 
 # 다른 가중치 사용 / detection 컨테이너 끄기
-ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon_nano_v7.engine
+ros2 launch arms_bringup arms_replay.launch.py model:=/models/<파일>.engine
 ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 ```
 
@@ -163,7 +163,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | ----------------- | --------------------------------- | ----------------------------------------- |
 | `video_path`      | `SW/sample_viedo/sample1.mov`     | 재생할 영상 파일 (절대경로 권장)          |
 | `publish_rate`    | `30.0`                            | `/arms/camera/image_raw` 발행 fps                |
-| `model`           | `/models/balloon_nano_v9.engine`     | detection 컨테이너가 로드할 가중치 (컨테이너 경로 `/models/…`) |
+| `model`           | launch 기본값                         | detection 컨테이너가 로드할 가중치 (컨테이너 경로 `/models/…`) |
 | `start_detection` | `true`                            | detection 도커 컨테이너 자동 기동 여부    |
 | `controller`      | `gui`                             | 조종기 소스: `gui`(SITL 가상 조종기) / `real`(실기체 ESP32) |
 | `crsf_port`       | `/dev/ttyUSB0`                    | ELRS TX 시리얼 포트 (제어 출력용)         |
@@ -407,8 +407,8 @@ ros2 launch arms_bringup arms_sitl.launch.py detection:=docker
   (`model:=` 에 가중치 경로를 주면 PX4 가 그걸 `PX4_SIM_MODEL` 로 받아 즉시 죽고 Gazebo 도
   안 뜹니다.)
 - `det_model:=` 은 다른 런치의 `model:=` 과 같은 **컨테이너 내부 경로**(`/models/<파일>`)
-  표기입니다. `host` 모드에선 호스트의 `docker/models/<파일>` 로 자동 치환됩니다. 기본값
-  `/models/balloon_nano_v9.pt` (랩탑/호스트는 PyTorch 라 `.pt`, 젯슨은 `.engine`).
+  표기입니다. `host` 모드에선 호스트의 `docker/models/<파일>` 로 자동 치환됩니다.
+  SITL 기본 모델은 PyTorch `.pt` 형식입니다.
 - **가중치는 git-lfs 로 관리됩니다.** `git lfs install && git lfs pull` 을 하지 않으면 파일이
   200바이트짜리 포인터 텍스트라 로드에 실패합니다 — 런치가 기동 전에 미리 경고합니다.
 - **YOLO 없이는 검출이 아예 안 나옵니다.** HSV 는 후보 제안일 뿐 발행 권한이 없어

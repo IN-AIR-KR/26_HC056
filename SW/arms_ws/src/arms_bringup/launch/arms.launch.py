@@ -5,8 +5,8 @@ Full real-hardware launch: arms_video + arms_operator + arms_detection + arms_co
 - Detection(HSV 후보 → ROI YOLO 검증)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
-  로드할 가중치는 model:= 로 고른다 (기본 balloon_nano_v9.engine):
-    ros2 launch arms_bringup arms.launch.py                                     # balloon nano v9(기본)
+  로드할 가중치는 model:= 로 고른다:
+    ros2 launch arms_bringup arms.launch.py                                     # 기본 풍선 모델
     ros2 launch arms_bringup arms.launch.py model:=/models/drone_small.engine   # 드론 추적
 """
 
@@ -67,10 +67,9 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/balloon_nano_v9.engine",
+            "model", default_value="/models/balloon_nano_v8.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/balloon_nano_v9.engine(nano FP16 TRT), "
-                        "드론추적=/models/drone_small.engine"),
+                        "필요하면 model:=/models/<파일>.engine 으로 변경"),
         # UI 표시 옵션 (실기체 기본: 전체화면·메인화면만).
         DeclareLaunchArgument("fullscreen", default_value="true",
                               description="UI 전체화면 여부 (true/false)"),
@@ -80,7 +79,7 @@ def generate_launch_description():
         DeclareLaunchArgument("cv_debug", default_value="false",
                               description="검출 진단 패널(HSV 미리보기+성능 그래프). "
                                           "true 면 hsv_debug_image 를 구독 → 검출 발행률↓."),
-        DeclareLaunchArgument("auto_save", default_value="false",
+        DeclareLaunchArgument("auto_save", default_value="true",
                               description="비행 로그 녹화. true 면 ARM 스위치 ON~"
                                           "OFF 까지 영상(UI)+검출 raw+CRSF 송·수신+상태를 "
                                           "~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3)으로 저장."),
