@@ -23,8 +23,8 @@ from rclpy.node import Node
 from arms_msgs.msg import MissionState
 from std_srvs.srv import Trigger
 
-CTRL_NODE    = "/arms_control_node"
-REFEREE_NODE = "/balloon_referee"
+CTRL_NODE    = "/arms/arms_control_node"
+REFEREE_NODE = "/arms/balloon_referee"
 
 WORLD = "arms_sitl"
 DRONE = "arms_drone_0"
@@ -321,6 +321,40 @@ class PanelGUI:
         self.pn_center.bind("<ButtonRelease-1>",
                             lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
 
+        self.ibvs_gain = tk.Scale(g_guid, from_=0.0, to=300.0, resolution=5.0, orient="horizontal",
+                                  length=180, bg="#1e1e1e", fg="white",
+                                  label="IBVS 배리어항 세기 (ibvs_gain, IBVS 일때)",
+                                  highlightthickness=0, troughcolor="#444")
+        self.ibvs_gain.set(50.0)
+        self.ibvs_gain.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.ibvs_gain",
+                    lambda v: self.ibvs_gain.set(float(v)))
+        self.ibvs_gain.bind("<ButtonRelease-1>",
+                            lambda e: ros_param_set("control.ibvs_gain", float(self.ibvs_gain.get())))
+
+        self.ibvs_center = tk.Scale(g_guid, from_=0.0, to=150.0, resolution=1.0, orient="horizontal",
+                                    length=180, bg="#1e1e1e", fg="white",
+                                    label="IBVS 중앙유지 (ibvs_center_gain, IBVS 일때)",
+                                    highlightthickness=0, troughcolor="#444")
+        self.ibvs_center.set(35.0)
+        self.ibvs_center.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.ibvs_center_gain",
+                    lambda v: self.ibvs_center.set(float(v)))
+        self.ibvs_center.bind("<ButtonRelease-1>",
+                              lambda e: ros_param_set("control.ibvs_center_gain", float(self.ibvs_center.get())))
+
+        self.ibvs_los_rate = tk.Scale(g_guid, from_=0.0, to=200.0, resolution=1.0, orient="horizontal",
+                                      length=180, bg="#1e1e1e", fg="white",
+                                      label="IBVS 리드항 (ibvs_los_rate_gain, IBVS 일때)",
+                                      highlightthickness=0, troughcolor="#444")
+        self.ibvs_los_rate.set(10.0)
+        self.ibvs_los_rate.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.ibvs_los_rate_gain",
+                    lambda v: self.ibvs_los_rate.set(float(v)))
+        self.ibvs_los_rate.bind(
+            "<ButtonRelease-1>",
+            lambda e: ros_param_set("control.ibvs_los_rate_gain", float(self.ibvs_los_rate.get())))
+
         # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수
         # 있는 노브였다), 발사 τ 는 control_params.yaml 에서 잡는다.
@@ -393,22 +427,26 @@ class PanelGUI:
             self.target_btn.config(text="종류: 풍선", bg="#8d6e63")
             ros_param_set_node(REFEREE_NODE, "target", "balloon")
 
-    # ---- 유도 방식 전환 (기본 추적 ↔ PN) ----
+    # ---- 유도 방식 전환 (기본 추적 → PN → IBVS → ...) ----
+    _GUID_LABELS = {
+        0: ("방식: 기본 추적",      "#37474f"),
+        1: ("방식: PN(비례항법)",   "#6a1b9a"),
+        2: ("방식: IBVS(공선유도)", "#00695c"),
+    }
+
+    def _apply_guid_label(self):
+        text, color = self._GUID_LABELS.get(self._guidance_mode, self._GUID_LABELS[0])
+        self.guid_btn.config(text=text, bg=color)
+
     def _set_guidance(self, mode):
         """버튼 표시만 갱신 (노드로 쓰지 않는다 — 읽어온 값 반영용)."""
-        self._guidance_mode = 1 if mode == 1 else 0
-        if self._guidance_mode == 1:
-            self.guid_btn.config(text="방식: PN(비례항법)", bg="#6a1b9a")
-        else:
-            self.guid_btn.config(text="방식: 기본 추적", bg="#37474f")
+        self._guidance_mode = mode if mode in self._GUID_LABELS else 0
+        self._apply_guid_label()
 
     def toggle_guidance(self):
-        self._guidance_mode = 1 if self._guidance_mode == 0 else 0
+        self._guidance_mode = (self._guidance_mode + 1) % 3
         ros_param_set("control.guidance_mode", self._guidance_mode)
-        if self._guidance_mode == 1:
-            self.guid_btn.config(text="방식: PN(비례항법)", bg="#6a1b9a")
-        else:
-            self.guid_btn.config(text="방식: 기본 추적", bg="#37474f")
+        self._apply_guid_label()
 
     def ball_start(self):
         # enabled=true → referee 가 정지했던 자리(t)에서 재개
