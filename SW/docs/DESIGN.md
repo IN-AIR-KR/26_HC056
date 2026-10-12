@@ -331,7 +331,7 @@ stateDiagram-v2
     LOCK --> SEARCH : 타겟 소실 detection_timeout_sec
 
     LOCK --> TRACK : joy buttons[3] launch<br/>(또는 sitl_auto_launch 타이머)
-    TRACK --> RTL : 타겟 소실 detection_timeout_sec
+    TRACK --> RTL : 타겟 소실 track_detection_timeout_sec
     TRACK --> RTL : 선택: looming τ < tau_rtl_sec + 정렬<br/>(looming_rtl_enabled)
     TRACK --> RTL : SITL hit 이벤트 (hit_rtl_via_referee)
 
@@ -345,6 +345,7 @@ stateDiagram-v2
 mission:
   detection_confidence_threshold: 0.32
   detection_timeout_sec: 1.0
+  track_detection_timeout_sec: 2.0
   lock_duration_sec: 0.3
   tau_rtl_sec: 0.3 # 비전 looming: 충돌까지 시간(τ) 임계 [s] → RTL
   intercept_align_tol: 0.2 # RTL 전이 전 정렬 허용오차

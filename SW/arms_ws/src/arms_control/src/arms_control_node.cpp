@@ -36,6 +36,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.detection_confidence_threshold", 0.32);
     declare_parameter("mission.lock_duration_sec", 1.0);
     declare_parameter("mission.detection_timeout_sec", 1.0);
+    declare_parameter("mission.track_detection_timeout_sec", 2.0);
     declare_parameter("mission.intercept_align_tol", 0.2);  // 종말 RTL 정렬 허용오차 [tan]
     // 비전 looming(τ) 기반 종말 RTL — bbox 팽창률로 충돌 임박을 판정한다.
     declare_parameter("mission.tau_rtl_sec", 0.3);       // 충돌까지 시간(τ) 임계 [s]
@@ -245,6 +246,8 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.lock_duration_sec").as_double();
     sm_params.detection_timeout_sec =
         get_parameter("mission.detection_timeout_sec").as_double();
+    sm_params.track_detection_timeout_sec =
+        get_parameter("mission.track_detection_timeout_sec").as_double();
     sm_params.intercept_align_tol =
         get_parameter("mission.intercept_align_tol").as_double();
     sm_params.tau_rtl_sec =
@@ -806,6 +809,7 @@ class ArmsControlNode : public rclcpp::Node {
     double dt = (now_t - last_tick_).seconds();
     last_tick_ = now_t;
 
+    sm_->tick();
     State state = sm_->state();
 
     // 유도 출력 = 각속도 명령[deg/s]. 각도가 아니다 (ACRO 고정, 자세 피드백 없음).

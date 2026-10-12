@@ -21,6 +21,9 @@
       # 오검출은 아래 1초 연속 LOCK 판정과 detection 노드의 CV 시간 게이팅으로 억제한다.
       detection_confidence_threshold: 0.32
       detection_timeout_sec: 1.0
+      # TRACK 중에는 마지막 유효 검출 뒤 이 시간까지 오차를 hold한 뒤 RTL.
+      # detection 토픽 자체가 끊긴 경우도 control loop가 같은 기준으로 처리한다.
+      track_detection_timeout_sec: 2.0
       lock_duration_sec: 1.0
 
       # ── TRACK → RTL 판정 (비전 looming, τ) ────────────────────────────

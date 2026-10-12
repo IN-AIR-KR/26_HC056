@@ -32,22 +32,10 @@ void StateMachine::on_detection(
   const auto * best = best_detection(detections);
 
   if (!best || best->confidence < static_cast<float>(params_.confidence_threshold)) {
-    auto now = Clock::now();
-    if (last_detection_valid_) {
-      double elapsed =
-        std::chrono::duration<double>(now - last_detection_time_).count();
-      if (elapsed < params_.detection_timeout_sec) {
-        // 홀드: error_x_/error_y_ 유지, I 동결 플래그만 세움
-        detection_held_ = true;
-        return;
-      }
-    }
-    // 타임아웃 또는 한 번도 검출 없음 → 실패 처리
-    detection_held_ = false;
-    target_locked_ = false;
-    error_x_ = 0.0;
-    error_y_ = 0.0;
-    on_detection_timeout();
+    // 홀드: 마지막 유효 오차를 유지하고 PID I만 동결한다. timeout 전이 자체는
+    // control loop의 tick()이 수행한다. 따라서 detection 토픽이 통째로 멈춰도
+    // 동일하게 처리된다.
+    detection_held_ = last_detection_valid_;
     return;
   }
 
@@ -82,6 +70,25 @@ void StateMachine::on_detection(
     }
     target_locked_ = true;
   }
+}
+
+void StateMachine::tick()
+{
+  if (!last_detection_valid_) return;
+  if (state_ != State::SEARCH && state_ != State::LOCK && state_ != State::TRACK) return;
+
+  const double timeout_sec =
+    state_ == State::TRACK ? params_.track_detection_timeout_sec : params_.detection_timeout_sec;
+  const double elapsed =
+    std::chrono::duration<double>(Clock::now() - last_detection_time_).count();
+  if (elapsed < timeout_sec) return;
+
+  detection_held_ = false;
+  target_locked_ = false;
+  error_x_ = 0.0;
+  error_y_ = 0.0;
+  last_detection_valid_ = false;
+  on_detection_timeout();
 }
 
 void StateMachine::on_launch_button()
