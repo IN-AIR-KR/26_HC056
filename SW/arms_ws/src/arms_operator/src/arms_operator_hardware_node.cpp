@@ -18,17 +18,15 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/joy.hpp>
+#include <arms_msgs/msg/operator_input.hpp>
 
-namespace arms_command
+namespace arms_operator
 {
 
-using SteadyClock = std::chrono::steady_clock;
-
-// ESP32 펌웨어가 보내는 CSV 패킷 필드(고정, 변경 불가).
+// ESP32 펌웨어가 보내는 CSV 패킷 필드.
 //   throttle: 0..1000,  roll/pitch/yaw: -1000..1000,  버튼: 0/1
-//   CTRL,seq,throttle,roll,pitch,yaw,fire,mode,eland,kill
-// control 노드 Joy 규약으로의 변환은 publishJoy 에서 수행한다.
+//   CTRL,seq,throttle,roll,pitch,yaw,launch,mode,rtl,arm
+// control 노드 OperatorInput 규약으로의 변환은 publishInput 에서 수행한다.
 struct ControllerPacket
 {
   uint32_t seq = 0;
@@ -36,19 +34,19 @@ struct ControllerPacket
   int roll = 0;
   int pitch = 0;
   int yaw = 0;
-  int fire = 0;
+  int launch = 0;
   int mode = 0;
-  int eland = 0;
-  int kill = 0;
+  int rtl = 0;
+  int arm = 0;
 };
 
-class ArmsCommandUartNode : public rclcpp::Node
+class ArmsOperatorHardwareNode : public rclcpp::Node
 {
 public:
-  ArmsCommandUartNode()
-  : Node("arms_command_hw_node")
+  ArmsOperatorHardwareNode()
+  : Node("arms_operator_hardware_node")
   {
-    topic_name_ = declare_parameter<std::string>("topic_name", "/joy");
+    topic_name_ = declare_parameter<std::string>("topic_name", "operator/input");
 
     serial_device_ =
       declare_parameter<std::string>("serial.device", "/dev/ttyACM0");
@@ -57,39 +55,23 @@ public:
     max_line_length_ =
       declare_parameter<int>("serial.max_line_length", 128);
 
-    failsafe_timeout_ms_ =
-      declare_parameter<int>("failsafe.timeout_ms", 300);
-    failsafe_publish_rate_hz_ =
-      declare_parameter<double>("failsafe.publish_rate_hz", 20.0);
-
     if (poll_rate_hz_ <= 0.0) {
       throw std::runtime_error("serial.poll_rate_hz must be greater than 0");
     }
     if (max_line_length_ < 32) {
       throw std::runtime_error("serial.max_line_length must be at least 32");
     }
-    if (failsafe_timeout_ms_ <= 0) {
-      throw std::runtime_error("failsafe.timeout_ms must be greater than 0");
-    }
-    if (failsafe_publish_rate_hz_ <= 0.0) {
-      throw std::runtime_error("failsafe.publish_rate_hz must be greater than 0");
-    }
-
-    joy_pub_ = create_publisher<sensor_msgs::msg::Joy>(
+    input_pub_ = create_publisher<arms_msgs::msg::OperatorInput>(
       topic_name_,
       rclcpp::SensorDataQoS().keep_last(1)
     );
 
     openSerialPort();
 
-    const auto now_steady = SteadyClock::now();
-    last_valid_packet_time_ = now_steady;
-    last_failsafe_publish_time_ = now_steady - std::chrono::seconds(1);
-
     const auto period = std::chrono::duration<double>(1.0 / poll_rate_hz_);
     poll_timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-      std::bind(&ArmsCommandUartNode::pollSerial, this));
+      std::bind(&ArmsOperatorHardwareNode::pollSerial, this));
 
     RCLCPP_INFO(
       get_logger(),
@@ -97,10 +79,10 @@ public:
       serial_device_.c_str(), serial_baud_, topic_name_.c_str(), poll_rate_hz_);
     RCLCPP_INFO(
       get_logger(),
-      "Expected packet: CTRL,seq,throttle,roll,pitch,yaw,fire,mode,eland,kill");
+      "Expected packet: CTRL,seq,throttle,roll,pitch,yaw,launch,mode,rtl,arm");
   }
 
-  ~ArmsCommandUartNode() override
+  ~ArmsOperatorHardwareNode() override
   {
     closeSerialPort();
   }
@@ -215,7 +197,6 @@ private:
         rx_buffer_.size());
       rx_buffer_.clear();
     }
-    publishFailsafeWhenTimedOut();
   }
 
   void readAvailableBytes()
@@ -360,10 +341,10 @@ private:
       !parseInteger(fields[3], packet.roll) ||
       !parseInteger(fields[4], packet.pitch) ||
       !parseInteger(fields[5], packet.yaw) ||
-      !parseInteger(fields[6], packet.fire) ||
+      !parseInteger(fields[6], packet.launch) ||
       !parseInteger(fields[7], packet.mode) ||
-      !parseInteger(fields[8], packet.eland) ||
-      !parseInteger(fields[9], packet.kill))
+      !parseInteger(fields[8], packet.rtl) ||
+      !parseInteger(fields[9], packet.arm))
     {
       error = "one or more fields are not valid integers";
       return false;
@@ -380,12 +361,12 @@ private:
       error = "roll, pitch, or yaw is outside -1000..1000";
       return false;
     }
-    if (!inRange(packet.fire, 0, 1) ||
+    if (!inRange(packet.launch, 0, 1) ||
       !inRange(packet.mode, 0, 1) ||
-      !inRange(packet.eland, 0, 1) ||
-      !inRange(packet.kill, 0, 1))
+      !inRange(packet.rtl, 0, 1) ||
+      !inRange(packet.arm, 0, 1))
     {
-      error = "fire, mode, eland, and kill must be 0 or 1";
+      error = "launch, mode, rtl, and arm must be 0 or 1";
       return false;
     }
 
@@ -394,89 +375,25 @@ private:
 
   void handleValidPacket(const ControllerPacket & packet)
   {
-    last_seq_ = packet.seq;
-    have_last_seq_ = true;
-    last_valid_packet_time_ = SteadyClock::now();
-
-    if (failsafe_active_) {
-      RCLCPP_INFO(get_logger(), "USB packets recovered. Failsafe released.");
-      failsafe_active_ = false;
-    }
-
-    publishJoy(packet);
+    publishInput(packet);
   }
 
-  void publishJoy(const ControllerPacket & packet, bool command_lost = false)
+  void publishInput(const ControllerPacket & packet)
   {
-    sensor_msgs::msg::Joy msg;
+    arms_msgs::msg::OperatorInput msg;
     msg.header.stamp = now();
-    msg.header.frame_id = "controller_input";
-
-    // ESP32 패킷 → control 노드(arms_control) Joy 규약으로 변환.
-    //   axes[0]=yaw, axes[1]=throttle, axes[2]=roll, axes[3]=pitch  (모두 -1..1)
-    //     throttle: ESP32 0..1000 → -1..1 (바닥 0 → -1 = 최소 스로틀)
-    msg.axes = {
-      static_cast<float>(packet.yaw) / 1000.0F,
-      static_cast<float>(packet.throttle) / 500.0F - 1.0F,
-      static_cast<float>(packet.roll) / 1000.0F,
-      static_cast<float>(packet.pitch) / 1000.0F
-    };
-
-    //   buttons[0]=reserved, [1]=arm, [2]=mode, [3]=launch, [4]=rtl
-    //     실기체 배선상 물리 kill 스위치는 eland 필드로 들어온다. 이 스위치를
-    //     "RTL / GPS Rescue" 요청으로 재정의하고, 상태/arm 스위치(kill 필드)는 유지한다.
-    //     fire 버튼 → launch 로 매핑.
-    msg.buttons = {
-      0,              // buttons[0]=reserved (legacy kill slot)
-      packet.kill,    // buttons[1]=arm   (물리 상태/arm 스위치)
-      packet.mode,
-      packet.fire,
-      packet.eland,   // buttons[4]=rtl   (기존 물리 kill 스위치)
-      command_lost ? 1 : 0  // buttons[5]=command UART timeout
-    };
-
-    joy_pub_->publish(msg);
-  }
-
-  void publishFailsafeWhenTimedOut()
-  {
-    const auto now_steady = SteadyClock::now();
-    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      now_steady - last_valid_packet_time_).count();
-
-    if (elapsed_ms <= failsafe_timeout_ms_) {
-      return;
-    }
-
-    if (!failsafe_active_) {
-      failsafe_active_ = true;
-      RCLCPP_ERROR(
-        get_logger(),
-        "No valid ESP32 packet for %lld ms. Publishing command-lost notification.",
-        static_cast<long long>(elapsed_ms));
-    }
-
-    const auto failsafe_period = std::chrono::duration<double>(
-      1.0 / failsafe_publish_rate_hz_);
-
-    if ((now_steady - last_failsafe_publish_time_) < failsafe_period) {
-      return;
-    }
-
-    ControllerPacket safe;
-    safe.throttle = 0;
-    safe.roll = 0;
-    safe.pitch = 0;
-    safe.yaw = 0;
-    safe.fire = 0;
-    safe.mode = 0;
-    // command 노드는 입력 단절 사실(button[5])만 전달한다. RTL 전이·CH7 출력은
-    // control 노드가 직전 실제 arm 상태를 확인한 뒤 결정한다.
-    safe.eland = 0;
-    safe.kill = 0;
-
-    publishJoy(safe, true);
-    last_failsafe_publish_time_ = now_steady;
+    msg.roll = static_cast<float>(packet.roll) / 1000.0F;
+    msg.pitch = static_cast<float>(packet.pitch) / 1000.0F;
+    msg.throttle = static_cast<float>(packet.throttle) / 500.0F - 1.0F;
+    msg.yaw = static_cast<float>(packet.yaw) / 1000.0F;
+    msg.arm_switch = static_cast<bool>(packet.arm);
+    msg.manual_mode = static_cast<bool>(packet.mode);
+    msg.launch_request = static_cast<bool>(packet.launch);
+    msg.rtl_switch = static_cast<bool>(packet.rtl);
+    // I/O 경계에서는 유효 패킷을 그대로 전달한다. 입력 단절·RTL 같은 안전
+    // 판단은 control 노드가 마지막 수신 시각을 기준으로 수행한다.
+    msg.input_lost = false;
+    input_pub_->publish(msg);
   }
 
   std::string topic_name_;
@@ -485,33 +402,23 @@ private:
   double poll_rate_hz_ = 200.0;
   int max_line_length_ = 128;
 
-  int failsafe_timeout_ms_ = 300;
-  double failsafe_publish_rate_hz_ = 20.0;
-
   int serial_fd_ = -1;
   std::string rx_buffer_;
 
-  uint32_t last_seq_ = 0;
-  bool have_last_seq_ = false;
-  bool failsafe_active_ = false;
-
-  SteadyClock::time_point last_valid_packet_time_;
-  SteadyClock::time_point last_failsafe_publish_time_;
-
-  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_pub_;
+  rclcpp::Publisher<arms_msgs::msg::OperatorInput>::SharedPtr input_pub_;
   rclcpp::TimerBase::SharedPtr poll_timer_;
 };
 
-}  // namespace arms_command
+}  // namespace arms_operator
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
 
   try {
-    rclcpp::spin(std::make_shared<arms_command::ArmsCommandUartNode>());
+    rclcpp::spin(std::make_shared<arms_operator::ArmsOperatorHardwareNode>());
   } catch (const std::exception & error) {
-    RCLCPP_FATAL(rclcpp::get_logger("arms_command_uart"), "%s", error.what());
+    RCLCPP_FATAL(rclcpp::get_logger("arms_operator_hardware"), "%s", error.what());
     rclcpp::shutdown();
     return 1;
   }

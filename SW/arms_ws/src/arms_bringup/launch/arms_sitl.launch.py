@@ -8,12 +8,11 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
 
 이거 하나로 다음을 전부 띄운다:
   - PX4 SITL + Gazebo       (arms_sim/px4_sitl.launch.py include, px4:=false 로 생략)  [arms_sim]
-  - socat 가상 CRSF 시리얼   (/tmp/crsf_tx ↔ /tmp/crsf_rx)
   - gz 카메라 브리지        (/arms/image_raw)
   - arms_detection_node     (HSV 후보 → ROI YOLO 검증, detection:= 로 host/docker)
-  - arms_control_node       (상태머신 + PID + CRSF 출력)
-  - arms_sitl_bridge_node   (CRSF→MAVLink RC override → PX4)
-  - arms_command_node       (가상 조종기: 스틱+버튼 → /arms/command)   [arms_command]
+  - arms_control_node       (상태머신 + PID → FlightCommand)
+  - arms_sitl_bridge_node   (FlightCommand → MAVLink RC override → PX4)
+  - arms_operator_gui_node  (가상 조종기 → operator/input)
   - panel                   (튜닝/심판 콘솔)                          [arms_sim]
   - referee                 (표적 풍선/드론 비행 + 명중 판정)          [arms_sim]
   - arms_ui_node            (OpenCV 영상 오버레이)
@@ -183,9 +182,6 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration("px4")),
             launch_arguments={"px4_dir": LaunchConfiguration("px4_dir")}.items(),
         ),
-        # CRSF 가상 시리얼
-        OpaqueFunction(function=_socat),
-
         # 카메라 브리지 — 상방 카메라 → /arms/image_raw
         Node(
             package="ros_gz_bridge", executable="parameter_bridge",
@@ -195,27 +191,23 @@ def generate_launch_description():
         ),
         # 검출 (host in-process / docker 컨테이너) — detection:= 로 고른다
         OpaqueFunction(function=_detection),
-        # 제어 (상태머신 + PID + CRSF 시리얼 출력)
-        # SITL: socat PTY(/tmp/crsf_tx)로 출력 → sitl_bridge가 /tmp/crsf_rx에서 수신
+        # 제어는 전송 방식과 독립적인 FlightCommand만 발행한다.
         Node(
             package="arms_control", executable="arms_control_node",
-            name="arms_control_node", output="screen",
-            parameters=[str(control_config),
-                        {"crsf.port": CRSF_TX}],
+            namespace="arms", name="arms_control_node", output="screen",
+            parameters=[str(control_config)],
         ),
-        # SITL 브리지 (CRSF → MAVLink RC_CHANNELS_OVERRIDE → PX4)
+        # SITL I/O 어댑터 (FlightCommand → MAVLink RC override).
         Node(
-            package="arms_control", executable="sitl_bridge_node",
-            name="arms_sitl_bridge_node", output="screen",
+            package="arms_flight_io", executable="sitl_bridge_node",
+            namespace="arms", name="arms_sitl_bridge_node", output="screen",
             parameters=[{"connection":   "udpin:0.0.0.0:14540",
-                         "crsf_port":    CRSF_RX,
                          "send_rate_hz": 50.0}],
         ),
-        # 가상 조종기 (스틱+버튼 → /arms/command). 실기체 물리 조종기의 SITL 쌍둥이.
-        #   /arms/command 발행자는 이 노드 하나뿐 (레이스 방지).
+        # SITL 가상 운용자 입력.
         Node(
-            package="arms_command", executable="arms_command_node",
-            name="arms_command_node", output="screen",
+            package="arms_operator", executable="arms_operator_gui_node",
+            namespace="arms", name="arms_operator_gui_node", output="screen",
         ),
         # 튜닝/심판 콘솔 (파라미터·referee 제어). SITL 전용, /arms/command 발행 안 함.
         Node(
@@ -281,7 +273,9 @@ def generate_launch_description():
                     "/arms/battery",
                     "/arms/gps",
                     "/arms/mission_state",
-                    "/arms/command",
+                    "/arms/operator/input",
+                    "/arms/control/flight_command",
+                    "/arms/io/status",
                 ],
                 "manifest.control_params_path": str(control_config),
                 "manifest.arg_px4": ParameterValue(LaunchConfiguration("px4"), value_type=str),

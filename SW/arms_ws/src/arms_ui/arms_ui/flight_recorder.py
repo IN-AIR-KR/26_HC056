@@ -11,8 +11,7 @@
   · detections_raw = 칼만 적용 전 원시 검출 → 추후 KF 파라미터 오프라인 재현/튜닝용.
   · tag 파라미터를 주면 폴더명 뒤에 붙는다 (SITL: <일시>_sitl).
 
-/arms/command(Joy) 스위치: buttons[1]=arm, [2]=mode(0=auto/1=manual),
-buttons[3]=launch, [4]=rtl(GPS Rescue 요청), [5]=command UART timeout.
+/arms/operator/input의 arm_switch 상승/하강 엣지로 녹화를 시작·종료한다.
 """
 import os
 import json
@@ -25,7 +24,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Joy
+from arms_msgs.msg import OperatorInput
 
 
 class FlightRecorder(Node):
@@ -51,7 +50,9 @@ class FlightRecorder(Node):
             "/arms/battery",
             "/arms/gps",
             "/arms/mission_state",
-            "/arms/command",
+            "/arms/operator/input",
+            "/arms/control/flight_command",
+            "/arms/io/status",
         ])
         self.declare_parameter("save_dir", "~/arms_flight_logs_ibvs")
         # 저장 포맷. 젯슨엔 mcap 플러그인이 없어 sqlite3 로 고정(항상 사용 가능).
@@ -79,7 +80,7 @@ class FlightRecorder(Node):
 
         best = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                           history=HistoryPolicy.KEEP_LAST, depth=1)
-        self.create_subscription(Joy, "/arms/command", self._cb_cmd, best)
+        self.create_subscription(OperatorInput, "/arms/operator/input", self._cb_cmd, best)
         self.get_logger().info(
             "flight_recorder ready — ARM 스위치 올리면 녹화 시작, "
             f"내리면 종료. 저장: {self._save_dir}")
@@ -87,8 +88,8 @@ class FlightRecorder(Node):
     def _recording(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def _cb_cmd(self, msg: Joy):
-        arm = msg.buttons[1] if len(msg.buttons) > 1 else 0
+    def _cb_cmd(self, msg: OperatorInput):
+        arm = int(msg.arm_switch)
         if arm and not self._arm and not self._recording():
             self._start()                      # ARM 올림 → 녹화 시작
         elif not arm and self._recording():

@@ -6,7 +6,7 @@ Subscribes to:
   /arms/detections     arms_msgs/DetectionArray
   /arms/mission_state  arms_msgs/MissionState
   /arms/control_debug  geometry_msgs/Vector3
-  /arms/command        sensor_msgs/Joy   (buttons[2]: 0=AUTO, 1=MANUAL)
+  /arms/operator/input arms_msgs/OperatorInput
 
 오버레이(바운딩박스/십자선/상태/ROI 등)는 AUTO 모드에서만 그린다.
 MANUAL 모드(buttons[2]==1)에서는 원본 영상만 표시한다.
@@ -28,15 +28,13 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage, Image, Joy
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Float32MultiArray
 
-from arms_msgs.msg import BatteryTelemetry, DetectionArray, GpsTelemetry, MissionState
+from arms_msgs.msg import (BatteryTelemetry, DetectionArray, GpsTelemetry,
+                           MissionState, OperatorInput)
 from geometry_msgs.msg import Vector3
 
-# /arms/command Joy 버튼 인덱스 (arms_command_uart_node.cpp / arms_control_node.cpp 와 일치)
-#   buttons[1]=arm, [2]=mode, [3]=launch, [4]=rtl
-MODE_BUTTON_IDX = 2
 
 STATE_COLORS = {
     "IDLE":   (128, 128, 128),
@@ -164,10 +162,8 @@ class ArmsUINode(Node):
             self._hsv_subscription = self.create_subscription(
                 Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
                 best_effort_qos)
-        # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
-        # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
-        # 오버레이/효과음이 동작하지 않음.)
-        self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
+        # Hardware input is best-effort while the GUI is reliable.
+        self.create_subscription(OperatorInput, "/arms/operator/input", self._cb_command, best_effort_qos)
         # 배터리는 CRSF 통합 스냅샷이 아니라 전용 토픽을 구독한다.
         self.create_subscription(BatteryTelemetry, "/arms/battery", self._cb_battery, 10)
         # GPS는 CRSF 0x02를 control 노드가 별도 변환해 발행한다.
@@ -342,10 +338,8 @@ class ArmsUINode(Node):
             for name, value in zip(names, vals[2:11]):
                 self._diag_history[name].append(float(value))
 
-    def _cb_command(self, msg: Joy):
-        if len(msg.buttons) <= MODE_BUTTON_IDX:
-            return
-        manual = bool(msg.buttons[MODE_BUTTON_IDX])
+    def _cb_command(self, msg: OperatorInput):
+        manual = bool(msg.manual_mode)
         self._manual_mode = manual
         # 시작 안내(모드+텔레메트리)는 _maybe_startup_announce 가 순서대로 한 번에 낸다.
         #   그 이후의 모드 전환 엣지에만 개별 효과음을 낸다.

@@ -1,7 +1,5 @@
 """
-Full real-hardware launch: arms_video + arms_command + arms_detection + arms_control + arms_ui
-- arms_command (ESP32 UART) → /arms/command → arms_control
-- arms_control → CRSF serial (crsf.port 파라미터) → ELRS TX → [RF] → ELRS RX → FC
+Full real-hardware launch: video + operator + detection + control + flight I/O + UI.
 - Detection(HSV 후보 → ROI YOLO 검증)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
@@ -48,13 +46,12 @@ def _find_detection_compose():
 def generate_launch_description():
     control_dir = Path(get_package_share_directory("arms_control")) / "config"
     control_config = control_dir / "control_params.yaml"
-    # 실기체 CRSF 오버레이: crsf.port=/dev/ttyUSB0(USB-C CP2102), crsf.baud=115200
     hw_config = control_dir / "hw_overrides.yaml"
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
-    command_launch = (
-        Path(get_package_share_directory("arms_command")) / "launch" / "command.launch.py"
+    operator_launch = (
+        Path(get_package_share_directory("arms_operator")) / "launch" / "operator.launch.py"
     )
     detection_compose = _find_detection_compose()
 
@@ -103,21 +100,25 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(video_launch)),
         ),
-        # 실기체 조종기 입력 (ESP32 UART → /arms/command)
+        # 실기체 운용자 입력 (ESP32 UART → /arms/operator/input)
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(command_launch)),
+            PythonLaunchDescriptionSource(str(operator_launch)),
         ),
-        # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
+        # 제어 (상태머신 + PID → FlightCommand)
         Node(
             package="arms_control",
             executable="arms_control_node",
-            name="arms_control_node",
+            namespace="arms", name="arms_control_node",
             output="screen",
             parameters=[
                 str(control_config),
-                str(hw_config),                                   # 실기체 델타 (포트/서보/게인/자동발진)
-                {"crsf.port": LaunchConfiguration("crsf_port")},  # 필요시 포트만 오버라이드
+                str(hw_config),
             ],
+        ),
+        Node(
+            package="arms_flight_io", executable="arms_crsf_io_node",
+            namespace="arms", name="arms_crsf_io_node", output="screen",
+            parameters=[{"port": LaunchConfiguration("crsf_port")}],
         ),
         # OpenCV UI. fullscreen/debug 는 런치 인자로 제어(실기체 기본: 전체화면·메인만).
         #   ui.debug=false → hsv_debug_image 미구독 → detection 발행 부하 최소.

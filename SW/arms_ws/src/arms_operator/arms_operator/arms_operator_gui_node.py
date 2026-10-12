@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-arms_command_node.py — A.R.M.S. SITL 가상 조종기 (tkinter GUI)
+arms_operator_gui_node.py — A.R.M.S. SITL 가상 운용자 입력 (tkinter GUI)
 
-실기체의 물리 조종기(ESP32 → arms_command_hw_node)에 대응하는 SITL 쌍둥이.
-오직 /arms/command (sensor_msgs/Joy) 만 발행한다:
-  - 스틱 드래그        → axes  (roll/pitch/throttle/yaw)
-  - MODE/RTL/ARM 버튼 → buttons[2]/[4]/[1]  (화면 순서 ≠ 인덱스 순서)
-  - LAUNCH 버튼        → buttons[3] (수동 TRACK 전환, 순간 눌림)
+실기체의 물리 조종기(ESP32 → arms_operator_hardware_node)에 대응하는 SITL 쌍둥이.
+오직 operator/input (OperatorInput)만 발행한다:
+  - 스틱 드래그 → roll/pitch/throttle/yaw
+  - MODE/RTL/ARM 버튼 → manual_mode/rtl_switch/arm_switch
+  - LAUNCH 버튼 → launch_request (순간 눌림)
 
 튜닝/심판 콘솔은 arms_sim 패키지의 panel 노드로 분리됨.
-(발행자는 이 노드 하나뿐 — 두 노드가 /arms/command 를 동시에 쏘면 레이스가 남)
+(발행자는 환경별로 하나뿐 — 같은 토픽에 두 입력을 동시에 연결하지 않는다.)
 
-실행: ros2 run arms_command arms_command_node
+실행: ros2 run arms_operator arms_operator_gui_node
 """
 
 import math
@@ -20,7 +20,7 @@ import tkinter as tk
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Joy
+from arms_msgs.msg import OperatorInput
 
 # 스틱 캔버스 크기 (크게)
 STICK_SIZE = 120
@@ -29,22 +29,26 @@ DOT_R      = 12
 
 
 class ControllerNode(Node):
-    """가상 조종기 노드 — /arms/command (Joy) 만 발행."""
+    """가상 조종기 노드 — 상대 토픽 operator/input만 발행."""
 
     def __init__(self):
-        super().__init__("arms_command_node")
-        self._joy_pub = self.create_publisher(Joy, "/arms/command", 10)
+        super().__init__("arms_operator_gui_node")
+        self._input_pub = self.create_publisher(OperatorInput, "operator/input", 10)
         self._axes = [0.0, 0.0, 0.0, 0.0]
-        # [reserved, arm, mode, launch, rtl, command_lost]
+        # arm, manual mode, launch, RTL 상태를 GUI에서 유지한다.
         self._buttons = [0, 0, 0, 0, 0, 0]
-        self.create_timer(0.05, self._publish_joy)  # 20 Hz
+        self.create_timer(0.05, self._publish_input)  # 20 Hz
 
-    def _publish_joy(self):
-        msg = Joy()
+    def _publish_input(self):
+        msg = OperatorInput()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.axes = list(self._axes)
-        msg.buttons = list(self._buttons)
-        self._joy_pub.publish(msg)
+        msg.yaw, msg.throttle, msg.roll, msg.pitch = self._axes
+        msg.arm_switch = bool(self._buttons[1])
+        msg.manual_mode = bool(self._buttons[2])
+        msg.launch_request = bool(self._buttons[3])
+        msg.rtl_switch = bool(self._buttons[4])
+        msg.input_lost = False
+        self._input_pub.publish(msg)
 
     def set_axis(self, idx, value):
         self._axes[idx] = float(value)
@@ -57,7 +61,7 @@ class ControllerNode(Node):
         self._buttons[idx] = 1 if val else 0
         return self._buttons[idx]
 
-    def fire_launch(self):
+    def request_launch(self):
         self._buttons[3] = 1
 
     def release_launch(self):
@@ -174,7 +178,7 @@ class ControllerGUI:
 
     def _on_launch(self):
         # 순간 눌림: buttons[3]=1 잠깐 → 300ms 후 해제 (arms_control LOCK→TRACK 트리거)
-        self.node.fire_launch()
+        self.node.request_launch()
         self.root.after(300, self.node.release_launch)
 
     # ---- 스틱 바인딩/그리기 ----

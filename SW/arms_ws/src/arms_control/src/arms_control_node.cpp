@@ -10,22 +10,18 @@
 #include <string>
 #include <vector>
 
-#include "arms_control/crsf_output.hpp"
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
-#include "arms_msgs/msg/battery_telemetry.hpp"
-#include "arms_msgs/msg/attitude_telemetry.hpp"
-#include "arms_msgs/msg/crsf_telemetry.hpp"
-#include "arms_msgs/msg/gps_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
+#include "arms_msgs/msg/flight_command.hpp"
 #include "arms_msgs/msg/ibvs_debug.hpp"
+#include "arms_msgs/msg/io_status.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
+#include "arms_msgs/msg/operator_input.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/empty.hpp"
-#include "std_msgs/msg/int16_multi_array.hpp"
 
 using namespace std::chrono_literals;
 
@@ -84,6 +80,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.prearm_check", true);
     declare_parameter("control.prearm_throttle_max", -0.85);  // throttle(axes[1]) 이 이하(최저)
     declare_parameter("control.prearm_stick_tol", 0.15);      // roll/pitch/yaw 중앙 허용오차
+    declare_parameter("control.operator_input_timeout_sec", 0.3);
 
     // 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs). SITL 은 enabled=false.
     declare_parameter("servo.enabled", false);
@@ -93,16 +90,6 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("servo.lock_duty_ns", 1500000);  // 90°  = 1.5ms (LOCK 기본)
     declare_parameter("servo.open_duty_ns", 2500000);  // 180° = 2.5ms (OPEN 기본)
 
-    declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
-    declare_parameter("crsf.baud", 400000);
-    // 이 시간[s] 내 CRSF 텔레메트리가 안 오면 ELRS 링크 끊김으로 판정(UI 표시/효과음).
-    declare_parameter("crsf.telemetry_timeout_sec", 2.0);
-
-    // ── 배터리 잔량(%) 계산 ────────────────────────────────────────────
-    // 셀 수는 전압으로 자동 감지(cells=ceil(V/4.3), 1회 감지 후 래치). 잔량은:
-    //   pct = (전압 - cells·empty_v) / (cells·(full_v - empty_v)), 0~100 clamp.
-    declare_parameter("battery.cell_full_v", 4.2);       // 만충 시 셀당 전압[V]
-    declare_parameter("battery.cell_empty_v", 3.5);      // 방전(0%) 셀당 전압[V]
     // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
     // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
     // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
@@ -322,6 +309,7 @@ class ArmsControlNode : public rclcpp::Node {
     prearm_check_ = get_parameter("control.prearm_check").as_bool();
     prearm_throttle_max_ = get_parameter("control.prearm_throttle_max").as_double();
     prearm_stick_tol_ = get_parameter("control.prearm_stick_tol").as_double();
+    operator_input_timeout_sec_ = get_parameter("control.operator_input_timeout_sec").as_double();
 
     max_rate_dps_ = get_parameter("control.max_rate_dps").as_double();
     hover_throttle_ = get_parameter("control.hover_throttle").as_double();
@@ -351,10 +339,6 @@ class ArmsControlNode : public rclcpp::Node {
     tau_ease_start_ = get_parameter("control.tau_ease_start").as_double();
     tau_ease_full_ = get_parameter("control.tau_ease_full").as_double();
     tau_ease_min_scale_ = get_parameter("control.tau_ease_min_scale").as_double();
-    crsf_out_ = std::make_unique<CrsfOutput>(
-        get_parameter("crsf.port").as_string(),
-        static_cast<int>(get_parameter("crsf.baud").as_int()));
-
     // ---- 발사 잠금장치 서보 ----
     ServoLock::Params servo_params;
     servo_params.enabled     = get_parameter("servo.enabled").as_bool();
@@ -365,11 +349,6 @@ class ArmsControlNode : public rclcpp::Node {
     servo_params.open_duty_ns = static_cast<long>(get_parameter("servo.open_duty_ns").as_int());
     servo_ = std::make_unique<ServoLock>(servo_params, log_fn);
     servo_->init();
-
-    // ---- 배터리 잔량 계산 설정 ----
-    telemetry_timeout_sec_ = get_parameter("crsf.telemetry_timeout_sec").as_double();
-    battery_cell_full_v_  = get_parameter("battery.cell_full_v").as_double();
-    battery_cell_empty_v_ = get_parameter("battery.cell_empty_v").as_double();
 
     // 런타임 파라미터 변경 콜백
     param_cb_handle_ = add_on_set_parameters_callback(
@@ -508,18 +487,7 @@ class ArmsControlNode : public rclcpp::Node {
     // IBVS 튜닝/디버깅: 유도 각 항(오차→LOS각속도→z1/배리어→항별 기여→스케줄링→명령/추력)을
     //   한 메시지로 매 틱 발행(구독자 있을 때만). auto_save 녹화 대상.
     pub_ibvs_dbg_ = create_publisher<arms_msgs::msg::IbvsDebug>("/arms/ibvs_debug", 10);
-    // 배터리(CRSF 0x08)는 UI/녹화용 전용 토픽으로 발행한다. /arms/crsf_rx의 통합
-    // 스냅샷에도 호환성을 위해 같은 값은 유지하되, 소비자는 /arms/battery를 쓴다.
-    pub_battery_ = create_publisher<arms_msgs::msg::BatteryTelemetry>("/arms/battery", 10);
-    // CRSF 수신(RX) 통합 텔레메트리: 수직속도/비행모드/링크통계 등.
-    pub_crsf_rx_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf_rx", 10);
-    // 소스와 무관한 기체 자세. 실기체는 CRSF Attitude(0x1E)에서 채운다.
-    pub_attitude_ = create_publisher<arms_msgs::msg::AttitudeTelemetry>("/arms/attitude", 10);
-    // CRSF 송신(TX) 채널 로그용(구독자 있을 때만).
-    // [roll,pitch,thr,yaw,arm,mode,rtl,ch8] CRSF 단위.
-    pub_crsf_tx_ = create_publisher<std_msgs::msg::Int16MultiArray>("/arms/crsf_tx", 10);
-    // FC → ELRS → companion 경로의 GPS frame(0x02)을 별도 발행한다.
-    pub_gps_ = create_publisher<arms_msgs::msg::GpsTelemetry>("/arms/gps", 10);
+    pub_flight_cmd_ = create_publisher<arms_msgs::msg::FlightCommand>("control/flight_command", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -533,19 +501,19 @@ class ArmsControlNode : public rclcpp::Node {
           update_looming(msg);
         });
 
-    // BEST_EFFORT 로 구독: uart 노드(SensorDataQoS=best_effort)와 GUI(reliable)
-    // 양쪽 발행자 모두와 호환된다. (reliable 구독은 best_effort 발행을 못 받음)
-    sub_joy_ = create_subscription<sensor_msgs::msg::Joy>(
-        "/arms/command", rclcpp::SensorDataQoS(),
-        [this](sensor_msgs::msg::Joy::SharedPtr msg) {
-          for (size_t i = 0; i < 4 && i < msg->axes.size(); ++i)
-            joy_axes_[i] = msg->axes[i];
-
-          auto btn = [&](int i) -> int {
-            return (static_cast<size_t>(i) < msg->buttons.size()) ? msg->buttons[i] : 0;
-          };
-          int arm = btn(1), mode = btn(2), launch = btn(3), rtl = btn(4);
-          int command_lost = btn(5);
+    sub_input_ = create_subscription<arms_msgs::msg::OperatorInput>(
+        "operator/input", rclcpp::SensorDataQoS(),
+        [this](arms_msgs::msg::OperatorInput::SharedPtr msg) {
+          last_operator_input_time_ = now();
+          joy_axes_[0] = msg->yaw;
+          joy_axes_[1] = msg->throttle;
+          joy_axes_[2] = msg->roll;
+          joy_axes_[3] = msg->pitch;
+          int arm = msg->arm_switch;
+          int mode = msg->manual_mode;
+          int launch = msg->launch_request;
+          int rtl = msg->rtl_switch;
+          int command_lost = msg->input_lost;
 
           // MODE: 레벨 스위치. 0=auto(영상유도, ACRO/각속도), 1=manual(손제어, 자동수평)
           bool new_manual = static_cast<bool>(mode);
@@ -575,12 +543,19 @@ class ArmsControlNode : public rclcpp::Node {
 
           joy_arm_  = static_cast<bool>(arm);
           joy_rtl_  = static_cast<bool>(rtl);
-          joy_command_lost_ = static_cast<bool>(command_lost);
+          operator_reported_input_lost_ = static_cast<bool>(command_lost);
           // ARM 스위치를 기본 위치(DISARM)로 내리면 재토글 래치 해제.
           if (!joy_arm_) require_arm_reset_ = false;
           prev_btn_[1] = arm;
           prev_btn_[2] = mode; prev_btn_[3] = launch;
           prev_btn_[4] = rtl;
+        });
+
+    sub_io_status_ = create_subscription<arms_msgs::msg::IoStatus>(
+        "io/status", 10,
+        [this](arms_msgs::msg::IoStatus::SharedPtr msg) {
+          io_status_received_ = true;
+          io_fault_ = !msg->transport_connected;
         });
 
     // 심판(referee)의 직격 통지. SITL에서 실제 접촉이 확인되면 TRACK을 RTL로 전이한다.
@@ -618,6 +593,7 @@ class ArmsControlNode : public rclcpp::Node {
           rtl_sent_ = false;
           joy_arm_ = false;
           joy_rtl_ = false;
+          operator_reported_input_lost_ = false;
           joy_command_lost_ = false;
           require_arm_reset_ = true;
           RCLCPP_INFO(get_logger(), "실험 RESET: 제어 상태 IDLE, ARM 재토글 필요");
@@ -798,196 +774,18 @@ class ArmsControlNode : public rclcpp::Node {
     return 0.0;
   }
 
-  /* 수신된 CRSF 텔레메트리와 통신 오류를 시험용 로그로 출력한다. */
-  void handle_crsf_input() {
-    const auto result = crsf_out_->receive();                     // UART에 쌓인 응답을 모두 가져온다.
-
-    crsf_rx_bytes_ += result.bytes_read;                          // 누적 수신량을 갱신한다.
-    crsf_rx_echoes_ += result.echo_frames;                        // 자체 송신 에코 수를 갱신한다.
-    crsf_rx_crc_errors_ += result.crc_errors;                     // CRC 오류 수를 갱신한다.
-    crsf_rx_framing_errors_ += result.framing_errors;             // 프레임 길이 오류 수를 갱신한다.
-    crsf_rx_valid_frames_ += result.frames.size();                // 정상 텔레메트리 수를 갱신한다.
-
-    if (result.bytes_read > 0 || result.crc_errors > 0 ||
-        result.framing_errors > 0)
-    {
-      RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "CRSF RX: bytes=%zu valid=%zu echo=%zu crc_err=%zu frame_err=%zu",
-        crsf_rx_bytes_, crsf_rx_valid_frames_, crsf_rx_echoes_,
-        crsf_rx_crc_errors_, crsf_rx_framing_errors_);            // 2초마다 누적 통계를 보여준다.
-    }
-
-    for (const auto & frame : result.frames) {
-      if (!crsf_seen_types_[frame.type]) {
-        crsf_seen_types_[frame.type] = true;                      // 타입별 첫 수신 여부를 기록한다.
-        RCLCPP_INFO(
-          get_logger(), "CRSF telemetry detected: addr=0x%02X type=0x%02X payload=%zu",
-          static_cast<unsigned int>(frame.address),
-          static_cast<unsigned int>(frame.type), frame.payload.size());   // 새 텔레메트리 타입을 한 번 알린다.
-      }
-
-      if (frame.type == 0x14 && frame.payload.size() >= 10) {
-        const int up_rssi_1 = static_cast<int>(static_cast<int8_t>(frame.payload[0]));   // 상향 안테나 1 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
-        const int up_rssi_2 = static_cast<int>(static_cast<int8_t>(frame.payload[1]));   // 상향 안테나 2 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
-        const int up_lq = static_cast<int>(frame.payload[2]);              // 상향 링크 품질을 백분율로 읽는다.
-        const int up_snr = static_cast<int>(static_cast<int8_t>(frame.payload[3]));   // 상향 SNR의 부호를 복원한다.
-        const int down_rssi = static_cast<int>(static_cast<int8_t>(frame.payload[7]));   // 하향 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
-        const int down_lq = static_cast<int>(frame.payload[8]);            // 하향 링크 품질을 백분율로 읽는다.
-        const int down_snr = static_cast<int>(static_cast<int8_t>(frame.payload[9]));   // 하향 SNR의 부호를 복원한다.
-
-        RCLCPP_INFO_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "ELRS link: up_rssi=(%d,%d)dBm up_lq=%d%% up_snr=%ddB "
-          "down_rssi=%ddBm down_lq=%d%% down_snr=%ddB",
-          up_rssi_1, up_rssi_2, up_lq, up_snr,
-          down_rssi, down_lq, down_snr);                          // 링크 상태를 1초마다 보여준다.
-        last_up_lq_ = up_lq;                                      // uplink LQ 저장(0이면 RF 링크 끊김으로 본다).
-        last_lq_time_ = now();
-        crsf_telem_.uplink_rssi_dbm = up_rssi_1;                  // /arms/crsf_rx 통합 필드 갱신
-        crsf_telem_.uplink_lq = up_lq;
-        crsf_telem_.uplink_snr_db = up_snr;
-      } else if ((frame.type == 0x1C || frame.type == 0x1D) &&
-                 frame.payload.size() >= 5)
-      {
-        const int rssi = static_cast<int>(static_cast<int8_t>(frame.payload[0]));   // 단일 링크 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
-        const int rssi_percent = static_cast<int>(frame.payload[1]);       // RSSI 백분율을 읽는다.
-        const int link_quality = static_cast<int>(frame.payload[2]);       // 링크 품질을 백분율로 읽는다.
-        const int snr = static_cast<int>(static_cast<int8_t>(frame.payload[3]));   // SNR의 부호를 복원한다.
-
-        RCLCPP_INFO_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "ELRS %s link: rssi=%ddBm rssi_pct=%d%% lq=%d%% snr=%ddB",
-          frame.type == 0x1C ? "RX" : "TX",
-          rssi, rssi_percent, link_quality, snr);                 // 분리형 링크 상태를 1초마다 보여준다.
-      } else if (frame.type == 0x08 && frame.payload.size() >= 8) {
-        const int voltage_dv =
-          (static_cast<int>(frame.payload[0]) << 8) | frame.payload[1];   // 전압을 0.1V 단위(big-endian)로 읽는다.
-        const int current_da =
-          (static_cast<int>(frame.payload[2]) << 8) | frame.payload[3];   // 전류를 0.1A 단위(big-endian)로 읽는다.
-        const int capacity_mah =
-          (static_cast<int>(frame.payload[4]) << 16) |
-          (static_cast<int>(frame.payload[5]) << 8) | frame.payload[6];    // 사용 용량을 mAh(3바이트 big-endian)로 읽는다.
-        const int remaining_pct = static_cast<int>(frame.payload[7]);      // 남은 배터리 백분율을 읽는다.
-
-        RCLCPP_INFO_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "CRSF battery: %.1fV %.1fA used=%dmAh remain=%d%%",
-          voltage_dv / 10.0, current_da / 10.0,
-          capacity_mah, remaining_pct);                            // 배터리 텔레메트리를 1초마다 보여준다.
-
-        const double voltage_v = voltage_dv / 10.0;               // 전압을 V 단위로 환산한다.
-        // 셀 수는 전압으로 자동 감지한다. cells = ceil(V / 4.3): 셀당 최대≈4.3V 로 나눠 이 전압을
-        //   낼 수 있는 최소 셀 수를 구한다. 배터리 연결 시점엔 대개 충전돼 있어 정확하며, 첫
-        //   유효 전압에서 1회 감지 후 래치한다(방전으로 값이 흔들리지 않게).
-        if (battery_detected_cells_ <= 0 && voltage_v > 1.0) {
-          battery_detected_cells_ = static_cast<int>(std::ceil(voltage_v / 4.3));
-          RCLCPP_INFO(get_logger(), "배터리 셀 수 자동감지: %dS (%.1fV)",
-                      battery_detected_cells_, voltage_v);
-        }
-        const int cells = battery_detected_cells_;
-        double pct_ratio = remaining_pct / 100.0;                  // 감지 전 fallback: CRSF 잔량값.
-        if (cells > 0) {                                           // 셀 수를 알면 전압으로 직접 계산.
-          const double empty_v = cells * battery_cell_empty_v_;    // 0% 기준 전압.
-          const double full_v  = cells * battery_cell_full_v_;     // 100% 기준 전압.
-          const double span = full_v - empty_v;                   // 만충-방전 전압 폭.
-          pct_ratio = (span > 1e-6) ? (voltage_v - empty_v) / span : 0.0;   // 선형 보간한다.
-          pct_ratio = std::clamp(pct_ratio, 0.0, 1.0);            // 0~1 범위로 자른다.
-        }
-
-        // 통합 CRSF 스냅샷 호환 필드도 갱신한다.
-        // 잔량%: cell_count 설정 시 전압 기반 계산값, 아니면 FC(CRSF) 원값(pct_ratio 가 이미 반영).
-        crsf_telem_.voltage_v = static_cast<float>(voltage_v);
-        crsf_telem_.current_a = static_cast<float>(current_da) / 10.0f;
-        crsf_telem_.capacity_used_mah = capacity_mah;
-        crsf_telem_.battery_remaining_pct =
-            static_cast<int>(pct_ratio * 100.0 + 0.5);
-
-        arms_msgs::msg::BatteryTelemetry battery;
-        battery.header.stamp = now();
-        battery.voltage_v = crsf_telem_.voltage_v;
-        battery.current_a = crsf_telem_.current_a;
-        battery.capacity_used_mah = capacity_mah;
-        battery.battery_remaining_pct = crsf_telem_.battery_remaining_pct;
-        battery.cell_count = static_cast<uint8_t>(std::max(0, battery_detected_cells_));
-        pub_battery_->publish(battery);
-      } else if (frame.type == 0x1E && frame.payload.size() >= 6) {
-        // 자세(Attitude): pitch, roll, yaw 순서의 int16 big-endian, 값 = radian × 10000.
-        auto be16 = [&](size_t i) {
-          return static_cast<int16_t>(
-            (static_cast<uint16_t>(frame.payload[i]) << 8) | frame.payload[i + 1]);
-        };
-        constexpr double R2D = 57.29577951308232;                  // rad→deg
-        crsf_telem_.pitch_deg = static_cast<float>(be16(0) / 10000.0 * R2D);
-        crsf_telem_.roll_deg  = static_cast<float>(be16(2) / 10000.0 * R2D);
-        crsf_telem_.yaw_deg   = static_cast<float>(be16(4) / 10000.0 * R2D);
-        arms_msgs::msg::AttitudeTelemetry attitude;
-        attitude.header.stamp = now();
-        attitude.roll_deg = crsf_telem_.roll_deg;
-        attitude.pitch_deg = crsf_telem_.pitch_deg;
-        attitude.yaw_deg = crsf_telem_.yaw_deg;
-        pub_attitude_->publish(attitude);
-      } else if (frame.type == 0x02 && frame.payload.size() >= 15) {
-        // GPS: lat/lon E7, speed 0.1 km/h, course 0.01 deg, altitude+1000 m, sats.
-        auto be32 = [&](size_t i) {
-          return static_cast<int32_t>(
-            (static_cast<uint32_t>(frame.payload[i]) << 24) |
-            (static_cast<uint32_t>(frame.payload[i + 1]) << 16) |
-            (static_cast<uint32_t>(frame.payload[i + 2]) << 8) |
-             static_cast<uint32_t>(frame.payload[i + 3]));
-        };
-        auto beu16 = [&](size_t i) {
-          return static_cast<uint16_t>(
-            (static_cast<uint16_t>(frame.payload[i]) << 8) | frame.payload[i + 1]);
-        };
-        arms_msgs::msg::GpsTelemetry gps;
-        gps.header.stamp = now();
-        gps.latitude_deg = static_cast<double>(be32(0)) / 1e7;
-        gps.longitude_deg = static_cast<double>(be32(4)) / 1e7;
-        gps.ground_speed_mps = static_cast<float>(beu16(8)) / 36.0f;
-        gps.ground_course_deg = static_cast<float>(beu16(10)) / 100.0f;
-        gps.altitude_m = static_cast<float>(beu16(12)) - 1000.0f;
-        gps.satellites = frame.payload[14];
-        // CRSF GPS에는 MAVLink GPS_RAW_INT의 fix_type이 없다. MAVLink 명칭을
-        // UI/로그에서 일관되게 쓰기 위해 위성 수로만 보수적으로 추정한다.
-        // 0=NO_GPS는 "GPS frame 자체가 전혀 없음"에만 쓰고, 수신 frame에서
-        // sats<3은 1=NO_FIX, 3은 2=2D_FIX, 4 이상은 3=3D_FIX로 기록한다.
-        gps.mavlink_fix_type = gps.satellites < 3 ? 1
-                             : gps.satellites < 4 ? 2
-                                                   : 3;
-        gps.fix_type_inferred = true;
-        gps.valid_fix = gps.mavlink_fix_type >= 3;
-        pub_gps_->publish(gps);
-      } else if (frame.type == 0x07 && frame.payload.size() >= 2) {
-        // 수직속도(Vario): int16 big-endian, 단위 cm/s → m/s.
-        const int16_t vspeed_cms = static_cast<int16_t>(
-          (static_cast<uint16_t>(frame.payload[0]) << 8) | frame.payload[1]);
-        crsf_telem_.vertical_speed_mps = static_cast<float>(vspeed_cms) / 100.0f;
-      } else if (frame.type == 0x21 && !frame.payload.empty()) {
-        // 비행 모드(Flight mode): null-종료 ASCII 문자열.
-        const char * s = reinterpret_cast<const char *>(frame.payload.data());
-        size_t len = 0;
-        while (len < frame.payload.size() && s[len] != '\0') ++len;   // 널/끝까지만
-        crsf_telem_.flight_mode.assign(s, len);
-      }
-    }
-
-    // 이번에 CRSF 프레임을 하나라도 받았으면 통합 텔레메트리를 발행한다(최신 스냅샷).
-    if (!result.frames.empty()) {
-      crsf_telem_.header.stamp = now();
-      pub_crsf_rx_->publish(crsf_telem_);
-    }
-  }
-
-  // ----------------------------------------------------------------
-  // 30 Hz control loop
-  // ----------------------------------------------------------------
   void control_loop() {
-    handle_crsf_input();                                         // 직전 송신 이후 도착한 텔레메트리를 처리한다.
-
     auto now_t = now();
     double dt = (now_t - last_tick_).seconds();
     last_tick_ = now_t;
+
+    // The hardware adapter deliberately does not synthesize a failsafe packet.
+    // Control owns the 300 ms policy so a missing operator stream is handled
+    // identically for ESP32 and the SITL GUI.
+    const bool operator_timeout =
+        last_operator_input_time_.nanoseconds() == 0 ||
+        (now_t - last_operator_input_time_).seconds() > operator_input_timeout_sec_;
+    joy_command_lost_ = operator_timeout || operator_reported_input_lost_;
 
     State state = sm_->state();
 
@@ -1411,7 +1209,7 @@ class ArmsControlNode : public rclcpp::Node {
 
     // RTL은 "이미 ARM 된 기체"에서만 받아들인다. 자동/수동 어느 쪽이든 상태머신을
     // RTL로 옮겨 UI에 명확히 표시하고, 실제 귀환은 CH7의 FC GPS Rescue 매핑이 수행한다.
-    const bool rtl_active = (joy_rtl_ || joy_command_lost_) && base_ch5_armed;
+    const bool rtl_active = (joy_rtl_ || joy_command_lost_ || io_fault_) && base_ch5_armed;
     if (rtl_active && state != State::RTL) {
       sm_->request_rtl();
       state = sm_->state();
@@ -1421,66 +1219,25 @@ class ArmsControlNode : public rclcpp::Node {
     const bool manual_out = joy_manual_mode_ || rtl_handover;
     const bool ch5_armed = base_ch5_armed;
 
-    // ---- CRSF output ----
-    {
-      CrsfOutput::Channels crsf{};
-      crsf.fill(CrsfOutput::CRSF_MIN);
-
-      if (manual_out) {
-        // 수동/RTL 핸드오버: 스틱 → AETR 채널 passthrough.
-        //   L-stick: X=axes[0]=yaw,      Y=axes[1]=throttle
-        //   R-stick: X=axes[2]=roll,     Y=axes[3]=pitch
-        crsf[0] = CrsfOutput::norm_to_crsf(joy_axes_[2]);  // CH1 roll  = R-stick X
-        crsf[1] = CrsfOutput::norm_to_crsf(joy_axes_[3]);  // CH2 pitch = R-stick Y
-        crsf[2] = CrsfOutput::norm_to_crsf(joy_axes_[1]);  // CH3 thr   = L-stick Y (스프링, 중앙=50%)
-        crsf[3] = CrsfOutput::norm_to_crsf(joy_axes_[0]);  // CH4 yaw   = L-stick X
-      } else {
-        // AUTO(영상유도) 출력 — ACRO 고정.
-        //   유도(PID/PN/IBVS)가 낸 각속도 명령을 max_cmd_rate_dps 로 제한하고,
-        //   풀스틱 기준 max_rate_dps 로 정규화한다. PX4 ACRO 가 그 각속도로 직접
-        //   회전한다(자동수평 없음). 중간의 '목표 기울기' 단계는 없다.
-        double rr = std::clamp(roll_rate_cmd,  -max_cmd_rate_dps_, max_cmd_rate_dps_);
-        double pr = std::clamp(pitch_rate_cmd, -max_cmd_rate_dps_, max_cmd_rate_dps_);
-        crsf[0] = CrsfOutput::norm_to_crsf(rr / max_rate_dps_);
-        crsf[1] = CrsfOutput::norm_to_crsf(pr / max_rate_dps_);
-        crsf[2] = CrsfOutput::thr_to_crsf(static_cast<double>(thrust));
-        crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw 중앙 = yaw rate 0(헤딩 유지)
-      }
-
-      // CH5: arm — 수동은 스위치(재토글 안전장치), 자동은 상태머신 상태 기반.
-      //   자동: 기본 발사(TRACK)부터 arm (control.auto_arm_states 로 조정).
-      crsf[4] = ch5_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
-
-      // CH6: flight mode — auto=ACRO/각속도(172, low), manual|RTL=자동수평(1811, high).
-      //   FC 를 CH6 high=자동수평(self-level), low=ACRO 로 매핑해 둔다.
-      //   RTL 이면 자동으로 자동수평(수동)으로 넘어가 조종사가 이어받아 착륙.
-      crsf[5] = manual_out ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
-
-      // CH7: RTL/GPS Rescue. Betaflight의 GPS RESCUE mode에 이 AUX를 매핑한다.
-      // 조종기 요청뿐 아니라 target loss/종말 판정/심판 hit로 상태가 RTL이 된 경우도
-      // 동일하게 FC Rescue를 활성화해야 실제 귀환이 수행된다.
-      crsf[6] = rtl_handover ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
-
-      // CH8: 미사용 (crsf.fill(CRSF_MIN)으로 172 고정)
-
-      if (!crsf_out_->send(crsf)) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 2000,
-          "CRSF TX failed: check UART port and baud rate.");      // 송신 실패를 과도한 반복 없이 알린다.
-      }
-
-      // 송신 CRSF 채널 로그(구독자 있을 때만; bag record 가 구독하면 자동 on).
-      if (pub_crsf_tx_->get_subscription_count() > 0) {
-        std_msgs::msg::Int16MultiArray ch;
-        ch.data = {                                                // [roll,pitch,thr,yaw,arm,mode,rtl,ch8]
-          static_cast<int16_t>(crsf[0]), static_cast<int16_t>(crsf[1]),
-          static_cast<int16_t>(crsf[2]), static_cast<int16_t>(crsf[3]),
-          static_cast<int16_t>(crsf[4]), static_cast<int16_t>(crsf[5]),
-          static_cast<int16_t>(crsf[6]), static_cast<int16_t>(crsf[7])};
-        pub_crsf_tx_->publish(ch);
-      }
+    // The control node emits only normalized commands. The active I/O adapter
+    // owns CRSF channel layout or MAVLink conversion.
+    arms_msgs::msg::FlightCommand flight_cmd;
+    flight_cmd.header.stamp = now_t;
+    flight_cmd.arm = ch5_armed;
+    flight_cmd.manual_mode = manual_out;
+    flight_cmd.rtl_request = rtl_handover;
+    if (manual_out) {
+      flight_cmd.roll = joy_axes_[2];
+      flight_cmd.pitch = joy_axes_[3];
+      flight_cmd.throttle = std::clamp((joy_axes_[1] + 1.0F) * 0.5F, 0.0F, 1.0F);
+      flight_cmd.yaw = joy_axes_[0];
+    } else {
+      flight_cmd.roll = std::clamp(roll_rate_cmd / max_rate_dps_, -1.0, 1.0);
+      flight_cmd.pitch = std::clamp(pitch_rate_cmd / max_rate_dps_, -1.0, 1.0);
+      flight_cmd.throttle = std::clamp(thrust, 0.0F, 1.0F);
+      flight_cmd.yaw = 0.0F;
     }
-
+    pub_flight_cmd_->publish(flight_cmd);
     last_ch5_armed_ = ch5_armed;
 
     // ---- IBVS 디버그 발행 — 구독자 있을 때만 (auto_save 녹화기가 구독) ----
@@ -1532,16 +1289,7 @@ class ArmsControlNode : public rclcpp::Node {
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
     msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
-    // ELRS 링크 판정 = **바인딩+RF 링크가 실제로 살아있는가**.
-    //   TX 모듈이 젯슨에 꽂혀 있으면 바인딩 안 돼도 CRSF 프레임(0x3A RadioSync 등)은
-    //   계속 오므로, "프레임 수신"만으론 연결로 보면 안 된다. 실제 링크의 지표는
-    //   LinkStatistics(0x14)의 **uplink LQ**(우리 명령이 RX 까지 도달하는 비율):
-    //     · 바인딩 안 됨/범위 밖 → LQ=0 (또는 0x14 자체가 안 옴) → LOST
-    //     · 바인딩+연결        → LQ>0 → OK
-    const bool elrs_connected =
-        (last_up_lq_ > 0) &&
-        ((now_t - last_lq_time_).seconds() < telemetry_timeout_sec_);
-    msg.elrs_connected = elrs_connected;  // UI 표시/효과음용 (연결/끊김)
+    msg.elrs_connected = io_status_received_ && !io_fault_;
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----
@@ -1632,32 +1380,24 @@ class ArmsControlNode : public rclcpp::Node {
   double prearm_throttle_max_{-0.85};
   double prearm_stick_tol_{0.15};
 
-  // Joy state
+  // Normalized operator input state
   std::array<float, 4> joy_axes_{};
   bool joy_arm_{false};
   bool joy_rtl_{false};
   bool joy_command_lost_{false};
+  bool operator_reported_input_lost_{false};
   bool last_ch5_armed_{false};
   bool joy_manual_mode_{false};
+  rclcpp::Time last_operator_input_time_;
+  double operator_input_timeout_sec_{0.3};
+  bool io_status_received_{false};
+  bool io_fault_{false};
   std::array<int, 5> prev_btn_{};
   // ARM 재토글 안전장치: true 면 ARM 스위치가 올라가 있어도 arm 안 됨.
   //   부팅 시 true(스위치 이미 올라가 있어도 즉시 arm 방지), 모드 전환 시 true,
   //   ARM 스위치를 DISARM 으로 내리면 false. → 재토글해야만 arm.
   bool require_arm_reset_{true};
 
-  // CRSF 송수신 상태
-  std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
-  std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
-  arms_msgs::msg::CrsfTelemetry crsf_telem_;                      // /arms/crsf_rx 통합 발행용 최신 스냅샷
-  // ELRS 링크(바인딩+RF) 판정: LinkStatistics(0x14)의 uplink LQ 로만 본다.
-  int          last_up_lq_{-1};         // 마지막 0x14 uplink LQ[%] (-1=미수신)
-  rclcpp::Time last_lq_time_;           // 마지막 0x14 수신 시각
-  double       telemetry_timeout_sec_{2.0};  // 이 시간 내 0x14(LQ) 없으면 끊김
-  std::size_t crsf_rx_bytes_{0};                                 // 누적 UART 수신량을 센다.
-  std::size_t crsf_rx_valid_frames_{0};                          // 정상 텔레메트리 프레임 수를 센다.
-  std::size_t crsf_rx_echoes_{0};                                // 자체 송신 에코 프레임 수를 센다.
-  std::size_t crsf_rx_crc_errors_{0};                            // CRC 오류 프레임 수를 센다.
-  std::size_t crsf_rx_framing_errors_{0};                        // 길이 오류 프레임 수를 센다.
   // 자동요격 제어(ACRO 각속도 + 유도). 각도 단계 없음.
   double max_rate_dps_{400.0};
   double hover_throttle_{0.32};
@@ -1707,21 +1447,15 @@ class ArmsControlNode : public rclcpp::Node {
   bool   pn_init_{false};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
-  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
+  rclcpp::Subscription<arms_msgs::msg::OperatorInput>::SharedPtr sub_input_;
+  rclcpp::Subscription<arms_msgs::msg::IoStatus>::SharedPtr sub_io_status_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<arms_msgs::msg::IbvsDebug>::SharedPtr pub_ibvs_dbg_;      // IBVS 디버그 → /arms/ibvs_debug
-  rclcpp::Publisher<arms_msgs::msg::BatteryTelemetry>::SharedPtr pub_battery_; // CRSF battery → /arms/battery
-  rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_rx_;   // CRSF 수신 텔레메트리 → /arms/crsf_rx
-  rclcpp::Publisher<arms_msgs::msg::AttitudeTelemetry>::SharedPtr pub_attitude_; // source-independent attitude → /arms/attitude
-  rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_crsf_tx_;  // CRSF 송신 채널 로그 → /arms/crsf_tx
-  rclcpp::Publisher<arms_msgs::msg::GpsTelemetry>::SharedPtr pub_gps_;        // CRSF GPS → /arms/gps
-  int battery_detected_cells_{0};    // 전압으로 자동 감지한 셀 수(첫 유효 전압에서 1회 감지 후 래치)
-  double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
-  double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
+  rclcpp::Publisher<arms_msgs::msg::FlightCommand>::SharedPtr pub_flight_cmd_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   double rkp_{455.0}, rki_{0}, rkd_{0};

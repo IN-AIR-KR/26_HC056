@@ -69,10 +69,10 @@ def generate_launch_description():
     #   gui(기본) = SITL 가상 조종기(tkinter) — 창에서 arm/모드/kill/launch 클릭
     #   real      = 실기체 ESP32 조종기(UART → /arms/command)
     command_gui_launch = (
-        Path(get_package_share_directory("arms_command")) / "launch" / "command_sitl.launch.py"
+        Path(get_package_share_directory("arms_operator")) / "launch" / "operator_sitl.launch.py"
     )
     command_real_launch = (
-        Path(get_package_share_directory("arms_command")) / "launch" / "command.launch.py"
+        Path(get_package_share_directory("arms_operator")) / "launch" / "operator.launch.py"
     )
     detection_compose = _find_detection_compose()
 
@@ -148,19 +148,23 @@ def generate_launch_description():
             condition=IfCondition(PythonExpression(
                 ["'", LaunchConfiguration("controller"), "' == 'real'"])),
         ),
-        # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
+        # 제어 (상태머신 + PID → FlightCommand)
         Node(
             package="arms_control",
             executable="arms_control_node",
-            name="arms_control_node",
+            namespace="arms", name="arms_control_node",
             output="screen",
             parameters=[
                 str(control_config),
-                {"crsf.port": LaunchConfiguration("crsf_port")},
                 # 자동 track 비활성 (LOCK 이 자동으로 TRACK 안 감 → LAUNCH 버튼 눌러야 TRACK).
                 #   control_params(SITL 기준)는 true 라 여기서 실기체처럼 false 로 덮는다.
                 {"mission.sitl_auto_launch": False},
             ],
+        ),
+        Node(
+            package="arms_flight_io", executable="arms_crsf_io_node",
+            namespace="arms", name="arms_crsf_io_node", output="screen",
+            parameters=[{"port": LaunchConfiguration("crsf_port")}],
         ),
         # OpenCV UI (replay 기본: 메인 화면 디버그 오버레이 on). cv_debug:=true 를 주면
         #   우측 HSV 진단+성능 그래프 패널도 붙는다(그때만 hsv_debug_image 구독 →

@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
 """
-sitl_bridge_node — CRSF→MAVLink bridge for SITL
+sitl_bridge_node — FlightCommand→MAVLink adapter for SITL.
 
-Reads CRSF RC frames from a virtual serial port (socat PTY pair) and converts
-them to MAVLink RC_CHANNELS_OVERRIDE toward PX4. PX4가 Gazebo NavSat 센서에서
-만든 GPS_RAW_INT와 ATTITUDE는 각각 /arms/gps와 /arms/attitude 호환 텔레메트리로
-다시 발행해 SITL UI/rosbag도 실기체와 같은 토픽을 쓴다.
-
-Channel mapping:
-  CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
-  CH5: arm sw   CH6: mode sw   CH7: RTL request   CH8: (unused)
-
-CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=Stabilized(수동/사람 입력).
-  high=Stabilized 는 자동수평 + throttle 직결(고도유지 없음). 실기체 FC 의 수동 모드와 동작을 맞춘 것.
+``control/flight_command``를 PX4의 RC override, arm/disarm, 비행 모드와 RTL MAVLink
+명령으로 변환한다. PX4 GPS_RAW_INT와 ATTITUDE는 환경 독립 ``vehicle/*`` 토픽으로
+정규화해 UI와 rosbag이 실기체와 같은 계약을 사용하게 한다.
 """
 
 import math
@@ -22,7 +14,7 @@ import time
 import rclpy
 from rclpy.node import Node
 
-from arms_msgs.msg import AttitudeTelemetry, GpsTelemetry
+from arms_msgs.msg import AttitudeTelemetry, FlightCommand, GpsTelemetry, IoStatus
 
 try:
     from pymavlink import mavutil
@@ -36,12 +28,6 @@ PX4_BASE_MODE_CUSTOM          = 1
 PX4_CUSTOM_MAIN_MODE_STABILIZED = 7  # (CH6 high)
 PX4_CUSTOM_MAIN_MODE_ACRO     = 5   # 각속도(rate) 제어 — 자동 요격용 (자동수평 없음)
 
-CRSF_SYNC   = 0xC8
-CRSF_TYPE_RC = 0x16
-CRSF_MIN     = 172
-CRSF_MAX     = 1811
-SWITCH_THRESH = 1500  # > threshold → switch is ON
-
 MAV_MODE_FLAG_SAFETY_ARMED = 128
 ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed state
 # 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
@@ -53,83 +39,14 @@ ATTITUDE_MESSAGE_ID = 30
 ATTITUDE_STREAM_INTERVAL_US = 33_333  # 30 Hz: 3D 자세 표현과 rosbag 분석용.
 
 
-def _crc8_dvb_s2(data: bytes) -> int:
-    crc = 0
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0xD5) if (crc & 0x80) else (crc << 1)
-        crc &= 0xFF
-    return crc
-
-
-def _crsf_to_us(v: int) -> int:
-    """CRSF units (172–1811) → microseconds (1000–2000)."""
-    return int(1000 + (v - CRSF_MIN) / (CRSF_MAX - CRSF_MIN) * 1000)
-
-
-def _decode_crsf_frame(fd) -> list | None:
-    """
-    Read one CRSF RC frame from binary file-like fd.
-    Returns list of 16 channel values (CRSF units) or None on error.
-    """
-    # Scan for sync byte
-    while True:
-        b = fd.read(1)
-        if not b:
-            return None
-        if b[0] == CRSF_SYNC:
-            break
-
-    lb = fd.read(1)
-    if not lb:
-        return None
-    length = lb[0]  # type + payload + crc
-
-    rest = fd.read(length)
-    if len(rest) < length:
-        return None
-
-    frame_type = rest[0]
-    crc_received = rest[-1]
-    if frame_type != CRSF_TYPE_RC:
-        return None  # skip non-RC frames
-
-    # CRC over type + payload
-    expected_crc = _crc8_dvb_s2(rest[:-1])
-    if crc_received != expected_crc:
-        return None
-
-    payload = rest[1:-1]  # 22 bytes for 16-channel RC frame
-    if len(payload) < 22:
-        return None
-
-    # Unpack 16 × 11-bit channels (little-endian bit order)
-    channels = []
-    bit_pos = 0
-    for _ in range(16):
-        val = 0
-        for b in range(11):
-            byte_idx = bit_pos // 8
-            bit_idx = bit_pos % 8
-            if byte_idx < len(payload):
-                val |= ((payload[byte_idx] >> bit_idx) & 1) << b
-            bit_pos += 1
-        channels.append(val)
-
-    return channels
-
-
 class ArmsSITLCommNode(Node):
     def __init__(self):
         super().__init__("arms_sitl_bridge_node")
 
         self.declare_parameter("connection", "udpin:0.0.0.0:14540")
-        self.declare_parameter("crsf_port", "/tmp/crsf_rx")
         self.declare_parameter("send_rate_hz", 50.0)
 
         self._conn_str   = self.get_parameter("connection").value
-        self._crsf_port  = self.get_parameter("crsf_port").value
         self._send_rate  = self.get_parameter("send_rate_hz").value
         # 자동(CH6 low)은 ACRO 고정이다. 고를 여지가 없다 -- arms_control_node 가
         # 내는 자동 출력은 각속도[deg/s]를 max_rate_dps 로 정규화한 값이고, PX4 가
@@ -137,10 +54,7 @@ class ArmsSITLCommNode(Node):
         # 숫자에 MPC_MAN_TILT_MAX 가 곱해져 '기울기 명령'으로 조용히 오해석된다
         # (안 떨어지고 그냥 다른 제어 법칙으로 난다 -- 그래서 더 나쁘다).
 
-        self._channels  = [CRSF_MIN] * 16
-        self._channels[2] = CRSF_MIN   # throttle min
-        self._prev_ch6  = CRSF_MIN     # flight-mode switch (for edge detect)
-        self._prev_ch7  = CRSF_MIN     # RTL switch (rising edge → MAV_CMD_NAV_RETURN_TO_LAUNCH)
+        self._command = FlightCommand()
         self._ch5_high  = False        # arm switch, level (not edge) — kept in sync with CH5
         self._mode_pending = None      # desired PX4 main mode on CH6 edge
         self._rtl_pending = False      # CH7 rising-edge RTL command; mode 변경 뒤 전송
@@ -157,24 +71,23 @@ class ArmsSITLCommNode(Node):
         self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
         self._reiniting = False        # _initial_setup 재실행 중복 방지
         self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
-        # 실기체는 arms_control_node가 ELRS 수신 CRSF GPS를 발행한다. SITL은 ELRS가
-        # 없으므로 여기서 PX4 MAVLink GPS_RAW_INT를 같은 인터페이스로 공급한다.
+        # Track A preserves the established telemetry/logging API.
         self._gps_pub = self.create_publisher(GpsTelemetry, "/arms/gps", 10)
-        # 실기체는 arms_control_node가 CRSF Attitude(0x1E)를 /arms/attitude로 낸다.
-        # SITL은 PX4 MAVLink ATTITUDE(rad)를 같은 roll/pitch/yaw [deg] 인터페이스로 낸다.
         self._attitude_pub = self.create_publisher(AttitudeTelemetry, "/arms/attitude", 10)
+        self._status_pub = self.create_publisher(IoStatus, "io/status", 10)
+        self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
 
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
             return
 
         threading.Thread(target=self._connect_loop, daemon=True).start()
-        threading.Thread(target=self._crsf_read_loop, daemon=True).start()
         threading.Thread(target=self._mavlink_rx_loop, daemon=True).start()
 
         self.create_timer(1.0 / self._send_rate, self._send_override)
+        self.create_timer(0.2, self._publish_status)
         self.get_logger().info(
-            f"sitl_bridge_node ready  conn={self._conn_str}  crsf={self._crsf_port}")
+            f"sitl_bridge_node ready  conn={self._conn_str}")
 
     # ------------------------------------------------------------------
     # MAVLink connection
@@ -274,7 +187,7 @@ class ArmsSITLCommNode(Node):
                 time.sleep(0.5)
 
     def _publish_gps(self, msg):
-        """PX4 GPS_RAW_INT를 실기체 CRSF GPS와 같은 /arms/gps 형식으로 변환한다."""
+        """PX4 GPS_RAW_INT를 실기체 CRSF GPS와 같은 vehicle/gps 형식으로 변환한다."""
         fix_type = int(getattr(msg, 'fix_type', 1))
         altitude_mm = int(getattr(msg, 'alt', 0))
         velocity_cms = int(getattr(msg, 'vel', 0))
@@ -298,7 +211,7 @@ class ArmsSITLCommNode(Node):
         self._gps_pub.publish(gps)
 
     def _publish_attitude(self, msg):
-        """PX4 MAVLink ATTITUDE(rad)를 source-independent /arms/attitude(deg)로 변환한다."""
+        """PX4 MAVLink ATTITUDE(rad)를 source-independent vehicle/attitude(deg)로 변환한다."""
         att = AttitudeTelemetry()
         att.header.stamp = self.get_clock().now().to_msg()
         att.roll_deg = math.degrees(float(getattr(msg, 'roll', 0.0)))
@@ -308,46 +221,34 @@ class ArmsSITLCommNode(Node):
         if not self._attitude_seen:
             self._attitude_seen = True
             self.get_logger().info(
-                "PX4 ATTITUDE stream active → /arms/attitude "
+                "PX4 ATTITUDE stream active → vehicle/attitude "
                 f"(roll={att.roll_deg:.1f}, pitch={att.pitch_deg:.1f}, yaw={att.yaw_deg:.1f} deg)")
 
+    def _publish_status(self):
+        age = time.monotonic() - self._last_hb if self._last_hb else float('inf')
+        status = IoStatus()
+        status.header.stamp = self.get_clock().now().to_msg()
+        status.source = "px4"
+        status.transport_connected = self._connected and age < HB_TIMEOUT_SEC
+        status.vehicle_telemetry_connected = status.transport_connected
+        status.last_rx_age_ms = 0xffffffff if not math.isfinite(age) else min(int(age * 1000), 0xffffffff)
+        status.last_vehicle_telemetry_age_ms = status.last_rx_age_ms
+        status.fault_reason = "" if status.transport_connected else "PX4 heartbeat timeout"
+        self._status_pub.publish(status)
+
     # ------------------------------------------------------------------
-    # CRSF reader
+    # Vehicle-independent command input
     # ------------------------------------------------------------------
-    def _crsf_read_loop(self):
-        while rclpy.ok():
-            try:
-                fd = open(self._crsf_port, 'rb', buffering=0)
-                self.get_logger().info(f"CRSF port opened: {self._crsf_port}")
-                while rclpy.ok():
-                    channels = _decode_crsf_frame(fd)
-                    if channels:
-                        with self._lock:
-                            self._channels = channels
-                            self._process_switches(channels)
-            except Exception as e:
-                self.get_logger().warn(f"CRSF read error: {e}. Retrying in 2s...")
-                time.sleep(2.0)
-
-    def _process_switches(self, channels):
-        """Track CH5 arm, CH6 mode, and CH7 RTL switch edges."""
-        self._ch5_high = channels[4] > SWITCH_THRESH
-
-        ch6 = channels[5]
-        ch6_high = ch6 > SWITCH_THRESH
-        if ch6_high != (self._prev_ch6 > SWITCH_THRESH):
-            # CH6 low→ACRO(자동/영상유도), high→Stabilized(수동/사람 입력)
-            self._mode_pending = (PX4_CUSTOM_MAIN_MODE_STABILIZED if ch6_high
-                                  else PX4_CUSTOM_MAIN_MODE_ACRO)
-        self._prev_ch6 = ch6
-
-        ch7 = channels[6]
-        if ch7 > SWITCH_THRESH and self._prev_ch7 <= SWITCH_THRESH:
-            # CH7은 PX4 RC kill channel이 아니다. RTL은 level mode가 아니라 명령으로
-            # 한 번만 보낸다. control 노드가 State::RTL을 유지하므로 버튼을 놓아도
-            # 상태/UI와 FC 귀환 모드가 불일치하지 않는다.
-            self._rtl_pending = True
-        self._prev_ch7 = ch7
+    def _on_command(self, command: FlightCommand):
+        """Map semantic command edges to PX4 services; axes go out at the timer rate."""
+        with self._lock:
+            if command.manual_mode != self._command.manual_mode:
+                self._mode_pending = (PX4_CUSTOM_MAIN_MODE_STABILIZED
+                                      if command.manual_mode else PX4_CUSTOM_MAIN_MODE_ACRO)
+            if command.rtl_request and not self._command.rtl_request:
+                self._rtl_pending = True
+            self._command = command
+            self._ch5_high = command.arm
 
     # ------------------------------------------------------------------
     # 50 Hz send timer
@@ -357,7 +258,7 @@ class ArmsSITLCommNode(Node):
             return
 
         with self._lock:
-            chs = list(self._channels)
+            command = self._command
             ch5_high = self._ch5_high
             mode_req = self._mode_pending
             self._mode_pending = None
@@ -389,8 +290,16 @@ class ArmsSITLCommNode(Node):
             self.get_logger().warn("CH7 RTL request → MAV_CMD_NAV_RETURN_TO_LAUNCH")
             self._send_rtl()
 
-        # RC_CHANNELS_OVERRIDE: CRSF → microseconds
-        us = [_crsf_to_us(v) for v in chs]
+        # RC_CHANNELS_OVERRIDE: semantic normalized command → microseconds.
+        def axis(v):
+            return int(1500 + max(-1.0, min(1.0, v)) * 500)
+        us = [1500] * 8
+        us[0], us[1], us[2], us[3] = (axis(command.roll), axis(command.pitch),
+                                      int(1000 + max(0.0, min(1.0, command.throttle)) * 1000),
+                                      axis(command.yaw))
+        us[4] = 2000 if command.arm else 1000
+        us[5] = 2000 if command.manual_mode else 1000
+        us[6] = 2000 if command.rtl_request else 1000
         try:
             self._mav.mav.rc_channels_override_send(
                 self._mav.target_system,

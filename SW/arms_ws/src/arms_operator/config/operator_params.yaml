@@ -1,7 +1,7 @@
-arms_command_hw_node:
+arms_operator_hardware_node:
   ros__parameters:
-    # ROS2 Joy 메시지를 발행할 토픽 (arms_control 이 구독)
-    topic_name: /arms/command
+    # OperatorInput을 발행할 토픽 (arms_control 이 구독)
+    topic_name: operator/input
 
     # ESP32(USB CDC) 안정 경로. /dev/ttyACM* 번호는 재열거 때 바뀔 수 있어
     # by-id(보드 고정) 경로 사용. ESP32 유닛(보드)을 교체하면 이 경로도 갱신할 것.
@@ -17,9 +17,3 @@ arms_command_hw_node:
 
     # 최대 패킷 길이
     serial.max_line_length: 128
-
-    # 300ms 동안 패킷이 없으면 Kill failsafe
-    failsafe.timeout_ms: 300
-
-    # Failsafe 상태 메시지 발행 주기
-    failsafe.publish_rate_hz: 20.0

@@ -323,3 +323,4 @@ arms_control_node:
       prearm_check: true
       prearm_throttle_max: -0.85   # throttle(axes[1]) 이 값 이하(최저)여야 arm 허용
       prearm_stick_tol: 0.15       # roll/pitch/yaw 중앙 허용오차
+      operator_input_timeout_sec: 0.3  # ESP32/SITL 입력 단절 시 RTL 전이 기준

@@ -14,6 +14,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BatteryTelemetry.msg"
   "msg/GpsTelemetry.msg"
   "msg/IbvsDebug.msg"
+  "msg/OperatorInput.msg"
+  "msg/FlightCommand.msg"
+  "msg/IoStatus.msg"
   DEPENDENCIES std_msgs
 )
 

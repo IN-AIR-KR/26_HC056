@@ -2,8 +2,8 @@
 """
 panel.py — A.R.M.S. SITL 튜닝/심판 콘솔 (tkinter GUI)  [arms_sim]
 
-SITL 전용 개발 콘솔. /arms/command 는 발행하지 않는다 (그건 가상 조종기 =
-arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
+SITL 전용 개발 콘솔. 운용자 입력은 발행하지 않는다 (그건 가상 조종기 =
+arms_operator 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/RTL) — 읽기전용 구독
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
@@ -92,7 +92,7 @@ def ros_param_get(node, name, timeout=4.0):
 
 
 class PanelNode(Node):
-    """콘솔 노드 — 미션 상태만 구독(표시용). /arms/command 는 발행하지 않는다."""
+    """콘솔 노드 — 미션 상태만 구독(표시용). 운용자 입력은 발행하지 않는다."""
 
     def __init__(self, q):
         super().__init__("arms_panel_node")
@@ -145,7 +145,7 @@ class PanelGUI:
             font=("Arial", 10, "bold"), bg="#b71c1c", fg="white",
             activebackground="#e53935", command=self.reset_episode)
         self.reset_btn.pack(pady=(7, 0))
-        # LAUNCH/arm/kill/mode 는 가상 조종기(arms_command)로 이동 — /arms/command 발행자는
+        # LAUNCH/arm/RTL/mode 는 가상 조종기(arms_operator)로 이동 — 입력 발행자는
         # 조종기 하나뿐이어야 한다(두 노드가 동시에 쏘면 레이스). 여긴 튜닝/심판만.
 
         # ── 2열 레이아웃 ────────────────────────────────────────────────────
