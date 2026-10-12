@@ -121,6 +121,13 @@ class BalloonReferee(Node):
         self.declare_parameter("speed", SPEED)
         # target = "balloon"(기본) | "drone" : UI 토글로 표적 종류 선택. 선택된 모델만 비행, 나머진 숨김.
         self.declare_parameter("target", "balloon")
+        # 대기 위치(수평) [m]. Z 는 위의 alt 를 그대로 쓴다 → 패널 X/Y/고도 슬라이더로 공을 옮긴다.
+        #   견착 발사기로 기울여 쏠 때 공을 그 조준선 위에 놓으려고 추가 (패널 [발사기 조준선에 놓기]).
+        #   기본값은 예전 고정 대기점 _pose_at(PARK_T) 과 같다 → 안 건드리면 동작 동일.
+        px0, py0, _ = self._pose_at(PARK_T, ALT)
+        self.declare_parameter("pos_x", px0)
+        self.declare_parameter("pos_y", py0)
+        self._last_park_req = None      # 마지막으로 세워둔 (pos_x, pos_y, alt)
         self.target_model = MODEL_BALLOON
         self.hit = False
         self.t = 0.0                    # 대각선 진행도 [0→1]
@@ -163,7 +170,7 @@ class BalloonReferee(Node):
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
         self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)
         self.timer = self.create_timer(1.0 / RATE_HZ, self.tick)
-        px, py, _ = self._pose_at(PARK_T, ALT)
+        px, py, _ = self._park_point()
         self.get_logger().info(
             f"balloon_referee ready. 표적을 시야 안({px:+.0f}, {py:+.0f}, 고도 "
             f"{ALT:.0f}m)에 세워둔 채 대기. [비행 시작] 을 누르면 그 자리에서 "
@@ -185,9 +192,26 @@ class BalloonReferee(Node):
 
     @staticmethod
     def _pose_at(t, alt):
-        """진행도 t(0→1) 에서의 표적 위치. tick 과 대기 위치가 같은 식을 쓰게 한다."""
+        """진행도 t(0→1) 에서의 기본 대각선 위치 (원점 기준)."""
         f = 1.0 - 2.0 * t
         return ((SPAN / 2.0) * f, -(SPAN / 2.0) * f, alt)
+
+    def _park_point(self):
+        """패널이 정한 대기 위치 (pos_x, pos_y, alt)."""
+        return (float(self.get_parameter("pos_x").value),
+                float(self.get_parameter("pos_y").value),
+                float(self.get_parameter("alt").value))
+
+    def _path_at(self, t):
+        """비행 경로: 기본 대각선을 평행이동해 t=PARK_T 에서 대기 위치를 지나게 한다.
+
+        그래서 [비행 시작] 순간 순간이동이 없고, 방향·속도는 예전과 같다.
+        대기 위치가 기본값이면 예전 경로와 정확히 같다.
+        """
+        px, py, pz = self._park_point()
+        bx, by, _ = self._pose_at(t, pz)
+        ox, oy, _ = self._pose_at(PARK_T, pz)
+        return (px + bx - ox, py + by - oy, pz)
 
     def _park_at_start(self):
         """발사 전 대기: 선택된 표적을 '화면에 보이는' 지점(PARK_T)에 세워둔다.
@@ -203,7 +227,8 @@ class BalloonReferee(Node):
         불러도 gz 로 나가는 트래픽이 0 이고, 패널에서 고도 슬라이더를 움직이면
         세워둔 표적도 따라 올라간다.
         """
-        pose = self._pose_at(PARK_T, float(self.get_parameter("alt").value))
+        pose = self._park_point()
+        self._last_park_req = pose
         if self._ball_pos == pose and self.t == PARK_T:
             return
         set_pose(self.target_model, *pose)
@@ -305,7 +330,8 @@ class BalloonReferee(Node):
         #   · 발사 후 정지: 현재 위치에 그대로 멈춤(일시정지). set_pose 를 안 보내면
         #     Gazebo 가 마지막 위치를 유지하므로 사라지지 않고 제자리에 정지.
         if not enabled:
-            if not self._launched_once:
+            # 패널에서 X/Y/고도를 바꾸면 비행 후 정지 상태여도 새 위치로 옮긴다.
+            if not self._launched_once or self._park_point() != self._last_park_req:
                 self._park_at_start()   # 멱등 — 이미 제자리면 no-op
             self._prev_enabled = False
             return
@@ -329,8 +355,6 @@ class BalloonReferee(Node):
         if now < self.pause_until:
             return
 
-        alt = self.get_parameter("alt").value   # 패널 슬라이더로 바뀌는 고도
-
         # 광역 대각선: 화각 제약 scale 없이 SPAN 전체를 이동.
         #   시작 x=+SPAN/2(화면 아래), y=-SPAN/2(화면 오른쪽) = 화면 오른쪽아래 먼 곳
         #   끝   x=-SPAN/2(화면 위),   y=+SPAN/2(화면 왼쪽)   = 화면 왼쪽위 먼 곳
@@ -343,7 +367,7 @@ class BalloonReferee(Node):
         dt = max(0.0, min(dt, 3.0 / RATE_HZ))   # 정지→재개 등 큰 점프 방지
         span = SPAN
         self.t += (speed / max(span, 0.1)) * dt
-        x, y, z = self._pose_at(self.t, alt)
+        x, y, z = self._path_at(self.t)
         set_pose(self.target_model, x, y, z)
         self._ball_pos = (x, y, z)
 
