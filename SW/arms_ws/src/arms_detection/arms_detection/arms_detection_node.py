@@ -280,9 +280,10 @@ class ArmsDetectionNode(Node):
         self._diag_hsv_proposals = []   # 파이프라인 후보(max_candidates) — hsv_debug_image 용
         self._diag_hsv_all = []         # 상위 10개 후보 — debug_image 전체 후보 뷰 용
 
-        # YOLO: 같은 프로세스에서 직접 추론. ultralytics/모델이 없으면(호스트/SITL)
-        # 조용히 비활성화한다. HSV 단독 후보는 안전상 검출로 발행하지 않는다.
-        # 모델 경로/파라미터는 환경변수로 (컨테이너 compose 가 주입).
+        # YOLO: 같은 프로세스에서 직접 추론한다. 이 노드에서 모델은 필수 의존성이다.
+        # 로드 또는 워밍업 실패는 fail-fast로 프로세스를 종료해 시스템 health가
+        # 노드 부재로 즉시 감지할 수 있게 한다. 모델 경로/파라미터는 환경변수로
+        # 컨테이너 compose가 주입한다.
         self._yolo = None
         # 카메라 재학습 모델의 validation F1 최적점은 약 0.32다.
         self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.32"))
@@ -309,11 +310,13 @@ class ArmsDetectionNode(Node):
                 self._yolo.predict(dummy, imgsz=self._yolo_roi_imgsz, verbose=False)
                 self.get_logger().info("YOLO loaded + warmed up (in-process).")
             except Exception as e:
-                self._yolo = None   # 로드/워밍업 실패 → 검출 비활성(노드는 유지)
                 self.get_logger().error(
-                    f"YOLO 로드/워밍업 실패 — 검출 비활성 (GPU OOM/엔진 불일치 등): {e}")
+                    f"YOLO 로드/워밍업 실패 — perception 노드 종료 "
+                    f"(GPU OOM/엔진 불일치 등): {e}")
+                raise RuntimeError("YOLO model initialization failed") from e
         else:
-            self.get_logger().info("ARMS_MODEL unset → detection disabled (HSV proposal only).")
+            self.get_logger().error("ARMS_MODEL is unset — perception 노드 종료")
+            raise RuntimeError("ARMS_MODEL must be set")
 
         # 입력 전송: ARMS_INPUT_COMPRESSED=1 이면 압축(CompressedImage)을 구독·디코드
         # → 컨테이너로 오는 UDP 데이터량 급감(조각 드롭↓). 아니면 raw Image.
@@ -806,15 +809,17 @@ class ArmsDetectionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ArmsDetectionNode()
+    node = None
     try:
+        node = ArmsDetectionNode()
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         # Ctrl-C / docker stop(SIGINT·SIGTERM): rclpy 가 컨텍스트를 이미 닫으므로
         # 여기서 조용히 빠져나온다(아래 rclpy.ok() 가드로 이중 shutdown 방지).
         pass
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

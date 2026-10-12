@@ -190,6 +190,14 @@ class ArmsUINode(Node):
         #   링크가 붙는 데 몇 초 걸리므로, 붙거나 grace 가 지나야 안내 → 켤 때 잠깐 뜨는 초기 LOST 억제.
         self._startup_sound_done = False
         self._det_status = None       # raw [yolo, hsv proposal, legacy slot]
+        # 시스템 기동 상태는 ROS graph의 노드 존재만 1 Hz로 확인한다. 실제 토픽
+        # freshness/값의 유효성은 이 표시의 범위가 아니다.
+        self._system_nodes = {
+            "Video": False,
+            "Operator": False,
+            "Perception": False,
+            "Control": False,
+        }
         history = max(30, int(self.get_parameter("ui.diagnostics_history").value))
         self._diag_history = {
             name: deque(maxlen=history) for name in (
@@ -237,6 +245,9 @@ class ArmsUINode(Node):
 
         # 상태에 따라 비프 간격을 조절하려고 50ms 마다 확인한다.
         self.create_timer(0.05, self._beep_tick)
+        # 시작 health: 핵심 노드가 ROS graph에 올라왔는지만 1 Hz로 표시한다.
+        self.create_timer(1.0, self._check_system_nodes)
+        self._check_system_nodes()
         # 영상이 없어도 창이 뜨도록 대기화면을 주기적으로 그린다(카메라 미연결 대비).
         self.create_timer(0.1, self._ui_tick)
 
@@ -245,6 +256,25 @@ class ArmsUINode(Node):
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
+
+    def _check_system_nodes(self):
+        """현재 namespace 안의 핵심 노드 존재 여부만 갱신한다 (1 Hz)."""
+        try:
+            namespace = self.get_namespace().rstrip("/") or "/"
+            names = {
+                name for name, node_namespace in self.get_node_names_and_namespaces()
+                if (node_namespace.rstrip("/") or "/") == namespace
+            }
+            self._system_nodes = {
+                "Video": "arms_video_node" in names,
+                # 실기체 ESP32 입력 또는 SITL 가상 조종기 중 하나면 된다.
+                "Operator": bool({"arms_operator_hardware_node", "arms_operator_gui_node"} & names),
+                "Perception": "arms_detection_node" in names,
+                "Control": "arms_control_node" in names,
+            }
+        except Exception as e:
+            # graph 조회 실패 자체가 UI를 멈추게 해서는 안 된다. 다음 1 Hz 주기에 재시도.
+            self.get_logger().warn(f"system node graph check failed: {e}")
 
     def _cb_detections(self, msg: DetectionArray):
         self._latest_detections = msg
@@ -411,6 +441,7 @@ class ArmsUINode(Node):
                               (0, 0, 255), max(0.8, w / 900.0), 2)
         # 대기화면에선 중앙 십자선·부제를 그리지 않는다(요청).
         self._draw_link_status(frame)            # 모드·TELM 연결 표시
+        self._draw_system_status(frame)
         self._draw_battery(frame)
         self._draw_power_ui(frame)               # 전원 버튼 사용 가능하게
         self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 이미 화면 크기 → 항등(터치 매핑)
@@ -612,6 +643,7 @@ class ArmsUINode(Node):
         self._draw_crosshair(frame)
         # 현재 모드(AUTO/MANUAL)·ELRS 연결 여부는 상단 중앙에 항상 표시.
         self._draw_link_status(frame)
+        self._draw_system_status(frame)
         # 배터리(전압/퍼센트)는 하단 중앙에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
         # GPS fix/위성수/고도/지상속도는 우상단에 네 줄로 표시한다.
@@ -1009,6 +1041,31 @@ class ArmsUINode(Node):
         cv2.putText(frame, mode_str, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
         cv2.putText(frame, link_txt, (x + mw, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, link_txt, (x + mw, y), font, scale, link_col, thick, cv2.LINE_AA)
+
+    def _draw_system_status(self, frame):
+        """좌측 중앙에 핵심 시스템 노드의 graph 존재 여부를 표시한다."""
+        h, w = frame.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.45, h / 1100.0)
+        thick = max(1, int(round(scale * 2)))
+        margin = max(10, int(w * 0.02))
+        line_h = max(22, int(h * 0.05))
+        labels = tuple(self._system_nodes)
+        label_width = max(cv2.getTextSize(label, font, scale, thick)[0][0] for label in labels)
+        status_x = margin + label_width + max(18, int(w * 0.025))
+        text_height = cv2.getTextSize("Online", font, scale, thick)[0][1]
+        y0 = max(text_height + margin, (h - line_h * len(labels)) // 2 + text_height)
+
+        for index, label in enumerate(labels):
+            online = self._system_nodes[label]
+            status, color = ("Online", (0, 220, 0)) if online else ("Missing", (0, 0, 255))
+            y = y0 + index * line_h
+            for text, x, text_color in ((label, margin, (255, 255, 255)),
+                                        (status, status_x, color)):
+                cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0),
+                            thick + 2, cv2.LINE_AA)
+                cv2.putText(frame, text, (x, y), font, scale, text_color,
+                            thick, cv2.LINE_AA)
 
     def _draw_battery(self, frame):
         """배터리 전압/잔량을 하단 중앙에 표시 — 자동/수동·디버그 무관하게 항상
