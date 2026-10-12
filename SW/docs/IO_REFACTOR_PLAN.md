@@ -1,7 +1,7 @@
 # I/O 분리 및 ROS 인터페이스 정리 계획
 
-> 상태: **계획 단계**. 이 문서는 현재 인터페이스를 변경하지 않으며, 구현 착수 전에
-> 토픽 계약과 노드 책임을 확정하기 위한 기준이다.
+> 상태: **단계 분할 계획**. 통신 분리와 전체 토픽명 전환을 같은 변경으로 묶지 않는다.
+> 각 단계는 독립적으로 SITL 비행 검증을 통과한 뒤 다음 단계로 진행한다.
 
 ## 1. 목표
 
@@ -17,6 +17,24 @@ ELRS 송신, 실기체 telemetry 정규화를 함께 맡고 있다. 이 구조�
 3. UI, recorder, Flight Analyzer는 실기체와 SITL에 공통인 정규화 토픽만 사용한다.
 4. 한 토픽에는 한 launch 구성에서 하나의 책임 있는 publisher만 둔다.
 5. `io/status`는 link의 관측 결과이고, RTL 판단은 control의 책임이다.
+
+### 작업 분할 원칙
+
+이 계획에는 성격이 다른 두 작업이 있다.
+
+1. **통신 경계 분리**: control에서 ESP32·CRSF·MAVLink를 제거하고, 기체 비종속
+   입력/명령 계약으로 I/O 어댑터와 연결한다.
+2. **전역 토픽명 전환**: camera, perception, vehicle, mission, sim 등 전체 공개
+   ROS API를 상대 이름·도메인 이름으로 바꾼다.
+
+둘을 한 번에 수행하면 비행 이상이 생겼을 때 제어 로직, I/O 변환, namespace/remap,
+UI·recorder·viewer 중 어느 쪽이 원인인지 분리할 수 없다. 따라서 **1번을 먼저 끝내고
+안정 비행을 확인한 뒤에만 2번에 착수**한다.
+
+통신 분리 단계에서 `operator/input`, `control/flight_command`, `io/status` 세 이름은
+예외적으로 먼저 도입한다. 이들은 단순 rename이 아니라 control과 하드웨어 사이의 새
+계약 자체이므로, 이를 미루면 I/O 분리가 불가능하다. 그 외의 공개 토픽명은 토픽명
+전환 단계까지 기존 이름을 유지한다.
 
 ### Namespace 규칙
 
@@ -273,33 +291,157 @@ IoStatus
 SITL에서 의미 없는 field는 0이나 false로 꾸며내기보다 `valid`/source 표시를 두어
 명시적으로 unavailable로 표현한다.
 
-## 6. 전환 순서
+## 6. 단계별 전환 계획
 
-1. 새 메시지(`OperatorInput`, `FlightCommand`, `IoStatus`)와 새 토픽을 추가한다.
-2. `arms_operator_hardware_node`와 `arms_operator_gui_node`로 기존 ESP32·가상 조종기 출력을
-   `operator/input`으로 옮긴다.
-3. control의 serial/CRSF 의존을 제거하고 `control/flight_command`를 발행하도록
-   전환한다. 이 단계에서 input timeout과 RTL 정책도 control로 이동한다.
-4. 실기체 `arms_crsf_io_node`를 별도 패키지에 추가하고, 여기에서 `io/status`도
-   발행한다.
-5. `sitl_bridge_node`를 동일한 `flight_command`·`vehicle`·`io/status` 계약에 맞춘다.
-6. camera, perception, mission, debug 토픽을 namespace별로 일괄 전환하고 launch remap을
-   제거한다.
-7. `DESIGN.md`의 패키지 구조, 노드 그래프, 토픽 표, 상태·reset 설명을 새 package와
-   상대 토픽 namespace 규칙으로 전면 갱신한다.
-8. UI와 recorder의 구독 목록을 새 토픽으로 갱신한다. recorder manifest에는
-   `topic_schema_version`과 launch namespace를 저장한다.
-9. `scripts/ibvs_viewer`의 bag reader, telemetry/graph binding, 화면 라벨을 새 상대
-   토픽 계약으로 갱신한다. 구형 bag fallback은 구현하지 않으며, schema version이 맞지
-   않으면 지원하지 않는 로그임을 명확히 알린다.
-10. 실기체와 SITL 각각에서 topic graph, timeout RTL, arm disarm, GPS/attitude/battery
-   recording을 검증한 뒤 legacy 토픽과 CRSF 직접 접근 코드를 제거한다.
+### Phase 0 — 기준선 고정 및 관측 준비
 
-전환 중에는 old/new 토픽을 장기간 병행 발행하지 않는다. 병행 publisher는 RC 채널과
-상태 이벤트에서 race를 만들기 쉽다. 각 단계는 launch 단위로 원자적으로 전환한다.
+코드를 옮기기 전에 현재 기준 브랜치에서 다음을 보관한다.
+
+- SITL 정상 비행 1회와 arm, manual/auto 전환, RTL, target loss의 기대 동작을 기록한다.
+- `ros2 node list`, `ros2 topic list -t`, 핵심 토픽의 `ros2 topic info -v`를 캡처한다.
+- control 입력·출력과 CRSF/MAVLink 경계를 표로 확정한다. 이 단계에서는 rename이나
+  package 이동을 하지 않는다.
+
+**통과 기준:** 기준 브랜치에서 동일 launch와 파라미터로 재현 가능한 SITL 비행 로그가 있다.
+
+---
+
+### Track A — control 통신 분리
+
+이 track의 목적은 control의 환경 의존성을 없애는 것이다. camera, perception, mission,
+debug, telemetry의 기존 토픽명은 바꾸지 않는다. 새 boundary topic 세 개만 사용한다.
+
+#### A1. 메시지와 경계 계약만 추가
+
+- `OperatorInput`, `FlightCommand`, `IoStatus` 메시지를 추가한다.
+- `operator/input`, `control/flight_command`, `io/status`의 필드 단위·범위·QoS를 확정한다.
+- 아직 기존 노드의 publisher/subscriber나 launch는 바꾸지 않는다.
+
+**검증:** 전 워크스페이스 build, 메시지 interface 확인, 기존 SITL 회귀 없음.
+
+#### A2. operator 입력을 control에서 분리
+
+- ESP32 serial 처리와 가상 조종기 처리를 `arms_operator`로 분리한다.
+- 두 입력 노드는 모두 `operator/input`만 발행한다.
+- control은 이 토픽을 받아 기존과 같은 arm, manual/auto, RTL, 300 ms input timeout을
+  판단한다. ESP32 UART 직접 접근은 이 단계에서 control에서 제거한다.
+- control의 기존 기체 출력 경로와 camera/perception/mission/debug 토픽명은 유지한다.
+
+**검증:** SITL GUI와 ESP32 각각에서 스틱·arm·모드 전환·입력 단절 RTL이 기준선과 같은지
+확인한다. `operator/input` publisher는 launch당 정확히 하나여야 한다.
+
+#### A3. FlightCommand를 shadow 관측으로 검증
+
+- control이 기존 출력과 동일한 의미의 `control/flight_command`를 추가 발행한다.
+- 이 단계의 `FlightCommand`는 **관측 전용**이다. 새 I/O 어댑터를 FC에 연결하지 않으므로
+  RC를 두 경로가 동시에 보내지 않는다.
+- 기존 command/CRSF 출력과 `FlightCommand`를 rosbag으로 나란히 비교해 축 부호,
+  throttle 범위, arm, manual/auto, RTL edge가 일치하는지 확인한다.
+
+**검증:** 실제 FC 또는 PX4에 새 명령을 보내지 않은 상태에서, 비교 로그가 전 구간 일치한다.
+불일치가 있으면 A2/A3에서 수정하며 다음 단계로 진행하지 않는다.
+
+#### A4. SITL I/O 어댑터 전환
+
+- `sitl_bridge_node`가 `control/flight_command`만 구독하도록 구현한다.
+- MAVLink RC/arm/mode/RTL 변환과 PX4 heartbeat 관측을 이 노드로 옮긴다.
+- control의 SITL/MAVLink 직접 코드를 제거한다. 기존 GPS·attitude 토픽 이름은 이 단계에서
+  유지하고, `io/status`만 새로 발행한다.
+- launch에서는 기존 PX4 제어 publisher를 제거한 뒤 bridge 하나만 활성화한다.
+
+**검증:** SITL에서 auto/manual, arm/disarm, RTL, PX4 재기동 후 reconnect, input timeout을
+반복한다. PX4로 향하는 command publisher는 bridge 하나여야 한다.
+
+#### A5. 실기체 CRSF I/O 어댑터 전환
+
+- `arms_flight_io` 패키지에 실기체 CRSF adapter를 둔다.
+- adapter는 `FlightCommand → CRSF RC/AUX` 변환, CRSF telemetry 수신, raw CRSF 기록,
+  `io/status` 발행만 담당한다. RTL 정책은 넣지 않는다.
+- control에서 CRSF parser, serial port, ELRS mapping 코드를 제거한다.
+- GPS·attitude·battery의 기존 토픽명은 유지한다. `vehicle/*` rename은 Track B의 일이다.
+
+**검증:** 벤치에서 arm/disarm·manual/auto·RTL AUX, ESP32 300 ms 단절, CRSF telemetry
+freshness를 확인한다. 프로펠러를 제거한 상태에서 먼저 수행한다.
+
+#### A6. 통신 분리 안정화와 정리
+
+- SITL과 실기체 모두에서 control source에 UART device, CRSF, MAVLink, Gazebo 관련 코드가
+  남지 않았는지 확인한다.
+- `arms_operator`, `arms_flight_io`, `arms_control`의 package 경계만 문서화한다.
+- 이 시점에는 UI, recorder, Flight Analyzer의 기존 telemetry/camera/perception 이름을
+  그대로 유지한다. 기능 변경 없이 안정 비행을 먼저 확보한다.
+
+**Track A 종료 기준:** control은 `operator/input`·기존 perception/telemetry·`io/status`를
+입력으로 받고 `control/flight_command`와 기존 mission/debug를 출력한다. SITL과 실기체
+비행 검증이 모두 끝난 상태여야 한다.
+
+---
+
+### Track B — 전체 토픽명·namespace 리팩터링
+
+Track A가 안정화된 뒤에만 진행한다. 이 track에서는 메시지 의미나 FC 변환을 바꾸지 않고,
+Section 3의 as-is → to-be 이름만 launch 단위로 전환한다.
+
+#### B1. 카메라와 perception 도메인
+
+- `camera/*`, `perception/*`으로 전환한다.
+- video, detection, control subscriber, UI의 해당 구독을 같은 변경에서 맞춘다.
+- image transport 파생 토픽도 base 이름과 함께 바꾼다.
+
+**검증:** camera frame rate, detection rate, bbox 좌표와 control 입력이 기준선과 같은지
+비교한다. 이 단계에서는 유도 수식이나 gain을 수정하지 않는다.
+
+#### B2. control·mission·debug 도메인
+
+- 남아 있는 `control/debug`, `control/ibvs_debug`, `control/looming_debug`,
+  `mission/state`를 전환한다. `control/flight_command`는 Track A에서 이미 전환되어 있다.
+- UI의 상태 표시와 PlotJuggler 레이아웃을 함께 갱신한다.
+
+**검증:** 상태 머신 전이, UI 상태, debug 값이 이전 로그와 같은 의미·단위인지 확인한다.
+
+#### B3. vehicle·I/O telemetry 도메인
+
+- 기존 GPS, attitude, battery, CRSF raw 토픽을 `vehicle/*`, `io/crsf/*`, `io/status`로
+  전환한다.
+- 실기체 CRSF adapter와 SITL bridge가 같은 `vehicle/*` 계약을 발행하게 한다.
+
+**검증:** 실기체와 SITL 각각에서 GPS fix, attitude, battery, I/O link 상태의 type·publisher
+수·갱신률을 비교한다.
+
+#### B4. SITL 전용 API
+
+- `sim/hit`, `sim/reset`, `sim/reset_event`, `sim/viz/*`로 전환한다.
+- panel, referee, launcher, reset manager, RViz를 같은 launch에서 전환한다.
+
+**검증:** Gazebo를 유지한 PX4 reset, reset event 1회 발행, hit → RTL, RViz marker/path를
+SITL에서 확인한다. 실기체 launch에는 sim node와 sim topic이 없어야 한다.
+
+#### B5. recorder, Flight Analyzer, 문서 cutover
+
+- recorder의 녹화 목록과 manifest에 최종 토픽 목록·`topic_schema_version`·namespace를
+  기록한다.
+- `scripts/ibvs_viewer`의 bag reader, graph binding, 3D telemetry binding, UI 라벨을 최종
+  계약으로 전환한다.
+- `DESIGN.md`, SETUP 문서, launch 설명의 토픽 표와 mermaid를 최종 구조로 갱신한다.
+- 구형 bag 지원을 넣지 않고, schema version이 맞지 않는 bag은 명확히 거부한다.
+
+**Track B 종료 기준:** Section 3의 to-be 표가 실제 `ros2 topic list -t`와 일치하고,
+새 rosbag 하나를 recorder와 Flight Analyzer로 끝까지 열 수 있다.
+
+### 공통 변경 규칙
+
+- old/new 토픽을 장기간 dual publish하지 않는다. 특히 RC/AUX·arm·RTL은 launch당
+  publisher 하나만 허용한다.
+- 단, A3의 `FlightCommand`는 FC에 연결되지 않은 shadow 관측이므로 안전하다.
+- 각 phase는 별도 커밋과 별도 SITL 검증 로그를 남긴다. 제어 gain, 물리량, 모델 변경은
+  I/O 또는 rename phase와 같은 커밋에 넣지 않는다.
+- 문제 발생 시 마지막으로 통과한 phase로만 되돌린다. 두 track의 변경을 섞어서 원인을
+  상쇄시키지 않는다.
 
 ## 7. 완료 기준
 
+- Track A 완료 전에는 아래 최종 조건 중 토픽명 관련 조건을 요구하지 않는다. Track A의
+  성공 기준은 **통신 경계 분리 후 기준선과 같은 비행 동작**이다.
 - control source에 CRSF, UART device, MAVLink, Gazebo 조건 분기가 없다.
 - 실기체와 SITL 모두 control이 같은 `FlightCommand` 메시지를 출력한다.
 - UI, recorder, Flight Analyzer가 `vehicle/*`, `io/status`, `mission/state`,
