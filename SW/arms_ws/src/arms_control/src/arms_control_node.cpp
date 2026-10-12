@@ -1232,8 +1232,16 @@ class ArmsControlNode : public rclcpp::Node {
       flight_cmd.throttle = std::clamp((joy_axes_[1] + 1.0F) * 0.5F, 0.0F, 1.0F);
       flight_cmd.yaw = joy_axes_[0];
     } else {
-      flight_cmd.roll = std::clamp(roll_rate_cmd / max_rate_dps_, -1.0, 1.0);
-      flight_cmd.pitch = std::clamp(pitch_rate_cmd / max_rate_dps_, -1.0, 1.0);
+      // Preserve the former CRSF path's two-stage limit: guidance output is
+      // bounded by max_cmd_rate_dps before conversion to the FC stick range.
+      // Limiting only to [-1, 1] here would permit max_rate_dps full-stick
+      // commands and materially change the tuned controller behavior.
+      const double limited_roll = std::clamp(
+          roll_rate_cmd, -max_cmd_rate_dps_, max_cmd_rate_dps_);
+      const double limited_pitch = std::clamp(
+          pitch_rate_cmd, -max_cmd_rate_dps_, max_cmd_rate_dps_);
+      flight_cmd.roll = limited_roll / max_rate_dps_;
+      flight_cmd.pitch = limited_pitch / max_rate_dps_;
       flight_cmd.throttle = std::clamp(thrust, 0.0F, 1.0F);
       flight_cmd.yaw = 0.0F;
     }
