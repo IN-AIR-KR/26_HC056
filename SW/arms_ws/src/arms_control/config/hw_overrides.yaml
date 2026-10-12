@@ -7,7 +7,9 @@
 #   arms.launch.py          control_params.yaml → 이 파일
 #   *_sitl.launch.py        control_params.yaml 만  ← 이 파일 안 실림
 #
-arms_control_node:
+# 노드 키는 namespace 무관 와일드카드로 둔다. 런치가 /arms 네임스페이스를 쓰는데
+# 기존 "arms_control_node:" 는 /arms_control_node 으로만 매칭돼 이 파일 전체가 조용히 무시됐었다.
+/**/arms_control_node:
   ros__parameters:
     # 발사기 고정용 Jetson PWM 서보. 핀 mux와 sysfs 권한이 준비된 실기체에서만 켠다.
     servo:

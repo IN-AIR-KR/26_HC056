@@ -40,6 +40,7 @@ setup(
             "panel = arms_sim.panel:main",
             "sitl_reset_manager = arms_sim.sitl_reset_manager:main",
             "sitl_viz = arms_sim.sitl_viz:main",
+            "launcher = arms_sim.launcher:main",
         ],
     },
 )

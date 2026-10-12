@@ -11,7 +11,9 @@
 #   ROS 파라미터가 아니라 docker compose 의 environment(ARMS_*) 로 관리한다.
 #
 # yaml 만 고치고 `docker compose ... restart` 하면 반영된다(재빌드 불필요).
-arms_detection_node:
+# 노드 키는 namespace 무관 와일드카드로 둔다. 런치가 /arms 네임스페이스를 쓰는데
+# 기존 "arms_detection_node:" 는 /arms_detection_node 으로만 매칭돼 이 파일 전체가 조용히 무시됐었다.
+/**/arms_detection_node:
   ros__parameters:
     # =====================================================================
     # 검출 처리

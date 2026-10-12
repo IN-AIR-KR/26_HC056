@@ -6,7 +6,9 @@
 # 실기체는 hw_overrides.yaml 이 이 위에 얹혀 델타만 덮어쓴다
 # (control.launch.py / arms.launch.py). SITL 런치는 이 파일만 읽는다.
 
-arms_control_node:
+# 노드 키는 namespace 무관 와일드카드로 둔다. 런치가 /arms 네임스페이스를 쓰는데
+# 기존 "arms_control_node:" 는 /arms_control_node 으로만 매칭돼 이 파일 전체가 조용히 무시됐었다.
+/**/arms_control_node:
   ros__parameters:
 
     # =====================================================================

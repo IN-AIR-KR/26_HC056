@@ -350,7 +350,11 @@
          Upward-facing camera (+Z body)
          ================================================================ -->
     <link name="upward_camera_link">
-      <pose relative_to="base_link">0 0 1.0 0 -1.5708 0</pose>
+      <!-- 노즈콘 끝 장착 (실기체 기준). 전장 34.1cm = 꼬리 -0.191 ~ 노즈 +0.150,
+           base_link 원점 = 무게중심(꼬리에서 19.1cm, 실측 일치) → 카메라 z = 0.15.
+           이전 값 1.0m 는 10g 질량이 1m 레버암에 붙어
+           roll/pitch 관성을 약 5배로 키우고 IBVS 에 회전-병진 결합 오차를 만들었다. -->
+      <pose relative_to="base_link">0 0 0.15 0 -1.5708 0</pose>
       <inertial>
         <mass>0.01</mass>
         <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz></inertia>

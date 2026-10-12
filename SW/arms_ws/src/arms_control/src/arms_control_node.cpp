@@ -514,6 +514,7 @@ class ArmsControlNode : public rclcpp::Node {
         "operator/input", rclcpp::SensorDataQoS(),
         [this](arms_msgs::msg::OperatorInput::SharedPtr msg) {
           last_operator_input_time_ = now();
+          operator_input_received_ = true;
           joy_axes_[0] = msg->yaw;
           joy_axes_[1] = msg->throttle;
           joy_axes_[2] = msg->roll;
@@ -609,6 +610,11 @@ class ArmsControlNode : public rclcpp::Node {
     // Control loop timer
     // ----------------------------------------------------------------
     last_tick_ = now();
+    // last_operator_input_time_ 도 now() 로 초기화해야 한다. 기본 생성자({})는
+    // now()(RCL_ROS_TIME)와 clock_type 이 다른 Time 을 만들어서, 첫 operator/input
+    // 메시지가 오기 전에 control_loop 가 한 번이라도 먼저 돌면
+    // (now_t - last_operator_input_time_) 가 "different time sources" 로 즉시 abort 한다.
+    last_operator_input_time_ = now();
     auto period = std::chrono::duration<double>(1.0 / control_rate_hz_);
     timer_ = create_wall_timer(
         std::chrono::duration_cast<std::chrono::nanoseconds>(period),
@@ -1116,7 +1122,8 @@ class ArmsControlNode : public rclcpp::Node {
     //   ※ 자동 CH5 arm 자체는 스위치와 분리되어 상태머신 상태(auto_arm_states_)로 결정한다.
     // command UART가 끊긴 경우에는 직전 틱에서 실제로 arm 상태였던 기체만 무장을
     // 유지해 FC GPS Rescue로 넘긴다. 미무장 상태의 통신 단절이 새 arm을 만들면 안 된다.
-    const bool operator_input_lost = joy_command_lost_ ||
+    // No node-clock timestamp exists until the first operator input arrives.
+    const bool operator_input_lost = !operator_input_received_ || joy_command_lost_ ||
         ((now_t - last_operator_input_time_).seconds() > operator_input_timeout_sec_);
     const bool effective_arm =
         (joy_arm_ && !require_arm_reset_) ||
@@ -1400,6 +1407,7 @@ class ArmsControlNode : public rclcpp::Node {
   //   ARM 스위치를 DISARM 으로 내리면 false. → 재토글해야만 arm.
   bool require_arm_reset_{true};
   double operator_input_timeout_sec_{0.3};
+  bool operator_input_received_{false};
   rclcpp::Time last_operator_input_time_{};
 
   bool io_connected_{false};
