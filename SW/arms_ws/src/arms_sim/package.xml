@@ -14,8 +14,6 @@
   <exec_depend>arms_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
-  <!-- panel: 노드 파라미터 서비스(get/set_parameters) 직접 호출 -->
-  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <!-- sitl_viz (rviz 시각화) -->

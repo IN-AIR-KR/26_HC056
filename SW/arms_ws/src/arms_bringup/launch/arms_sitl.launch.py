@@ -15,7 +15,6 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - arms_operator_gui_node  (가상 조종기 → operator/input)
   - panel                   (튜닝/심판 콘솔)                          [arms_sim]
   - referee                 (표적 풍선/드론 비행 + 명중 판정)          [arms_sim]
-  - launcher                (견착 발사기: 각도 조절·분리 발사·재장전)    [arms_sim]
   - arms_ui_node            (OpenCV 영상 오버레이)
   - sitl_viz + rviz2        (3D 궤적/기체/표적, 기본 기동; rviz:=false 로 생략) [arms_sim]
   - plotjuggler             (5초 뒤)
@@ -224,12 +223,6 @@ def generate_launch_description():
             package="arms_sim", executable="referee",
             namespace="arms", name="balloon_referee", output="screen",
             parameters=[str(sim_config)],
-        ),
-        # 견착 발사기 (앙각/방위 조절 + LOCK→TRACK 에 분리 발사 + RESET 재장전). SITL 전용.
-        #   node name = arms_launcher (panel 의 LAUNCHER_NODE 와 일치必).
-        Node(
-            package="arms_sim", executable="launcher",
-            namespace="arms", name="arms_launcher", output="screen",
         ),
         # UI 오버레이
         Node(

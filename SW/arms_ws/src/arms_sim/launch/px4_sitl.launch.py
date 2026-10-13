@@ -33,8 +33,6 @@ from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
-from arms_sim.launcher_geometry import spawn_pose_str
-
 # 자동 disarm / 페일세이프 끄기 (GCS/RC 없는 SITL 자율비행 셋업).
 #   COM_DISARM_PRFLT 0  = arm 후 이륙 지연 자동 disarm 해제 (가만히 둬도 안 멈춤)
 #   NAV_DLL_ACT      0  = GCS(데이터링크) 연결 끊김 페일세이프 해제
@@ -53,12 +51,6 @@ PX4_PARAMS = {
     "MC_ACRO_P_MAX": 400,
     "MPC_MAN_TILT_MAX": 65,
     "MPC_TILTMAX_AIR": 65,
-    # 견착 발사기: 앙각 30° 이하(수직 기준 60° 이상 기울기)에서도 ARM/발사돼야 한다.
-    #   PX4 고장감지기(FD)는 기본 60° 넘게 기울면 'Attitude failure' 로 ARM 을 거부하고
-    #   비행 중엔 비상정지까지 걸 수 있다. 0 = 해당 축 검사 끔.
-    #   ★ 실기체 Pixhawk 에도 같은 결정이 필요하다 (낮은 앙각 발사를 할 거라면).
-    "FD_FAIL_P": 0,
-    "FD_FAIL_R": 0,
 }
 
 # 종료/재기동 시 정리할 프로세스 패턴 (pkill -f).
@@ -132,10 +124,6 @@ def _setup(context, *args, **kwargs):
         # Wayland 세션에서 gz sim 3D 뷰 마우스 입력(휠 줌/드래그 회전)이 막히는 문제
         # → Qt 를 X11(xcb)로 강제.
         "QT_QPA_PLATFORM": "xcb",
-        # 견착 발사기: 드론을 지면이 아니라 발사기 튜브 끝(수직 장착 자세)에 스폰한다.
-        #   arms_launcher 의 DetachableJoint 가 '나타난 순간의 상대 위치' 로 물기 때문에
-        #   여기가 튜브 끝과 정확히 맞아야 한다. 값은 launcher_geometry 하나에서 나온다.
-        "PX4_GZ_MODEL_POSE": spawn_pose_str(),
     })
 
     actions = [
