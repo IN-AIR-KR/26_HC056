@@ -35,6 +35,7 @@ import time
 import numpy as np
 import cv2
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -238,7 +239,7 @@ class _TargetFilter:
 
 class ArmsDetectionNode(Node):
     def require_parameter(self, name):
-        self.declare_parameter(name)
+        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(

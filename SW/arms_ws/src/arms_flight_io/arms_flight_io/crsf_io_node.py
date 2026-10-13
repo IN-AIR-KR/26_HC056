@@ -9,6 +9,7 @@ import math
 import time
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from std_msgs.msg import Int16MultiArray
 from arms_msgs.msg import (AttitudeTelemetry, BatteryTelemetry, CrsfTelemetry,
@@ -55,7 +56,7 @@ def _packed_channels(channels: list[int]) -> bytes:
 
 class CrsfIoNode(Node):
     def require_parameter(self, name):
-        self.declare_parameter(name)
+        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(

@@ -29,6 +29,7 @@ import subprocess
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
@@ -111,7 +112,7 @@ def set_pose(model, x, y, z):
 
 class BalloonReferee(Node):
     def require_parameter(self, name):
-        self.declare_parameter(name)
+        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(

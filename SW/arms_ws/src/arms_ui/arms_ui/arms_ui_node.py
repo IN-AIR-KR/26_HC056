@@ -24,6 +24,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
@@ -48,7 +49,7 @@ STATE_COLORS = {
 
 class ArmsUINode(Node):
     def require_parameter(self, name):
-        self.declare_parameter(name)
+        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(

@@ -43,9 +43,10 @@ struct ControllerPacket
 class ArmsOperatorHardwareNode : public rclcpp::Node
 {
 public:
-  void declare_required_parameter(const std::string & name)
+  void declare_required_parameter(
+    const std::string & name, rclcpp::ParameterType type)
   {
-    const auto & value = declare_parameter(name, rclcpp::ParameterValue{});
+    const auto & value = declare_parameter(name, type);
     if (value.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
       throw std::runtime_error(
         "Required parameter '" + name + "' is missing for " + get_fully_qualified_name());
@@ -55,11 +56,11 @@ public:
   ArmsOperatorHardwareNode()
   : Node("arms_operator_hardware_node")
   {
-    declare_required_parameter("topic_name");
-    declare_required_parameter("serial.device");
-    declare_required_parameter("serial.baud");
-    declare_required_parameter("serial.poll_rate_hz");
-    declare_required_parameter("serial.max_line_length");
+    declare_required_parameter("topic_name", rclcpp::ParameterType::PARAMETER_STRING);
+    declare_required_parameter("serial.device", rclcpp::ParameterType::PARAMETER_STRING);
+    declare_required_parameter("serial.baud", rclcpp::ParameterType::PARAMETER_INTEGER);
+    declare_required_parameter("serial.poll_rate_hz", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("serial.max_line_length", rclcpp::ParameterType::PARAMETER_INTEGER);
     topic_name_ = get_parameter("topic_name").as_string();
     serial_device_ = get_parameter("serial.device").as_string();
     serial_baud_ = get_parameter("serial.baud").as_int();
