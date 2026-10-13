@@ -28,15 +28,15 @@ import time
 from pathlib import Path
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 
 
 class SitlResetManager(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -48,14 +48,14 @@ class SitlResetManager(Node):
 
     def __init__(self):
         super().__init__("arms_sitl_reset_manager")
-        self.require_parameter("px4_dir")
-        self.require_parameter("world")
-        self.require_parameter("model")
+        self.require_parameter("px4_dir", Parameter.Type.STRING)
+        self.require_parameter("world", Parameter.Type.STRING)
+        self.require_parameter("model", Parameter.Type.STRING)
         # PX4 가 spawn 하는 '인스턴스' 이름 (모델명 + _<px4_instance>). attach 대상.
-        self.require_parameter("drone_model")
+        self.require_parameter("drone_model", Parameter.Type.STRING)
         # 되돌릴 출발 위치. PX4 는 PX4_GZ_MODEL_POSE 없이 spawn 하므로 model.sdf 의
         # 자기 pose(0 0 0.24)가 곧 출발점이다. 지면에 닿으며 0.19 근처로 가라앉는다.
-        self.require_parameter("spawn_pose")
+        self.require_parameter("spawn_pose", Parameter.Type.DOUBLE_ARRAY)
         self._busy = threading.Lock()
         self._reset_pub = self.create_publisher(Empty, "/arms/reset", 10)
         self.create_service(Trigger, "/arms/sitl/reset", self._reset)

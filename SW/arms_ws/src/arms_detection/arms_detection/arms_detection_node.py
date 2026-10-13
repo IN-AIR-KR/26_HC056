@@ -35,9 +35,9 @@ import time
 import numpy as np
 import cv2
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Float32MultiArray
@@ -238,8 +238,8 @@ class _TargetFilter:
 # ---------------------------------------------------------------------------
 
 class ArmsDetectionNode(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -252,32 +252,32 @@ class ArmsDetectionNode(Node):
 
         # config/detection.yaml의 필수 파라미터. 환경별 튜닝은
         # detection.indoor.yaml override로 덮는다.
-        self.require_parameter("proc_width")
-        self.require_parameter("use_hsv")
+        self.require_parameter("proc_width", Parameter.Type.INTEGER)
+        self.require_parameter("use_hsv", Parameter.Type.BOOL)
         # HSV→ROI YOLO 가 못 찾은 프레임에 전체 화면 YOLO 를 도는 주기(1=매프레임, 0=끔).
-        self.require_parameter("yolo.full_fallback_interval")
-        self.require_parameter("yolo.proposal_crop_px")
+        self.require_parameter("yolo.full_fallback_interval", Parameter.Type.INTEGER)
+        self.require_parameter("yolo.proposal_crop_px", Parameter.Type.INTEGER)
 
         # HSV 붉은색 후보 제안 (단독 LOCK 금지 — 최종 승인은 YOLO)
-        self.require_parameter("hsv.max_candidates")
-        self.require_parameter("hsv.texture_shortlist")
-        self.require_parameter("hsv.min_area_ratio")
-        self.require_parameter("hsv.hue_sigma")
-        self.require_parameter("hsv.prob_threshold")
-        self.require_parameter("hsv.sat_center")
-        self.require_parameter("hsv.sat_scale")
-        self.require_parameter("hsv.val_min")
-        self.require_parameter("hsv.val_max_center")
-        self.require_parameter("hsv.val_scale")
-        self.require_parameter("hsv.min_circularity")
-        self.require_parameter("hsv.texture_scale")
+        self.require_parameter("hsv.max_candidates", Parameter.Type.INTEGER)
+        self.require_parameter("hsv.texture_shortlist", Parameter.Type.INTEGER)
+        self.require_parameter("hsv.min_area_ratio", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.hue_sigma", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.prob_threshold", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.sat_center", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.sat_scale", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.val_min", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.val_max_center", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.val_scale", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.min_circularity", Parameter.Type.DOUBLE)
+        self.require_parameter("hsv.texture_scale", Parameter.Type.DOUBLE)
 
         # 표적 필터 (KF 평활 + 이상치 게이트)
         #   상태 전이: NEW → TRACKED ⇄ LOST → REMOVED → (다음 검출) NEW
-        self.require_parameter("filter.confirm_frames")
-        self.require_parameter("filter.confirm_dist")
-        self.require_parameter("filter.jump_gate")
-        self.require_parameter("filter.max_age")
+        self.require_parameter("filter.confirm_frames", Parameter.Type.INTEGER)
+        self.require_parameter("filter.confirm_dist", Parameter.Type.DOUBLE)
+        self.require_parameter("filter.jump_gate", Parameter.Type.DOUBLE)
+        self.require_parameter("filter.max_age", Parameter.Type.INTEGER)
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)

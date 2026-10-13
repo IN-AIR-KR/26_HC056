@@ -29,7 +29,6 @@ import subprocess
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
@@ -111,8 +110,8 @@ def set_pose(model, x, y, z):
 
 
 class BalloonReferee(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -124,13 +123,13 @@ class BalloonReferee(Node):
         super().__init__("balloon_referee")
         # enabled=false(기본) 면 표적을 '패스 시작점에 세워둔 채' 대기한다. 패널
         # [비행 시작] 버튼은 등장이 아니라 '움직임 시작'만 담당한다.
-        self.require_parameter("enabled")
+        self.require_parameter("enabled", Parameter.Type.BOOL)
         # alt = 비행 고도 [m] (패널 슬라이더로 실시간 조절)
-        self.require_parameter("alt")
+        self.require_parameter("alt", Parameter.Type.DOUBLE)
         # speed = 진행 속도 [m/s] (단일, 패널 슬라이더로 실시간 조절)
-        self.require_parameter("speed")
+        self.require_parameter("speed", Parameter.Type.DOUBLE)
         # target = "balloon"(기본) | "drone" : UI 토글로 표적 종류 선택. 선택된 모델만 비행, 나머진 숨김.
-        self.require_parameter("target")
+        self.require_parameter("target", Parameter.Type.STRING)
         self.target_model = MODEL_BALLOON
         self.hit = False
         self.t = 0.0                    # 대각선 진행도 [0→1]

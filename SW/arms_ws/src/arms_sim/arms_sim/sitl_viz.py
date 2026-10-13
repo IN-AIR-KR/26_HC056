@@ -33,8 +33,8 @@ import threading
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point, PoseStamped, Quaternion, TransformStamped
 from nav_msgs.msg import Path
@@ -92,8 +92,8 @@ def _quat_from_rpy(roll, pitch, yaw):
 
 
 class SitlViz(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -104,14 +104,14 @@ class SitlViz(Node):
     def __init__(self):
         super().__init__("arms_sitl_viz")
 
-        self.require_parameter("world")
-        self.require_parameter("frame_id")
-        self.require_parameter("rate_hz")
-        self.require_parameter("path_max_points")
-        self.require_parameter("path_min_dist")
+        self.require_parameter("world", Parameter.Type.STRING)
+        self.require_parameter("frame_id", Parameter.Type.STRING)
+        self.require_parameter("rate_hz", Parameter.Type.DOUBLE)
+        self.require_parameter("path_max_points", Parameter.Type.INTEGER)
+        self.require_parameter("path_min_dist", Parameter.Type.DOUBLE)
         # 조준 보조선: 기체 yaw축(= body +Z = 상방 카메라 보어사이트) 방향으로 뻗는 선.
         # 표적 고도(기본 30m)보다 넉넉히 길어야 '겨냥했는지'가 눈에 보인다. 0 이면 끔.
-        self.require_parameter("aim_line_m")
+        self.require_parameter("aim_line_m", Parameter.Type.DOUBLE)
 
         self._frame = self.get_parameter("frame_id").value
         self._max_pts = int(self.get_parameter("path_max_points").value)

@@ -22,15 +22,15 @@ from datetime import datetime
 from pathlib import Path
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from arms_msgs.msg import OperatorInput
 
 
 class FlightRecorder(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -46,19 +46,19 @@ class FlightRecorder(Node):
         #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
         #   battery=배터리 전용 토픽이다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.
-        self.require_parameter("record_topics")
-        self.require_parameter("save_dir")
+        self.require_parameter("record_topics", Parameter.Type.STRING_ARRAY)
+        self.require_parameter("save_dir", Parameter.Type.STRING)
         # 저장 포맷. 젯슨엔 mcap 플러그인이 없어 sqlite3 로 고정(항상 사용 가능).
-        self.require_parameter("storage")
+        self.require_parameter("storage", Parameter.Type.STRING)
         # 폴더명 접미사 (<일시>_<tag>). 실기체 기록과 구분용 — SITL 런치는 "sitl".
-        self.require_parameter("tag")
+        self.require_parameter("tag", Parameter.Type.STRING)
         # 런치가 실제로 해석한 인자와 사용한 제어 설정의 원본 경로. 비행 시작 시
         # manifest.json 및 control_params.yaml 사본으로 남긴다.
-        self.require_parameter("manifest.control_params_path")
+        self.require_parameter("manifest.control_params_path", Parameter.Type.STRING)
         for name in (
                 "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save",
                 "crsf_port", "start_detection", "model", "fullscreen", "debug", "cv_debug"):
-            self.require_parameter(f"manifest.arg_{name}")
+            self.require_parameter(f"manifest.arg_{name}", Parameter.Type.STRING)
         self._topics = list(self.get_parameter("record_topics").value)
         self._save_dir = os.path.expanduser(self.get_parameter("save_dir").value)
         os.makedirs(self._save_dir, exist_ok=True)

@@ -12,8 +12,8 @@ import threading
 import time
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 
 from arms_msgs.msg import AttitudeTelemetry, FlightCommand, GpsTelemetry, IoStatus
 
@@ -41,8 +41,8 @@ ATTITUDE_STREAM_INTERVAL_US = 33_333  # 30 Hz: 3D 자세 표현과 rosbag 분석
 
 
 class ArmsSITLCommNode(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -53,8 +53,8 @@ class ArmsSITLCommNode(Node):
     def __init__(self):
         super().__init__("arms_sitl_bridge_node")
 
-        self.require_parameter("connection")
-        self.require_parameter("send_rate_hz")
+        self.require_parameter("connection", Parameter.Type.STRING)
+        self.require_parameter("send_rate_hz", Parameter.Type.DOUBLE)
 
         self._conn_str   = self.get_parameter("connection").value
         self._send_rate  = self.get_parameter("send_rate_hz").value

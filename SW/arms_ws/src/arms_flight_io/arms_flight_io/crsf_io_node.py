@@ -9,8 +9,8 @@ import math
 import time
 
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from std_msgs.msg import Int16MultiArray
 from arms_msgs.msg import (AttitudeTelemetry, BatteryTelemetry, CrsfTelemetry,
                            FlightCommand, GpsTelemetry, IoStatus)
@@ -55,8 +55,8 @@ def _packed_channels(channels: list[int]) -> bytes:
 
 
 class CrsfIoNode(Node):
-    def require_parameter(self, name):
-        self.declare_parameter(name, descriptor=ParameterDescriptor(dynamic_typing=True))
+    def require_parameter(self, name, parameter_type):
+        self.declare_parameter(name, parameter_type)
         value = self.get_parameter(name).value
         if value is None:
             raise RuntimeError(
@@ -66,12 +66,12 @@ class CrsfIoNode(Node):
 
     def __init__(self):
         super().__init__("arms_crsf_io_node")
-        self.require_parameter("port")
-        self.require_parameter("baud")
-        self.require_parameter("send_rate_hz")
-        self.require_parameter("telemetry_timeout_sec")
-        self.require_parameter("battery.cell_full_v")
-        self.require_parameter("battery.cell_empty_v")
+        self.require_parameter("port", Parameter.Type.STRING)
+        self.require_parameter("baud", Parameter.Type.INTEGER)
+        self.require_parameter("send_rate_hz", Parameter.Type.DOUBLE)
+        self.require_parameter("telemetry_timeout_sec", Parameter.Type.DOUBLE)
+        self.require_parameter("battery.cell_full_v", Parameter.Type.DOUBLE)
+        self.require_parameter("battery.cell_empty_v", Parameter.Type.DOUBLE)
         self._port = self.get_parameter("port").value
         self._baud = int(self.get_parameter("baud").value)
         self._timeout = float(self.get_parameter("telemetry_timeout_sec").value)
