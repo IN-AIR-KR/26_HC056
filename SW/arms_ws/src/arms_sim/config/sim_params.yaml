@@ -1,4 +1,4 @@
-arms_sitl_reset_manager:
+/arms/arms_sitl_reset_manager:
   ros__parameters:
     px4_dir: ~/PX4-Autopilot
     world: arms_sitl
@@ -6,14 +6,14 @@ arms_sitl_reset_manager:
     drone_model: arms_drone_0
     spawn_pose: [0.0, 0.0, 0.24]
 
-balloon_referee:
+/arms/balloon_referee:
   ros__parameters:
     enabled: false
     alt: 30.0
     speed: 3.6
     target: balloon
 
-arms_sitl_viz:
+/arms/arms_sitl_viz:
   ros__parameters:
     world: arms_sitl
     frame_id: map

@@ -24,7 +24,7 @@ from arms_msgs.msg import MissionState
 from std_srvs.srv import Trigger
 
 CTRL_NODE    = "/arms/arms_control_node"
-REFEREE_NODE = "/balloon_referee"
+REFEREE_NODE = "/arms/balloon_referee"
 
 WORLD = "arms_sitl"
 DRONE = "arms_drone_0"
