@@ -13,6 +13,9 @@ const A = "/arms/vehicle/attitude";
 const D = "/arms/perception/detections";
 const DR = "/arms/perception/detections_raw";
 const DS = "/arms/perception/status";
+const RATE = "__flight_analyzer_rates";
+const RATE_WINDOW_SEC = 1.0;
+const RATE_STEP_SEC = 0.1;
 
 // ---------------------------------------------------------------- 필드 수식
 // 범례는 필드명 그대로. 수식은 패널 위 표와 범례 툴팁에 나온다.
@@ -88,6 +91,9 @@ const FIELD_INFO = {
   roll_deg: "CRSF 텔레메트리 roll [deg]",
   pitch_deg: "CRSF 텔레메트리 pitch [deg]",
   yaw_deg: "CRSF 텔레메트리 yaw [deg]",
+  video_hz: "1초 이동 윈도우의 compressed video 수신율 [Hz]",
+  detection_hz: "1초 이동 윈도우의 detection 메시지 수신율 [Hz]",
+  control_hz: "1초 이동 윈도우의 control debug 메시지 수신율 [Hz]",
 };
 
 // 기록에 없는 중간값은 기록된 필드로 계산한다(구 기록에도 적용). 입력 중 null 이면 null.
@@ -107,6 +113,12 @@ const DERIVED = {
 
 // ---------------------------------------------------------------- 일반 비행 정보 (IBVS 세부 그래프보다 위에 배치)
 const GENERAL_PANELS = [
+  { title: "Stream rate", note: "1.0 s moving message rate · video / detection / control",
+    series: [
+      { t: RATE, f: "video_hz", label: "video [Hz]" },
+      { t: RATE, f: "detection_hz", label: "detection [Hz]" },
+      { t: RATE, f: "control_hz", label: "control [Hz]" },
+    ] },
   { title: "Detection", note: "raw / filtered target count and selected target confidence",
     series: [
       { t: DR, f: "detections_count", label: "raw count" }, { t: D, f: "detections_count", label: "filtered count" },
@@ -410,6 +422,7 @@ async function openRecord(id) {
   }
   stateSegs = buildStateSegs();
   renderStateLegend();
+  buildStreamRates(rec.video?.topic);
   fillFieldList();
   renderPanels();
   initScene();
@@ -640,6 +653,40 @@ function fillFieldList() {
     }
   }
   $("custom-add").hidden = false;
+}
+
+/* 각 스트림의 bag 기록 시각으로부터 1초 이동 윈도우 메시지율을 만든다.
+   header stamp 대신 bag timestamp를 쓰므로, 실제로 recorder가 받은 빈도를 보여 준다. */
+function rollingRate(times, grid) {
+  if (!times?.length) return null;
+  const out = [];
+  let first = 0, after = 0;
+  for (const t of grid) {
+    while (after < times.length && times[after] <= t) after++;
+    while (first < after && times[first] <= t - RATE_WINDOW_SEC) first++;
+    out.push((after - first) / RATE_WINDOW_SEC);
+  }
+  return out;
+}
+
+function buildStreamRates(videoTopic = rec?.video?.topic) {
+  if (!rec) return;
+  const duration = rec.duration || 0;
+  const grid = [];
+  for (let t = 0; t <= duration + 1e-9; t += RATE_STEP_SEC) grid.push(Number(t.toFixed(6)));
+  if (!grid.length) grid.push(0);
+  const detection = rec.topics[D] || rec.topics[DR];
+  const control = rec.topics[C] || rec.topics[T];
+  const fields = {
+    video_hz: rollingRate(rec.videos?.[videoTopic]?.t, grid),
+    detection_hz: rollingRate(detection?.t, grid),
+    control_hz: rollingRate(control?.t, grid),
+  };
+  // 없는 스트림은 null 열로 남겨 패널에 존재하지 않는 선으로 표시한다.
+  for (const [name, values] of Object.entries(fields)) {
+    if (!values) fields[name] = Array(grid.length).fill(null);
+  }
+  rec.topics[RATE] = { type: "viewer/StreamRates", t: grid, fields, strings: {} };
 }
 
 // ---------------------------------------------------------------- 차트
@@ -1071,7 +1118,9 @@ function bind() {
   $("v-seek").oninput = () => { setPlaying(false); seekVideo(parseFloat($("v-seek").value)); };
   $("v-speed").onchange = () => { V.speed = parseFloat($("v-speed").value); };
   $("v-source").onchange = () => {
-    setPlaying(false); V.topic = $("v-source").value; V.shown = V.want = -1; updateMp4Download(); showFrameAt(V.t);
+    setPlaying(false); V.topic = $("v-source").value; V.shown = V.want = -1;
+    buildStreamRates(V.topic); renderPanels();
+    updateMp4Download(); showFrameAt(V.t);
   };
   document.querySelectorAll("#scene-focus button").forEach((b) => { b.onclick = () => setSceneFocus(b.dataset.focus); });
   updateSceneFocusControls();
