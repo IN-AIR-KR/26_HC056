@@ -28,6 +28,8 @@ import time
 from pathlib import Path
 
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
@@ -53,12 +55,19 @@ class SitlResetManager(Node):
         self.require_parameter("model", Parameter.Type.STRING)
         # PX4 가 spawn 하는 '인스턴스' 이름 (모델명 + _<px4_instance>). attach 대상.
         self.require_parameter("drone_model", Parameter.Type.STRING)
-        # 되돌릴 출발 위치. PX4 는 PX4_GZ_MODEL_POSE 없이 spawn 하므로 model.sdf 의
-        # 자기 pose(0 0 0.24)가 곧 출발점이다. 지면에 닿으며 0.19 근처로 가라앉는다.
+        # 발사기가 없을 때만 쓰는 예전 지면 출발 위치. 발사기가 있으면 reload 서비스가
+        # 기체를 튜브에 재장전한다.
         self.require_parameter("spawn_pose", Parameter.Type.DOUBLE_ARRAY)
         self._busy = threading.Lock()
         self._reset_pub = self.create_publisher(Empty, "sim/reset_event", 10)
-        self.create_service(Trigger, "sim/reset", self._reset)
+        # 견착 발사기(launcher 노드)의 재장전 서비스. 기체를 '지면'이 아니라 발사기
+        # 튜브(현재 앙각/방위)로 되돌려 다시 물리고, 실제로 물렸는지 확인해서 답한다.
+        #   RESET 서비스 콜백 안에서 다른 서비스를 기다려야 하므로, 응답을 받을 수
+        #   있게 콜백 그룹을 나누고 main() 에서 MultiThreadedExecutor 로 돌린다.
+        self._reload_cli = self.create_client(
+            Trigger, "sim/launcher/reload", callback_group=ReentrantCallbackGroup())
+        self.create_service(Trigger, "sim/reset", self._reset,
+                            callback_group=MutuallyExclusiveCallbackGroup())
 
     def _reset(self, _request, response):
         if not self._busy.acquire(blocking=False):
@@ -120,6 +129,25 @@ class SitlResetManager(Node):
         낙하 중이라 그대로 두면 잔여 속도를 가진 채 재시작된다. 그래서 지면 높이로
         되돌린 뒤 잠깐 기다린다 — 접지 접촉이 속도를 깎아 없앤다.
         """
+        # 발사기가 있으면 발사기에 재장전을 맡기고, 확인된 결과를 기다린다.
+        #   (월드에 발사기가 있는 한 기체는 튜브에 용접돼 있을 수 있어서, 아래 지면용
+        #    set_pose 는 용접 상태에선 조용히 무시된다 → 발사기 노드가 없으면 실패로 알린다)
+        if self._reload_cli.wait_for_service(timeout_sec=1.0):
+            fut = self._reload_cli.call_async(Trigger.Request())
+            deadline = time.monotonic() + 8.0
+            while not fut.done() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not fut.done():
+                raise RuntimeError("발사기 재장전 응답 없음(8s) — launcher 노드 로그 확인")
+            r = fut.result()
+            if not r.success:
+                raise RuntimeError(f"발사기 재장전 실패: {r.message}")
+            self.get_logger().info(f"RESET: {r.message}")
+            return
+        self.get_logger().warn(
+            "발사기 재장전 서비스 없음(launcher 노드 미기동?) → 예전처럼 지면으로 복귀 시도. "
+            "월드에 발사기가 있으면 기체가 튜브에 물린 채라 실패할 수 있다.")
+
         world = self.get_parameter("world").value
         drone = self.get_parameter("drone_model").value
         x, y, z = (list(self.get_parameter("spawn_pose").value) + [0.0, 0.0, 0.0])[:3]
@@ -204,8 +232,10 @@ class SitlResetManager(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SitlResetManager()
+    executor = MultiThreadedExecutor(num_threads=2)   # RESET 콜백 중에도 재장전 응답 수신
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
