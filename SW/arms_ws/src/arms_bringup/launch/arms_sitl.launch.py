@@ -175,7 +175,7 @@ def generate_launch_description():
                         "표기이며 host 모드에선 docker/models/x 로 자동 치환된다. "
                         "호스트 절대경로를 직접 줘도 된다."),
 
-        DeclareLaunchArgument("auto_save", default_value="false",
+        DeclareLaunchArgument("auto_save", default_value="true",
                               description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "
                                           "~/arms_flight_logs_ibvs/<일시>_sitl/ "
                                           "에 bag(sqlite3) 저장(UI 화면 영상 포함)."),

@@ -76,7 +76,7 @@ def generate_launch_description():
         DeclareLaunchArgument("cv_debug", default_value="false",
                               description="검출 진단 패널(HSV 미리보기+성능 그래프). "
                                           "true 면 hsv_debug_image 를 구독 → 검출 발행률↓."),
-        DeclareLaunchArgument("auto_save", default_value="false",
+        DeclareLaunchArgument("auto_save", default_value="true",
                               description="비행 로그 녹화. true 면 ARM 스위치 ON~"
                                           "OFF 까지 영상(UI)+검출 raw+CRSF 송·수신+상태를 "
                                           "~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3)으로 저장(kill 되어도 유지)."),
