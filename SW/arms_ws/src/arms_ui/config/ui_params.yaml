@@ -39,14 +39,14 @@
       - /arms/perception/detections_raw
       - /arms/perception/detections
       - /arms/perception/status
-      - /arms/ibvs_debug
-      - /arms/control_debug
+      - /arms/control/ibvs_debug
+      - /arms/control/debug
       - /arms/crsf_tx
       - /arms/crsf_rx
       - /arms/attitude
       - /arms/battery
       - /arms/gps
-      - /arms/mission_state
+      - /arms/mission/state
       - /arms/operator/input
       - /arms/control/flight_command
       - /arms/io/status

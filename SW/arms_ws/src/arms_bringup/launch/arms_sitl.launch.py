@@ -215,7 +215,7 @@ def generate_launch_description():
         # 튜닝/심판 콘솔 (파라미터·referee 제어). SITL 전용, /arms/command 발행 안 함.
         Node(
             package="arms_sim", executable="panel",
-            name="arms_panel_node", output="screen",
+            namespace="arms", name="arms_panel_node", output="screen",
         ),
         # 표적 심판 (풍선/드론 비행 + 명중 판정). SITL 전용.
         #   node name = balloon_referee (panel 의 REFEREE_NODE 와 일치必).
@@ -270,14 +270,14 @@ def generate_launch_description():
                     "/arms/perception/detections_raw",
                     "/arms/perception/detections",
                     "/arms/perception/status",
-                    "/arms/ibvs_debug",
-                    "/arms/control_debug",
+                    "/arms/control/ibvs_debug",
+                    "/arms/control/debug",
                     "/arms/crsf_tx",
                     "/arms/crsf_rx",
                     "/arms/attitude",
                     "/arms/battery",
                     "/arms/gps",
-                    "/arms/mission_state",
+                    "/arms/mission/state",
                     "/arms/operator/input",
                     "/arms/control/flight_command",
                     "/arms/io/status",

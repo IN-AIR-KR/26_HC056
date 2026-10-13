@@ -490,13 +490,13 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     // ROS publishers
     // ----------------------------------------------------------------
-    pub_state_ = create_publisher<arms_msgs::msg::MissionState>("/arms/mission_state", 10);
-    pub_dbg_  = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
+    pub_state_ = create_publisher<arms_msgs::msg::MissionState>("mission/state", 10);
+    pub_dbg_  = create_publisher<geometry_msgs::msg::Vector3>("control/debug", 10);
     // looming 튜닝용: x=τ[s](미접근/무한대는 9.99로 캡), y=bbox크기(EMA), z=크기변화율 ṡ
-    pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/debug_looming", 10);
+    pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("control/looming_debug", 10);
     // IBVS 튜닝/디버깅: 유도 각 항(오차→LOS각속도→z1/배리어→항별 기여→스케줄링→명령/추력)을
     //   한 메시지로 매 틱 발행(구독자 있을 때만). auto_save 녹화 대상.
-    pub_ibvs_dbg_ = create_publisher<arms_msgs::msg::IbvsDebug>("/arms/ibvs_debug", 10);
+    pub_ibvs_dbg_ = create_publisher<arms_msgs::msg::IbvsDebug>("control/ibvs_debug", 10);
     pub_flight_cmd_ = create_publisher<arms_msgs::msg::FlightCommand>("control/flight_command", 10);
 
     // ----------------------------------------------------------------

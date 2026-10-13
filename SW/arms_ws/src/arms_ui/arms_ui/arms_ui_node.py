@@ -4,8 +4,8 @@ arms_ui_node — OpenCV overlay display
 Subscribes to:
   /arms/image_raw      sensor_msgs/Image
   /arms/detections     arms_msgs/DetectionArray
-  /arms/mission_state  arms_msgs/MissionState
-  /arms/control_debug  geometry_msgs/Vector3
+  mission/state        arms_msgs/MissionState
+  control/debug         geometry_msgs/Vector3
   /arms/operator/input arms_msgs/OperatorInput
 
 오버레이(바운딩박스/십자선/상태/ROI 등)는 AUTO 모드에서만 그린다.
@@ -160,8 +160,8 @@ class ArmsUINode(Node):
 
         self.create_subscription(Image, "camera/image_raw", self._cb_image, best_effort_qos)
         self.create_subscription(DetectionArray, "perception/detections", self._cb_detections, 10)
-        self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
-        self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
+        self.create_subscription(MissionState, "mission/state", self._cb_state, 10)
+        self.create_subscription(Vector3, "control/debug", self._cb_debug, 10)
         # hsv_debug_image(≈500KB raw)는 cv_debug 패널일 때만 구독한다. 아니면
         # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
         if self._cv_debug:
