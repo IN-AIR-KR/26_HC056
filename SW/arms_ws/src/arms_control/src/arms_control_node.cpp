@@ -31,7 +31,7 @@ namespace arms_control {
 class ArmsControlNode : public rclcpp::Node {
  public:
   void declare_required_parameter(const std::string& name) {
-    const auto& value = declare_parameter(name);
+    const auto& value = declare_parameter(name, rclcpp::ParameterValue{});
     if (value.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
       throw std::runtime_error(
           "Required parameter '" + name + "' is missing for " +
