@@ -28,8 +28,6 @@ from rcl_interfaces.srv import GetParameters, SetParameters
 from std_msgs.msg import Empty, String
 from std_srvs.srv import Trigger
 
-from arms_sim import launcher_geometry as G
-
 CTRL_NODE    = "/arms/arms_control_node"
 REFEREE_NODE = "/arms/balloon_referee"
 LAUNCHER_NODE = "/arms/arms_launcher"   # 견착 발사기 (arms_sim/launcher.py)
@@ -502,55 +500,15 @@ class PanelGUI:
         self._refresh_ball_btns()
         self._track(REFEREE_NODE, "enabled", self._show_enabled)
 
-        # ── 공(표적) 위치 X / Y / Z ─────────────────────────────────────────
-        #   발사기를 기울이면 수직 기준으로 세워둔 공이 카메라 밖으로 나간다 → 패널에서
-        #   공을 직접 옮기거나 [발사기 조준선에 놓기] 로 조준선 위에 올린다.
-        #   드래그 중에도 실시간 전송(같은 값은 ParamBus 가 합침), Gazebo·UI 카메라·rviz 에 바로 반영.
-        self._tgt_drag = set()
-        self._tgt_sent = {}
-
-        def tgt_slider(label, lo, hi, init, pname, res):
-            sc = tk.Scale(g_tgt, from_=lo, to=hi, resolution=res, orient="horizontal",
-                          length=180, bg="#1e1e1e", fg="white", label=label,
-                          highlightthickness=0, troughcolor="#444")
-            sc.set(init)
-            sc.pack(pady=(2, 0))
-
-            def send_now():
-                v = float(sc.get())
-                self._tgt_sent[pname] = (v, time.monotonic())
-                ros_param_set_node(REFEREE_NODE, pname, v)
-
-            def send(_e=None):
-                sc.after_idle(send_now)   # 슬라이더 값이 갱신된 '다음'에 읽는다
-
-            def press(_e):
-                self._tgt_drag.add(pname)
-
-            def release(_e):
-                self._tgt_drag.discard(pname)
-                send()
-
-            sc.bind("<ButtonPress-1>", press)
-            sc.bind("<B1-Motion>", send)
-            sc.bind("<ButtonRelease-1>", release)
-
-            def show(v):
-                if pname in self._tgt_drag:
-                    return
-                sent = self._tgt_sent.get(pname)
-                if sent and abs(float(v) - sent[0]) > 0.3 and time.monotonic() - sent[1] < 1.5:
-                    return
-                sc.set(float(v))
-            self._track(REFEREE_NODE, pname, show)
-            return sc
-
-        self.tgt_x = tgt_slider("공 X [m]  (+X = 방위 0° 방향)", -100, 100, 5, "pos_x", 0.5)
-        self.tgt_y = tgt_slider("공 Y [m]  (+Y = 방위 90° 방향)", -100, 100, -5, "pos_y", 0.5)
-        self.alt = tgt_slider("공 Z = 타겟 고도 [m]", 5, 100, 30, "alt", 1)
-        tk.Button(g_tgt, text="🎯 발사기 조준선에 놓기 (현재 고도 유지)", bg="#00695c", fg="white",
-                  relief="flat", command=self.place_on_launcher_axis
-                  ).pack(pady=(6, 0), fill="x")
+        self.alt = tk.Scale(g_tgt, from_=5, to=100, resolution=1, orient="horizontal",
+                            length=180, bg="#1e1e1e", fg="white", label="타겟 고도 [m]",
+                            highlightthickness=0, troughcolor="#444")
+        self.alt.set(30)
+        self.alt.pack(pady=(2, 0))
+        self._track(REFEREE_NODE, "alt",
+                    lambda v: self.alt.set(float(v)))
+        self.alt.bind("<ButtonRelease-1>",
+                      lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
         # 타겟 속도 슬라이더 (근접/먼거리 통일 — 단일 속도)
         self.ball_speed = tk.Scale(g_tgt, from_=0.2, to=40, resolution=0.2, orient="horizontal",
@@ -779,37 +737,6 @@ class PanelGUI:
         self._guidance_mode = (self._guidance_mode + 1) % 3
         ros_param_set("control.guidance_mode", self._guidance_mode)
         self._apply_guid_label(pending=True)   # 노드 확인 전까지 '…' 표시
-
-    def place_on_launcher_axis(self):
-        """발사기 앙각/방위를 노드에서 읽어, 조준선(튜브 축)과 현재 고도가 만나는 점에 공을 놓는다.
-
-        드론 카메라 광축 = 기체 +Z = 튜브 축이라 공이 화면 정중앙에 온다.
-        앙각이 너무 낮아(≈수평) 고도와 안 만나면 축을 따라 30m 앞에 놓고 고도도 같이 맞춘다.
-        """
-        def worker():
-            el = self._bus.get_str(LAUNCHER_NODE, "elevation_deg")
-            az = self._bus.get_str(LAUNCHER_NODE, "azimuth_deg")
-            if el is None or az is None:
-                self._applyq.put((self._show_param_status,
-                                  ("✗ 발사기 각도를 못 읽음 (launcher 노드 확인)", "#ff5252")))
-                return
-            el, az = float(el), float(az)
-            d = G.axis(el, az)
-            alt = float(self.alt.get())
-            if d[2] > 0.09 and alt > G.PIVOT_Z:          # 앙각 ≳ 5°: 현재 고도에서 만난다
-                s = (alt - G.PIVOT_Z) / d[2]
-            else:                                        # 거의 수평: 30m 앞, 고도도 맞춤
-                s = 30.0
-                alt = max(5.0, G.PIVOT_Z + s * d[2])
-                ros_param_set_node(REFEREE_NODE, "alt", float(round(alt)))
-            x = round(G.PIVOT_X + s * d[0], 1)
-            y = round(G.PIVOT_Y + s * d[1], 1)
-            ros_param_set_node(REFEREE_NODE, "pos_x", x)
-            ros_param_set_node(REFEREE_NODE, "pos_y", y)
-            self._applyq.put((self._show_param_status,
-                              (f"🎯 조준선에 공 배치: ({x:+.1f}, {y:+.1f}, {alt:.0f}m) "
-                               f"· 앙각 {el:.0f}° 방위 {az:.0f}° · 거리 {s:.0f}m", "#81c784")))
-        threading.Thread(target=worker, daemon=True).start()
 
     def ball_start(self):
         # enabled=true → referee 가 정지했던 자리(t)에서 재개

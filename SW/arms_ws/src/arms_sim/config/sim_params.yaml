@@ -12,8 +12,6 @@
     alt: 30.0
     speed: 3.6
     target: balloon
-    pos_x: 5.0
-    pos_y: -5.0
 
 /arms/arms_sitl_viz:
   ros__parameters:
