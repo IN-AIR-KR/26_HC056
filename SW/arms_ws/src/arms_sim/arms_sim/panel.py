@@ -23,7 +23,7 @@ from rclpy.node import Node
 from arms_msgs.msg import MissionState
 from std_srvs.srv import Trigger
 
-CTRL_NODE    = "/arms_control_node"
+CTRL_NODE    = "/arms/arms_control_node"
 REFEREE_NODE = "/balloon_referee"
 
 WORLD = "arms_sitl"

@@ -15,6 +15,7 @@ def generate_launch_description():
         Node(
             package="arms_control",
             executable="arms_control_node",
+            namespace="arms",
             name="arms_control_node",
             output="screen",
             parameters=[str(config), str(hw)],

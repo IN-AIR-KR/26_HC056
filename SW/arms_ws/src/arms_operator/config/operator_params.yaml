@@ -1,4 +1,4 @@
-arms_operator_hardware_node:
+/arms/arms_operator_hardware_node:
   ros__parameters:
     # OperatorInput을 발행할 토픽 (arms_control 이 구독)
     topic_name: operator/input

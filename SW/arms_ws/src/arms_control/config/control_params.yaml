@@ -6,7 +6,7 @@
 # 실기체는 hw_overrides.yaml 이 이 위에 얹혀 델타만 덮어쓴다
 # (control.launch.py / arms.launch.py). SITL 런치는 이 파일만 읽는다.
 
-arms_control_node:
+/arms/arms_control_node:
   ros__parameters:
 
     # =====================================================================
