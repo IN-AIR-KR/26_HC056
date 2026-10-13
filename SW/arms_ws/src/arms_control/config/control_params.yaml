@@ -19,6 +19,9 @@
       detection_confidence_threshold: 0.32
       detection_timeout_sec: 1.0
       lock_duration_sec: 1.0
+      # TRACK 중에는 마지막 유효 검출 뒤 이 시간까지 현재 명령을 hold한다.
+      # callback이 끊겨도 control loop가 검사하며, 초과하면 SEARCH가 아닌 RTL로 전이한다.
+      track_target_lost_timeout_sec: 2.0
 
       # ── TRACK → RTL 판정 (비전 looming, τ) ────────────────────────────
       # 거리센서 없이 bbox 팽창률로 충돌 임박을 판정한다. 3D 거리는 실기체에서

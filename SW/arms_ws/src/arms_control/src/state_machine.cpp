@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 namespace arms_control {
 
@@ -32,22 +33,9 @@ void StateMachine::on_detection(
   const auto * best = best_detection(detections);
 
   if (!best || best->confidence < static_cast<float>(params_.confidence_threshold)) {
-    auto now = Clock::now();
-    if (last_detection_valid_) {
-      double elapsed =
-        std::chrono::duration<double>(now - last_detection_time_).count();
-      if (elapsed < params_.detection_timeout_sec) {
-        // 홀드: error_x_/error_y_ 유지, I 동결 플래그만 세움
-        detection_held_ = true;
-        return;
-      }
-    }
-    // 타임아웃 또는 한 번도 검출 없음 → 실패 처리
-    detection_held_ = false;
-    target_locked_ = false;
-    error_x_ = 0.0;
-    error_y_ = 0.0;
-    on_detection_timeout();
+    // 타임아웃 전이는 control loop의 tick_detection_timeout()만 담당한다.
+    // 따라서 detection 노드가 죽어 callback 자체가 멈춰도 같은 정책이 적용된다.
+    detection_held_ = last_detection_valid_;
     return;
   }
 
@@ -82,6 +70,34 @@ void StateMachine::on_detection(
     }
     target_locked_ = true;
   }
+}
+
+void StateMachine::tick_detection_timeout()
+{
+  if (state_ != State::SEARCH && state_ != State::LOCK && state_ != State::TRACK) {
+    detection_held_ = false;
+    return;
+  }
+
+  const auto now = Clock::now();
+  const double elapsed = last_detection_valid_
+    ? std::chrono::duration<double>(now - last_detection_time_).count()
+    : std::numeric_limits<double>::infinity();
+  const double timeout = state_ == State::TRACK
+    ? params_.track_target_lost_timeout_sec
+    : params_.detection_timeout_sec;
+
+  if (elapsed < timeout) {
+    // 빈 DetectionArray가 들어왔을 때의 hold 상태는 on_detection()이 유지한다.
+    // 정상 검출 프레임 사이에서 I 항을 불필요하게 freeze하지 않는다.
+    return;
+  }
+
+  detection_held_ = false;
+  target_locked_ = false;
+  error_x_ = 0.0;
+  error_y_ = 0.0;
+  on_detection_timeout();
 }
 
 void StateMachine::on_launch_button()

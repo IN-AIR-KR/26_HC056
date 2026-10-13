@@ -47,6 +47,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("mission.detection_confidence_threshold", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("mission.lock_duration_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("mission.detection_timeout_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("mission.track_target_lost_timeout_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("mission.intercept_align_tol", rclcpp::ParameterType::PARAMETER_DOUBLE);
     // 비전 looming(τ) 기반 종말 RTL — bbox 팽창률로 충돌 임박을 판정한다.
     declare_required_parameter("mission.tau_rtl_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
@@ -250,6 +251,8 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.lock_duration_sec").as_double();
     sm_params.detection_timeout_sec =
         get_parameter("mission.detection_timeout_sec").as_double();
+    sm_params.track_target_lost_timeout_sec =
+        get_parameter("mission.track_target_lost_timeout_sec").as_double();
     sm_params.intercept_align_tol =
         get_parameter("mission.intercept_align_tol").as_double();
     sm_params.tau_rtl_sec =
@@ -797,6 +800,8 @@ class ArmsControlNode : public rclcpp::Node {
         (now_t - last_operator_input_time_).seconds() > operator_input_timeout_sec_;
     joy_command_lost_ = operator_timeout || operator_reported_input_lost_;
 
+    // Detection callback이 멈춰도 이 제어 tick이 마지막 유효 검출 시각을 검사한다.
+    sm_->tick_detection_timeout();
     State state = sm_->state();
 
     // 유도 출력 = 각속도 명령[deg/s]. 각도가 아니다 (ACRO 고정, 자세 피드백 없음).
