@@ -31,6 +31,9 @@ PX4_CUSTOM_MAIN_MODE_ACRO     = 5   # 각속도(rate) 제어 — 자동 요격�
 
 MAV_MODE_FLAG_SAFETY_ARMED = 128
 ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed state
+# MAV_CMD_COMPONENT_ARM_DISARM param2 magic value.  PX4 accepts a regular
+# disarm only while landed; this explicitly requests an in-flight motor cut.
+FORCE_DISARM_MAGIC = 21196.0
 # 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
 # PX4 는 1Hz 로 heartbeat 을 보내므로 3s 면 오탐 없이 충분히 빠르다.
 HB_TIMEOUT_SEC = 3.0
@@ -66,6 +69,7 @@ class ArmsSITLCommNode(Node):
 
         self._command = FlightCommand()
         self._ch5_high  = False        # arm switch, level (not edge) — kept in sync with CH5
+        self._force_disarm_pending = False  # arm-switch falling edge; consumed by 50 Hz sender
         self._mode_pending = None      # desired PX4 main mode on CH6 edge
         self._rtl_pending = False      # CH7 rising-edge RTL command; mode 변경 뒤 전송
 
@@ -257,6 +261,11 @@ class ArmsSITLCommNode(Node):
                                       if command.manual_mode else PX4_CUSTOM_MAIN_MODE_ACRO)
             if command.rtl_request and not self._command.rtl_request:
                 self._rtl_pending = True
+            if self._ch5_high and not command.arm:
+                # An ARM-switch fall is the operator's emergency motor-cut
+                # request.  A normal PX4 disarm is rejected in flight, so
+                # preserve this edge until the sender emits a forced disarm.
+                self._force_disarm_pending = True
             self._command = command
             self._ch5_high = command.arm
 
@@ -274,13 +283,20 @@ class ArmsSITLCommNode(Node):
             self._mode_pending = None
             rtl_req = self._rtl_pending
             self._rtl_pending = False
+            force_disarm = self._force_disarm_pending
+            self._force_disarm_pending = False
 
         # Arm/disarm: keep resending while the FC's actual armed state doesn't match
         # CH5 yet. A single MAV_CMD_COMPONENT_ARM_DISARM can be TEMPORARILY_REJECTED
         # (e.g. EKF/position estimate not converged yet right after boot) — without a
         # retry that one lost attempt meant "denied forever" until CH5 toggled again.
         now = time.time()
-        if ch5_high != self._armed and (now - self._last_arm_send) >= ARM_RETRY_INTERVAL_SEC:
+        if force_disarm:
+            self._last_arm_send = now
+            self.get_logger().warn(
+                "CH5=OFF edge → sending FORCE DISARM (PX4 in-flight motor cut)")
+            self._send_arm(False, force_disarm=True)
+        elif ch5_high != self._armed and (now - self._last_arm_send) >= ARM_RETRY_INTERVAL_SEC:
             self._last_arm_send = now
             self.get_logger().info(
                 f"CH5={'ON' if ch5_high else 'OFF'}, armed={self._armed} → "
@@ -324,7 +340,7 @@ class ArmsSITLCommNode(Node):
     # ------------------------------------------------------------------
     # MAVLink helpers
     # ------------------------------------------------------------------
-    def _send_arm(self, arm: bool):
+    def _send_arm(self, arm: bool, force_disarm: bool = False):
         if self._mav is None:
             return
         self._mav.mav.command_long_send(
@@ -332,7 +348,8 @@ class ArmsSITLCommNode(Node):
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0,
             1.0 if arm else 0.0,
-            0, 0, 0, 0, 0, 0,
+            FORCE_DISARM_MAGIC if force_disarm else 0.0,
+            0, 0, 0, 0, 0,
         )
 
     def _send_set_mode(self, main_mode: int, sub_mode: int = 0):
