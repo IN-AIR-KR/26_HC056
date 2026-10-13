@@ -89,7 +89,7 @@ class ArmsUINode(Node):
         self.require_parameter("ui.stream_fps", Parameter.Type.DOUBLE)
         self._last_stream_t = 0.0
         self.pub_ui_raw = self.create_publisher(
-            Image, "/arms/ui_image", reliable_qos)
+            Image, "ui/image", reliable_qos)
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.require_parameter("ui.roi_pip_frac", Parameter.Type.DOUBLE)
@@ -158,15 +158,15 @@ class ArmsUINode(Node):
         self._lock_tone_proc = None                             # LOCK 이상: 끊기지 않는 연속 톤 프로세스
         self._last_image_t = 0.0                                # 마지막 영상 프레임 수신 시각(monotonic)
 
-        self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
-        self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
+        self.create_subscription(Image, "camera/image_raw", self._cb_image, best_effort_qos)
+        self.create_subscription(DetectionArray, "perception/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
         # hsv_debug_image(≈500KB raw)는 cv_debug 패널일 때만 구독한다. 아니면
         # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
         if self._cv_debug:
             self._hsv_subscription = self.create_subscription(
-                Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
+                Image, "perception/hsv_debug_image", self._cb_hsv_debug,
                 best_effort_qos)
         # Hardware input is best-effort while the GUI is reliable.
         self.create_subscription(OperatorInput, "/arms/operator/input", self._cb_command, best_effort_qos)
@@ -175,7 +175,7 @@ class ArmsUINode(Node):
         # GPS는 활성 flight I/O adapter가 정규화해 발행한다.
         self.create_subscription(GpsTelemetry, "/arms/gps", self._cb_gps, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
-        self.create_subscription(Float32MultiArray, "/arms/detector_status",
+        self.create_subscription(Float32MultiArray, "perception/status",
                                  self._cb_detstatus, 10)
 
         self._latest_detections = DetectionArray()
@@ -562,7 +562,7 @@ class ArmsUINode(Node):
         if self._hsv_subscription is None:
             self._latest_hsv_debug = None
             self._hsv_subscription = self.create_subscription(
-                Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
+                Image, "perception/hsv_debug_image", self._cb_hsv_debug,
                 self._image_qos)
             self._transient_hsv_subscription = True
         self.get_logger().info("S pressed: waiting for one HSV debug frame...")

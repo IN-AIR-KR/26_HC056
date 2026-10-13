@@ -109,7 +109,7 @@ def _detection(context, *args, **kwargs):
     det_config = Path(get_package_share_directory("arms_detection")) / "config" / "detection.yaml"
     actions.append(Node(
         package="arms_detection", executable="arms_detection_node",
-        name="arms_detection_node", output="screen",
+        namespace="arms", name="arms_detection_node", output="screen",
         parameters=[str(det_config)],
         # YOLO on/off 는 파라미터가 아니라 이 환경변수다 — 모델이 로드돼야 검출을
         # 발행한다(HSV 단독 발행 금지). 노드 기동 시점에 한 번만 읽는다.
@@ -188,9 +188,9 @@ def generate_launch_description():
         # 카메라 브리지 — 상방 카메라 → /arms/image_raw
         Node(
             package="ros_gz_bridge", executable="parameter_bridge",
-            name="arms_video_up", output="screen",
+            namespace="arms", name="arms_video_up", output="screen",
             arguments=["/arms_drone/upward_camera/image@sensor_msgs/msg/Image[gz.msgs.Image"],
-            remappings=[("/arms_drone/upward_camera/image", "/arms/image_raw")],
+            remappings=[("/arms_drone/upward_camera/image", "camera/image_raw")],
         ),
         # 검출 (host in-process / docker 컨테이너) — detection:= 로 고른다
         OpaqueFunction(function=_detection),
@@ -227,7 +227,7 @@ def generate_launch_description():
         # UI 오버레이
         Node(
             package="arms_ui", executable="arms_ui_node",
-            name="arms_ui_node", output="screen",
+            namespace="arms", name="arms_ui_node", output="screen",
             parameters=[str(ui_config)],
         ),
         # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image) → compressed(/arms/ui_image/compressed).
@@ -236,11 +236,11 @@ def generate_launch_description():
         #   ★ out 베이스 리맵은 파생 서브토픽에 전파 안 되므로 out/compressed 를 직접 리맵한다.
         Node(
             package="image_transport", executable="republish",
-            name="ui_image_republish",
+            namespace="arms", name="ui_image_republish",
             arguments=["raw", "compressed"],
             remappings=[
-                ("in", "/arms/ui_image"),
-                ("out/compressed", "/arms/ui_image/compressed"),
+                ("in", "ui/image"),
+                ("out/compressed", "ui/image/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
@@ -248,11 +248,11 @@ def generate_launch_description():
         # 추후 검출/유도 재현에 쓴다.
         Node(
             package="image_transport", executable="republish",
-            name="raw_image_republish",
+            namespace="arms", name="raw_image_republish",
             arguments=["raw", "compressed"],
             remappings=[
-                ("in", "/arms/image_raw"),
-                ("out/compressed", "/arms/image_raw/compressed"),
+                ("in", "camera/image_raw"),
+                ("out/compressed", "camera/image_raw/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 80}],
             condition=IfCondition(LaunchConfiguration("auto_save")),
@@ -261,15 +261,15 @@ def generate_launch_description():
         #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 화면 영상도 같이 저장.
         Node(
             package="arms_ui", executable="flight_recorder",
-            name="flight_recorder", output="screen",
+            namespace="arms", name="flight_recorder", output="screen",
             parameters=[str(ui_config), {
                 "tag": "sitl",
                 "record_topics": [
-                    "/arms/ui_image/compressed",
-                    "/arms/image_raw/compressed",
-                    "/arms/detections_raw",
-                    "/arms/detections",
-                    "/arms/detector_status",
+                    "/arms/ui/image/compressed",
+                    "/arms/camera/image_raw/compressed",
+                    "/arms/perception/detections_raw",
+                    "/arms/perception/detections",
+                    "/arms/perception/status",
                     "/arms/ibvs_debug",
                     "/arms/control_debug",
                     "/arms/crsf_tx",

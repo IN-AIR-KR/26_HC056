@@ -174,7 +174,7 @@ def generate_launch_description():
         Node(
             package="arms_ui",
             executable="arms_ui_node",
-            name="arms_ui_node",
+            namespace="arms", name="arms_ui_node",
             output="screen",
             parameters=[str(ui_config), {
                 "ui.fullscreen": ParameterValue(
@@ -192,13 +192,13 @@ def generate_launch_description():
         Node(
             package="image_transport",
             executable="republish",
-            name="ui_image_republish",
+            namespace="arms", name="ui_image_republish",
             arguments=["raw", "compressed"],
             # ★ image_transport 는 out 베이스 리맵을 파생 서브토픽(out/compressed)에 전파하지
             #   않는다 → 반드시 out/compressed 를 직접 리맵해야 /arms/ui_image/compressed 로 나간다.
             remappings=[
-                ("in", "/arms/ui_image"),
-                ("out/compressed", "/arms/ui_image/compressed"),
+                ("in", "ui/image"),
+                ("out/compressed", "ui/image/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),

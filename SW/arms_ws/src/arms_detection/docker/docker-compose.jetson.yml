@@ -16,6 +16,7 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_NAMESPACE=${ROS_NAMESPACE:-arms}
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
       # Force UDP-only FastDDS transport. SHM transport fails between container
       # and host because FastDDS SHM requires FD passing via Unix socket, which

@@ -505,7 +505,7 @@ class ArmsControlNode : public rclcpp::Node {
     auto best_effort_qos = rclcpp::QoS(1).best_effort();
 
     sub_detections_ = create_subscription<arms_msgs::msg::DetectionArray>(
-        "/arms/detections", best_effort_qos,
+        "perception/detections", best_effort_qos,
         [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
           sm_->on_detection(msg->detections);
           update_looming(msg);

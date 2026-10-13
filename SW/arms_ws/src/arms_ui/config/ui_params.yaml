@@ -1,4 +1,4 @@
-arms_ui_node:
+/arms/arms_ui_node:
   ros__parameters:
     ui:
       stream_enabled: true
@@ -31,14 +31,14 @@ arms_ui_node:
       power_button: false
       power_off_cmd: systemctl poweroff
 
-flight_recorder:
+/arms/flight_recorder:
   ros__parameters:
     record_topics:
-      - /arms/ui_image/compressed
-      - /arms/image_raw/compressed
-      - /arms/detections_raw
-      - /arms/detections
-      - /arms/detector_status
+      - /arms/ui/image/compressed
+      - /arms/camera/image_raw/compressed
+      - /arms/perception/detections_raw
+      - /arms/perception/detections
+      - /arms/perception/status
       - /arms/ibvs_debug
       - /arms/control_debug
       - /arms/crsf_tx

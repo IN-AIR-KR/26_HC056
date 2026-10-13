@@ -127,7 +127,7 @@ def generate_launch_description():
         Node(
             package="arms_ui",
             executable="arms_ui_node",
-            name="arms_ui_node",
+            namespace="arms", name="arms_ui_node",
             output="screen",
             parameters=[str(ui_config), {
                 "ui.fullscreen": ParameterValue(
@@ -145,11 +145,11 @@ def generate_launch_description():
         Node(
             package="image_transport",
             executable="republish",
-            name="ui_image_republish",
+            namespace="arms", name="ui_image_republish",
             arguments=["raw", "compressed"],
             remappings=[
-                ("in", "/arms/ui_image"),
-                ("out/compressed", "/arms/ui_image/compressed"),
+                ("in", "ui/image"),
+                ("out/compressed", "ui/image/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
@@ -158,11 +158,11 @@ def generate_launch_description():
         Node(
             package="image_transport",
             executable="republish",
-            name="raw_image_republish",
+            namespace="arms", name="raw_image_republish",
             arguments=["raw", "compressed"],
             remappings=[
-                ("in", "/arms/image_raw"),
-                ("out/compressed", "/arms/image_raw/compressed"),
+                ("in", "camera/image_raw"),
+                ("out/compressed", "camera/image_raw/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 80}],
             condition=IfCondition(LaunchConfiguration("auto_save")),
@@ -172,7 +172,7 @@ def generate_launch_description():
         Node(
             package="arms_ui",
             executable="flight_recorder",
-            name="flight_recorder",
+            namespace="arms", name="flight_recorder",
             output="screen",
             parameters=[str(ui_config), {
                 "manifest.control_params_path": str(control_config),

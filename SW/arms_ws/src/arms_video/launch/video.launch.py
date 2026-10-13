@@ -20,18 +20,18 @@ def generate_launch_description():
         Node(
             package="v4l2_camera",
             executable="v4l2_camera_node",
-            name="arms_video_node",
+            namespace="arms", name="arms_video_node",
             output="screen",
             parameters=[str(config)],
             remappings=[
-                ("image_raw", "/arms/image_raw"),
+                ("image_raw", "camera/image_raw"),
                 # image_transport 압축 서브토픽은 베이스 리매핑이 안 따라간다
                 # (기본이면 /image_raw/compressed 로 나감) → 명시적으로 리매핑해야
                 # detection(도커)이 구독하는 /arms/image_raw/compressed 와 이름이 맞는다.
-                ("image_raw/compressed", "/arms/image_raw/compressed"),
-                ("image_raw/compressedDepth", "/arms/image_raw/compressedDepth"),
-                ("image_raw/theora", "/arms/image_raw/theora"),
-                ("camera_info", "/arms/camera_info"),
+                ("image_raw/compressed", "camera/image_raw/compressed"),
+                ("image_raw/compressedDepth", "camera/image_raw/compressedDepth"),
+                ("image_raw/theora", "camera/image_raw/theora"),
+                ("camera_info", "camera/camera_info"),
             ],
         ),
     ])

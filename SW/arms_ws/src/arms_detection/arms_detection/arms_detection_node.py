@@ -12,12 +12,12 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 엔 완전히 투명 — 더 연속적인 /arms/detections 를 낼 뿐이다.
 
 토픽
-  구독 : /arms/image_raw        sensor_msgs/Image
-  발행 : /arms/detections       arms_msgs/DetectionArray
-  발행 : /arms/detections_raw   arms_msgs/DetectionArray (KF 적용 전 원시 측정값; 로그/튜닝용)
-  발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, HSV 후보 전체+최종 선택 시각화)
-  발행 : /arms/hsv_debug_image  sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
-  발행 : /arms/detector_status  std_msgs/Float32MultiArray (검출·처리시간 진단값)
+  구독 : camera/image_raw                 sensor_msgs/Image
+  발행 : perception/detections            arms_msgs/DetectionArray
+  발행 : perception/detections_raw        arms_msgs/DetectionArray (KF 적용 전 원시 측정값; 로그/튜닝용)
+  발행 : perception/debug_image           sensor_msgs/Image  (bgr8, HSV 후보 전체+최종 선택 시각화)
+  발행 : perception/hsv_debug_image       sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
+  발행 : perception/status                std_msgs/Float32MultiArray (검출·처리시간 진단값)
 
 파라미터 (ros2 param set /arms_detection_node ...)
   use_hsv                      : bool  HSV 후보 제안 on/off, off=순수 전체화면 YOLO (기본 true)
@@ -328,24 +328,24 @@ class ArmsDetectionNode(Node):
         # 입력 전송: ARMS_INPUT_COMPRESSED=1 이면 압축(CompressedImage)을 구독·디코드
         # → 컨테이너로 오는 UDP 데이터량 급감(조각 드롭↓). 아니면 raw Image.
         if os.environ.get("ARMS_INPUT_COMPRESSED", "0") == "1":
-            self.create_subscription(CompressedImage, "/arms/image_raw/compressed",
+            self.create_subscription(CompressedImage, "camera/image_raw/compressed",
                                      self._cb_compressed, qos)
             self.get_logger().info("입력: 압축(/arms/image_raw/compressed)")
         else:
-            self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
+            self.create_subscription(Image, "camera/image_raw", self._cb_image, qos)
 
-        self.pub_det     = self.create_publisher(DetectionArray, "/arms/detections",    10)
+        self.pub_det     = self.create_publisher(DetectionArray, "perception/detections", 10)
         # KF/필터 적용 '전' 원시 검출(측정값 z_k) 로그용. 구독자 있을 때만 발행(bag record 시 on).
         #   추후 칼만 파라미터를 오프라인 재현/튜닝하려고 그대로 남긴다.
-        self.pub_det_raw = self.create_publisher(DetectionArray, "/arms/detections_raw", 10)
+        self.pub_det_raw = self.create_publisher(DetectionArray, "perception/detections_raw", 10)
         # debug_image: HSV 후보 전체 + 최종 선택 오버레이. hsv_debug_image: HSV 확률 마스크+후보.
         #   둘 다 구독자 있을 때만 발행(cv_debug 패널은 hsv_debug_image 를 구독).
-        self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
+        self.pub_debug   = self.create_publisher(Image,          "perception/debug_image", 10)
         self.pub_hsv_debug = self.create_publisher(
-            Image, "/arms/hsv_debug_image", 10)
+            Image, "perception/hsv_debug_image", 10)
         # 진단 배열: [0]YOLO conf [1]HSV conf [2]hsv_count [3]yolo_inputs [4]yolo_accepted
         #   [5]frame_interval_ms [6]resize_ms [7]hsv_ms [8]yolo_ms [9]filter_ms [10]total_ms [11]state_code.
-        self.pub_detstatus = self.create_publisher(Float32MultiArray, "/arms/detector_status", 10)
+        self.pub_detstatus = self.create_publisher(Float32MultiArray, "perception/status", 10)
 
         self.get_logger().info(
             "arms_detection_node ready [HSV proposals → batched ROI YOLO + full fallback, KF filter]")
