@@ -23,11 +23,14 @@
          base_link — 동체 + 센서
          ================================================================ -->
     <link name="base_link">
-      <!-- 요격드론 물리량: AUW = 1.05kg (실기체 실측 질량과 일치. 동체 1.008 + 로터 4×0.008 + 카메라 0.01).
-           관성은 이전값을 질량비(1.008/1.15≈0.877)로 스케일한 근사 — 실기체 실측 관성으로 교체하면
+      <!-- 요격드론 물리량: AUW = 1.04kg (동체 1.008 + 로터 4×0.008).
+           관성은 이전값을 질량비로 스케일한 근사 — 실기체 실측 관성으로 교체하면
            rate PID 튜닝 전이가 더 정확해진다. -->
       <inertial>
         <mass>1.008</mass>
+        <!-- 카메라는 base_link sensor라 질량이 없다. base와 rotor 모두 모터 축 높이에
+             질량 중심을 두어 전체 CoM을 z=-0.087m로 맞춘다. -->
+        <pose>0 0 -0.087 0 0 0</pose>
         <inertia>
           <ixx>0.0019</ixx>
           <ixy>0</ixy>
@@ -127,6 +130,28 @@
         <gz_frame_id>base_link</gz_frame_id>
         <always_on>1</always_on>
         <update_rate>30</update_rate>
+      </sensor>
+
+      <!-- Upward-facing camera: massless sensor, optical axis = body +Z. -->
+      <sensor name="upward_camera" type="camera">
+        <pose>0 0 0.15 0 -1.5708 0</pose>
+        <always_on>true</always_on>
+        <update_rate>60</update_rate>
+        <camera>
+          <!-- RunCam Phoenix 2 SE V2 (1/2" CMOS, 6.4x4.8mm) + 8mm lens:
+               hfov = 2*atan(3.2/8) = 0.7610 rad = 43.6 deg. -->
+          <horizontal_fov>0.7610</horizontal_fov>
+          <image>
+            <width>720</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>100</far>
+          </clip>
+        </camera>
+        <topic>/arms_drone/upward_camera/image</topic>
       </sensor>
     </link>
 
@@ -278,8 +303,8 @@
     <!-- ================================================================
          Motor plugins (from x500)
          추력 = motorConstant · ω²,  ω_max = maxRotVelocity(1000 rad/s)
-         motorConstant 1.4715e-05 → 모터당 최대 1.5 kgf (14.7 N), 4개 6.0 kgf, AUW 1.05kg → TWR≈5.71
-         PX4 출력 u(0~1) → ω = 150 + 850·u (airframe SIM_GZ_EC_MIN/MAX) → 호버 u≈0.316
+         motorConstant 1.4715e-05 → 모터당 최대 1.5 kgf (14.7 N), 4개 6.0 kgf, AUW 1.04kg → TWR≈5.77
+         PX4 출력 u(0~1) → ω = 150 + 850·u (airframe SIM_GZ_EC_MIN/MAX) → 호버 u≈0.313
          ================================================================ -->
     <plugin filename="gz-sim-multicopter-motor-model-system" name="gz::sim::systems::MulticopterMotorModel">
       <jointName>rotor_0_joint</jointName>
@@ -345,43 +370,6 @@
       <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
       <motorType>velocity</motorType>
     </plugin>
-
-    <!-- ================================================================
-         Upward-facing camera (+Z body)
-         ================================================================ -->
-    <link name="upward_camera_link">
-      <pose relative_to="base_link">0 0 1.0 0 -1.5708 0</pose>
-      <inertial>
-        <mass>0.01</mass>
-        <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz></inertia>
-      </inertial>
-      <sensor name="upward_camera" type="camera">
-        <pose>0 0 0 0 0 0</pose>
-        <always_on>true</always_on>
-        <update_rate>60</update_rate>   <!-- 30→60Hz: LOS각속도 추정 신선도↑ → PN 정확도·안정성↑ -->
-
-        <camera>
-          <!-- RunCam Phoenix 2 SE V2 (1/2" CMOS, 6.4x4.8mm) + 8mm 렌즈:
-               hfov = 2*atan(3.2/8) = 0.7610 rad = 43.6° (반각 21.8°) -->
-          <horizontal_fov>0.7610</horizontal_fov>
-
-          <image>
-            <width>720</width>    <!-- 실기체 FPV 카메라 해상도(720x480, 3:2)에 맞춤 -->
-            <height>480</height>
-            <format>R8G8B8</format>
-          </image>
-          <clip>
-            <near>0.1</near>
-            <far>100</far>
-          </clip>
-        </camera>
-        <topic>/arms_drone/upward_camera/image</topic>
-      </sensor>
-    </link>
-    <joint name="upward_camera_joint" type="fixed">
-      <parent>base_link</parent>
-      <child>upward_camera_link</child>
-    </joint>
 
   </model>
 </sdf>

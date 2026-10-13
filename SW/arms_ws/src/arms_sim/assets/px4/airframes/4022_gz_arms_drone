@@ -1,11 +1,32 @@
 #!/bin/sh
 #
-# @name Gazebo ARMS Drone
+# @name Gazebo ARMS Drone (Generic 250 Racer baseline)
 #
 # @type Quadrotor
 #
 
 . ${R}etc/init.d/rc.mc_defaults
+
+# PX4 Generic 250 Racer (SYS_AUTOSTART=4050) baseline.  ARMS-specific
+# allocation and SITL transport settings below intentionally override only the
+# parts that must match this Gazebo model and its MAVLink RC bridge.
+param set-default MC_ROLL_P 8
+param set-default MC_ROLLRATE_P 0.08
+param set-default MC_ROLLRATE_I 0.25
+param set-default MC_ROLLRATE_D 0.001
+param set-default MC_PITCH_P 8
+param set-default MC_PITCHRATE_P 0.08
+param set-default MC_PITCHRATE_D 0.001
+param set-default MC_YAW_P 4
+param set-default MC_ROLLRATE_MAX 1600
+param set-default MC_PITCHRATE_MAX 1600
+param set-default MC_YAWRATE_MAX 1000
+param set-default MPC_MAN_TILT_MAX 60
+param set-default THR_MDL_FAC 0.3
+param set-default IMU_DGYRO_CUTOFF 50
+param set-default IMU_GYRO_CUTOFF 90
+param set-default MPC_Z_VEL_MAX_UP 3
+param set-default MPC_Z_VEL_MAX_DN 3
 
 PX4_SIMULATOR=${PX4_SIMULATOR:=gz}
 PX4_GZ_WORLD=${PX4_GZ_WORLD:=default}
@@ -49,28 +70,9 @@ param set-default SIM_GZ_EC_MAX2 1000
 param set-default SIM_GZ_EC_MAX3 1000
 param set-default SIM_GZ_EC_MAX4 1000
 
-# AUW 1.05kg + 추력 58.9N(모터 1.5kgf×4) → TWR≈5.71.
-# 호버: 모터당 필요 ω = √(1.05·9.81/4 / 1.4715e-5) ≈ 418 rad/s, ω = 150 + 850·u (EC_MIN/MAX) → u ≈ 0.316
+# AUW 1.04kg + 추력 58.9N(모터 1.5kgf×4) → TWR≈5.77.
+# 호버: 모터당 필요 ω = √(1.04·9.81/4 / 1.4715e-5) ≈ 416 rad/s, ω = 150 + 850·u (EC_MIN/MAX) → u ≈ 0.313
 param set-default MPC_THR_HOVER 0.32
-
-# ── 요격드론급 민첩화 (250급 경량 기체) ──
-# 참고: 자동요격은 sitl_bridge 의 acro(각속도) 경로로 나가므로 MC_ACRO_* 가 핵심.
-#       max_rate_dps(control_params.yaml) 와 MC_ACRO_R/P_MAX 는 반드시 같은 값으로.
-param set-default MPC_TILTMAX_AIR 65    # 최대 기울기[deg] → 횡가속↑
-param set-default MPC_MAN_TILT_MAX 65
-param set-default MPC_XY_VEL_MAX 20     # 최대 수평속도[m/s]
-param set-default MPC_XY_CRUISE 15
-param set-default MPC_ACC_HOR 15        # 수평 가속[m/s²]
-param set-default MPC_ACC_HOR_MAX 20
-param set-default MPC_Z_VEL_MAX_UP 6    # 상승속도[m/s]
-param set-default MPC_Z_VEL_MAX_DN 4
-param set-default MPC_ACC_UP_MAX 15
-param set-default MC_ROLLRATE_MAX 400   # 최대 롤/피치 각속도[deg/s]
-param set-default MC_PITCHRATE_MAX 400
-param set-default MC_YAWRATE_MAX 200
-param set-default MC_ACRO_R_MAX 400     # ACRO 풀스틱 각속도 — control_params max_rate_dps 와 짝(400)
-param set-default MC_ACRO_P_MAX 400
-param set-default MC_ACRO_Y_MAX 200
 
 # GCS 없는 standalone 비행 — failsafe 비활성화
 param set-default NAV_DLL_ACT 0       # 데이터링크 소실 무시 (GCS 없음)
@@ -100,8 +102,8 @@ param set-default CBRK_SUPPLY_CHK 894281
 # 항상 그 지점보다 크므로 채널 값이 실제로 뭘 보내든 상관없이 항상 +1.0(최댓값)으로 읽힌다.
 # → throttle이 0을 보내도 PX4는 "최대 throttle"로 인식 → arm 시 "throttle not in safe
 #   position"으로 항상 거부(직전 5초 이내 재arm이라 프리체크가 스킵된 우연한 경우만 통과).
-# sitl_bridge_node의 _crsf_to_us()가 172~1811(CRSF) → 1000~2000us로 변환하므로,
-# 그 범위와 정확히 맞춰 MIN/TRIM/MAX를 채워서 -1..1 스케일링이 실제로 의미있게 만든다.
+# sitl_bridge_node가 정규화된 flight command(-1..1)를 1000~2000us PWM으로 변환하므로,
+# 그 범위와 정확히 맞춰 MIN/TRIM/MAX를 채워서 PX4의 -1..1 스케일링이 의미있게 만든다.
 param set-default RC1_MIN 1000
 param set-default RC1_TRIM 1500
 param set-default RC1_MAX 2000

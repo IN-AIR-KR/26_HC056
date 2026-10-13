@@ -37,9 +37,8 @@ from ament_index_python.packages import get_package_share_directory
 #   COM_DISARM_PRFLT 0  = arm 후 이륙 지연 자동 disarm 해제 (가만히 둬도 안 멈춤)
 #   NAV_DLL_ACT      0  = GCS(데이터링크) 연결 끊김 페일세이프 해제
 #   NAV_RCL_ACT      0  = RC 연결 끊김 페일세이프 해제
-#   MC_ACRO_R_MAX / P_MAX = ACRO 모드 풀스틱 각속도[deg/s] (control.max_rate_dps 와 일치).
-#   MPC_MAN_TILT_MAX / MPC_TILTMAX_AIR = 최대 기울기[deg]. 크게 기울일수록 옆으로 빨리 감
-#     → 빠른 표적 추격용. 35°(기본)→65° 로 상향. 단 너무 크면 양력 손실.
+#   MC_ACRO_R_MAX / P_MAX = ACRO 모드 풀스틱 각속도[deg/s]. control의
+#     flight command 정규화 기준(400 deg/s)과 일치해야 한다.
 PX4_PARAMS = {
     "COM_DISARM_PRFLT": 0,
     "NAV_DLL_ACT": 0,
@@ -49,8 +48,6 @@ PX4_PARAMS = {
     "RC_MAP_KILL_SW": 0,
     "MC_ACRO_R_MAX": 400,
     "MC_ACRO_P_MAX": 400,
-    "MPC_MAN_TILT_MAX": 65,
-    "MPC_TILTMAX_AIR": 65,
 }
 
 # 종료/재기동 시 정리할 프로세스 패턴 (pkill -f).
