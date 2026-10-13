@@ -101,7 +101,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("servo.lock_duty_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
     declare_required_parameter("servo.open_duty_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
 
-    // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
+    // 자동요격은 ACRO(각속도) 고정이다. 예전 angle-mode 출력 분기와
     // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
     // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
     // autonomous_acro 도 같이 없앴다(CH6 low = ACRO 고정).
@@ -1123,7 +1123,7 @@ class ArmsControlNode : public rclcpp::Node {
     //   · 자동: idle/search 게이트에 적용 (기본 IDLE, SEARCH 재토글 안전장치)
     //   · 수동: CH5 arm 에 적용 (기본 DISARM, arm 재토글 안전장치)
     //   ※ 자동 CH5 arm 자체는 스위치와 분리되어 상태머신 상태(auto_arm_states_)로 결정한다.
-    // command UART가 끊긴 경우에는 직전 틱에서 실제로 arm 상태였던 기체만 무장을
+    // operator input이 끊긴 경우에는 직전 틱에서 실제로 arm 상태였던 기체만 무장을
     // 유지해 FC GPS Rescue로 넘긴다. 미무장 상태의 통신 단절이 새 arm을 만들면 안 된다.
     const bool effective_arm =
         (joy_arm_ && !require_arm_reset_) ||
@@ -1230,7 +1230,7 @@ class ArmsControlNode : public rclcpp::Node {
     const bool ch5_armed = base_ch5_armed;
 
     // The control node emits only normalized commands. The active I/O adapter
-    // owns CRSF channel layout or MAVLink conversion.
+    // owns vehicle-specific command conversion.
     arms_msgs::msg::FlightCommand flight_cmd;
     flight_cmd.header.stamp = now_t;
     flight_cmd.arm = ch5_armed;
@@ -1242,7 +1242,7 @@ class ArmsControlNode : public rclcpp::Node {
       flight_cmd.throttle = std::clamp((joy_axes_[1] + 1.0F) * 0.5F, 0.0F, 1.0F);
       flight_cmd.yaw = joy_axes_[0];
     } else {
-      // Preserve the former CRSF path's two-stage limit: guidance output is
+      // Preserve the previous two-stage limit: guidance output is
       // bounded by max_cmd_rate_dps before conversion to the FC stick range.
       // Limiting only to [-1, 1] here would permit max_rate_dps full-stick
       // commands and materially change the tuned controller behavior.
@@ -1284,7 +1284,7 @@ class ArmsControlNode : public rclcpp::Node {
     }
 
     // ---- RTL one-shot ----
-    // NOTE: land/RTL 전용 CRSF 채널은 제거됨(CH6는 flight mode). 자동 착륙은
+    // NOTE: land/RTL 전용 출력은 없다(CH6는 flight mode). 자동 착륙은
     // 별도 경로(예: manual 모드 Altitude 전환 후 수동 착륙)로 처리 필요.
     if (state == State::RTL && !rtl_sent_) {
       rtl_sent_ = true;
@@ -1307,7 +1307,7 @@ class ArmsControlNode : public rclcpp::Node {
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
     msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
-    msg.elrs_connected = io_status_received_ && !io_fault_;
+    msg.io_connected = io_status_received_ && !io_fault_;
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----

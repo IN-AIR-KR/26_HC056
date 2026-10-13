@@ -170,9 +170,9 @@ class ArmsUINode(Node):
                 best_effort_qos)
         # Hardware input is best-effort while the GUI is reliable.
         self.create_subscription(OperatorInput, "/arms/operator/input", self._cb_command, best_effort_qos)
-        # 배터리는 CRSF 통합 스냅샷이 아니라 전용 토픽을 구독한다.
+        # 배터리는 I/O 원시 통신 스냅샷이 아니라 정규화된 전용 토픽을 구독한다.
         self.create_subscription(BatteryTelemetry, "/arms/battery", self._cb_battery, 10)
-        # GPS는 CRSF 0x02를 control 노드가 별도 변환해 발행한다.
+        # GPS는 활성 flight I/O adapter가 정규화해 발행한다.
         self.create_subscription(GpsTelemetry, "/arms/gps", self._cb_gps, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
         self.create_subscription(Float32MultiArray, "/arms/detector_status",
@@ -184,11 +184,11 @@ class ArmsUINode(Node):
         self._latest_roi = None
         self._latest_hsv_debug = None
         self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
-        self._latest_gps = None       # /arms/gps 최신값 (CRSF GPS frame 기준)
+        self._latest_gps = None       # /arms/gps 최신값
         self._gps_received_t = 0.0    # GPS telemetry가 끊긴 상태를 표시하기 위한 monotonic 시각
-        self._elrs_connected = None   # ELRS 연결 여부 (None=미수신). 화면 표시는 이 값으로 즉시 반영
-        self._elrs_sound_state = None # 효과음 기준 상태(디바운스로 확정된 값). None=아직 안 알림
-        self._elrs_changed_t = 0.0    # raw 표시값이 마지막으로 바뀐 시각(디바운스용)
+        self._io_connected = None     # flight I/O 링크 상태 (None=미수신). 화면 표시는 즉시 반영
+        self._io_sound_state = None   # 효과음 기준 상태(디바운스로 확정된 값). None=아직 안 알림
+        self._io_changed_t = 0.0      # raw 표시값이 마지막으로 바뀐 시각(디바운스용)
         self._start_t = time.monotonic()  # 노드 시작 시각(시작 안내 grace 계산용)
         # 시작 안내음: 모드+텔레메트리를 모드 먼저 한 번만, 공백 없이 이어 재생.
         #   링크가 붙는 데 몇 초 걸리므로, 붙거나 grace 가 지나야 안내 → 켤 때 잠깐 뜨는 초기 LOST 억제.
@@ -284,19 +284,19 @@ class ArmsUINode(Node):
         self._prev_armed = armed
         self._prev_state = state
 
-        # ---- ELRS(TELM) 연결/끊김 효과음 ----
+        # ---- flight I/O(TELM) 연결/끊김 효과음 ----
         #   시작 안내는 _maybe_startup_announce(모드→텔레메트리, 링크 붙거나 grace 후).
         #   운영 중 변화는 debounce 로 깜빡임을 무시하고 확정된 것만 낸다(겹침 방지).
-        connected = bool(getattr(msg, "elrs_connected", False))
+        connected = bool(msg.io_connected)
         now = time.monotonic()
-        if self._elrs_connected is None or connected != self._elrs_connected:
-            self._elrs_changed_t = now       # raw(표시값)가 바뀐 시각
-        self._elrs_connected = connected     # 화면 표시는 즉시 반영
+        if self._io_connected is None or connected != self._io_connected:
+            self._io_changed_t = now         # raw(표시값)가 바뀐 시각
+        self._io_connected = connected       # 화면 표시는 즉시 반영
         if self._startup_sound_done:
             debounce = float(self.get_parameter("ui.telm_debounce_sec").value)
-            if connected != self._elrs_sound_state and \
-                    (now - self._elrs_changed_t) >= debounce:
-                self._elrs_sound_state = connected
+            if connected != self._io_sound_state and \
+                    (now - self._io_changed_t) >= debounce:
+                self._io_sound_state = connected
                 param = "ui.sound_telm_connected" if connected else "ui.sound_telm_lost"
                 self._play_sound(self.get_parameter(param).value)
         self._maybe_startup_announce()
@@ -306,9 +306,9 @@ class ArmsUINode(Node):
         붙었거나(연결) grace 시간이 지났을 때 낸다 → 켤 때 잠깐 뜨는 초기 LOST 를 안 낸다."""
         if self._startup_sound_done:
             return
-        if self._prev_manual is None or self._elrs_connected is None:
+        if self._prev_manual is None or self._io_connected is None:
             return   # 모드 or 연결여부 미수신 → 대기
-        connected = bool(self._elrs_connected)
+        connected = bool(self._io_connected)
         grace = float(self.get_parameter("ui.telm_startup_grace_sec").value)
         grace_over = (time.monotonic() - self._start_t) >= grace
         if not (connected or grace_over):
@@ -318,7 +318,7 @@ class ArmsUINode(Node):
         telm_p = self.get_parameter(
             "ui.sound_telm_connected" if connected else "ui.sound_telm_lost").value
         self._startup_sound_done = True
-        self._elrs_sound_state = connected       # 이후 debounce 엣지 판정 기준
+        self._io_sound_state = connected         # 이후 debounce 엣지 판정 기준
         self._play_sequence([mode_p, telm_p])    # 모드 먼저 → 텔레메트리, 공백 없이
 
     def _cb_debug(self, msg: Vector3):
@@ -995,14 +995,14 @@ class ArmsUINode(Node):
         scale = max(0.5, h / 900.0)
         thick = max(1, int(round(scale * 2)))
         mode_txt = "MANUAL" if self._manual_mode else "TRACKING"
-        if self._elrs_connected is None:
+        if self._io_connected is None:
             link_txt, link_col = "", (0, 0, 0)   # 아직 미수신 → TELM 표시 안 함(모드만)
-        elif self._elrs_connected:
+        elif self._io_connected:
             link_txt, link_col = "TELM OK", (0, 220, 0)
         else:
             # 끊김은 안전상 눈에 띄게 점멸(빨강).
-            self._elrs_blink = (getattr(self, "_elrs_blink", 0) + 1) % 20
-            link_col = (60, 60, 60) if self._elrs_blink >= 13 else (0, 0, 255)
+            self._io_blink = (getattr(self, "_io_blink", 0) + 1) % 20
+            link_col = (60, 60, 60) if self._io_blink >= 13 else (0, 0, 255)
             link_txt = "TELM LOST"
         sep = "   "
         mode_str = mode_txt + sep
