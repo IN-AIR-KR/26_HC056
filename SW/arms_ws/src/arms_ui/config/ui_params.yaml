@@ -41,11 +41,11 @@
       - /arms/perception/status
       - /arms/control/ibvs_debug
       - /arms/control/debug
-      - /arms/crsf_tx
-      - /arms/crsf_rx
-      - /arms/attitude
-      - /arms/battery
-      - /arms/gps
+      - /arms/io/crsf/tx
+      - /arms/io/crsf/rx
+      - /arms/vehicle/attitude
+      - /arms/vehicle/battery
+      - /arms/vehicle/gps
       - /arms/mission/state
       - /arms/operator/input
       - /arms/control/flight_command

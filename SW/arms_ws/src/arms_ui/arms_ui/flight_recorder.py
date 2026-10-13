@@ -158,6 +158,8 @@ class FlightRecorder(Node):
                 self.get_logger().warn(f"[REC] control_params.yaml 사본 저장 실패: {e}")
                 config_copy = None
         manifest = {
+            "topic_schema_version": 2,
+            "namespace": "/arms",
             "started_at": datetime.now().isoformat(timespec="seconds"),
             "git_commit": self._git_commit(),
             "launch_arguments": args,

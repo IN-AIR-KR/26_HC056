@@ -131,10 +131,10 @@ class SitlViz(Node):
         self._mesh_uri = self._find_mesh()
 
         self._tf = TransformBroadcaster(self)
-        self._pub_drone_path = self.create_publisher(Path, "/arms/viz/drone_path", 1)
-        self._pub_target_path = self.create_publisher(Path, "/arms/viz/target_path", 1)
-        self._pub_markers = self.create_publisher(MarkerArray, "/arms/viz/markers", 1)
-        self.create_subscription(Empty, "/arms/reset", self._on_reset, 10)
+        self._pub_drone_path = self.create_publisher(Path, "sim/viz/drone_path", 1)
+        self._pub_target_path = self.create_publisher(Path, "sim/viz/target_path", 1)
+        self._pub_markers = self.create_publisher(MarkerArray, "sim/viz/markers", 1)
+        self.create_subscription(Empty, "sim/reset_event", self._on_reset, 10)
 
         world = self.get_parameter("world").value
         if _GZ_OK:

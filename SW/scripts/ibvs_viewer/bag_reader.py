@@ -21,7 +21,7 @@ MSG_DIR = Path(__file__).resolve().parents[2] / "arms_ws" / "src" / "arms_msgs" 
 # 영상은 그래프 대상이 아니고 무거우므로 역직렬화하지 않는다(프레임 색인만 만든다).
 SKIP_TYPES = {"sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image"}
 VIDEO_TYPE = "sensor_msgs/msg/CompressedImage"
-VIDEO_TOPIC = "/arms/ui_image/compressed"   # 우선 사용할 화면 영상 토픽
+VIDEO_TOPIC = "/arms/ui/image/compressed"   # 우선 사용할 화면 영상 토픽
 # 평탄화에서 버릴 필드 (시각은 bag 수신시각으로 통일, MultiArray layout 은 잡음).
 SKIP_FIELDS = {"header", "layout"}
 MAX_ARRAY = 16

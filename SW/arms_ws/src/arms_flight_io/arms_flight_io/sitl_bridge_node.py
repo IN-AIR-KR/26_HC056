@@ -82,8 +82,8 @@ class ArmsSITLCommNode(Node):
         self._reiniting = False        # _initial_setup 재실행 중복 방지
         self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
         # Track A preserves the established telemetry/logging API.
-        self._gps_pub = self.create_publisher(GpsTelemetry, "/arms/gps", 10)
-        self._attitude_pub = self.create_publisher(AttitudeTelemetry, "/arms/attitude", 10)
+        self._gps_pub = self.create_publisher(GpsTelemetry, "vehicle/gps", 10)
+        self._attitude_pub = self.create_publisher(AttitudeTelemetry, "vehicle/attitude", 10)
         self._status_pub = self.create_publisher(IoStatus, "io/status", 10)
         self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
 

@@ -221,7 +221,7 @@ def generate_launch_description():
         #   node name = balloon_referee (panel 의 REFEREE_NODE 와 일치必).
         Node(
             package="arms_sim", executable="referee",
-            name="balloon_referee", output="screen",
+            namespace="arms", name="balloon_referee", output="screen",
             parameters=[str(sim_config)],
         ),
         # UI 오버레이
@@ -272,11 +272,11 @@ def generate_launch_description():
                     "/arms/perception/status",
                     "/arms/control/ibvs_debug",
                     "/arms/control/debug",
-                    "/arms/crsf_tx",
-                    "/arms/crsf_rx",
-                    "/arms/attitude",
-                    "/arms/battery",
-                    "/arms/gps",
+                    "/arms/io/crsf/tx",
+                    "/arms/io/crsf/rx",
+                    "/arms/vehicle/attitude",
+                    "/arms/vehicle/battery",
+                    "/arms/vehicle/gps",
                     "/arms/mission/state",
                     "/arms/operator/input",
                     "/arms/control/flight_command",
@@ -296,7 +296,7 @@ def generate_launch_description():
         #   rviz:=false면 sitl_viz도 함께 생략한다.
         Node(
             package="arms_sim", executable="sitl_viz",
-            name="arms_sitl_viz", output="screen",
+            namespace="arms", name="arms_sitl_viz", output="screen",
             parameters=[str(sim_config)],
             condition=IfCondition(LaunchConfiguration("rviz")),
         ),

@@ -1,18 +1,18 @@
 /* IBVS 로그 뷰어 — uPlot 차트, 커서/줌 연동, 기록 목록 사이드바. */
 "use strict";
 
-const T = "/arms/ibvs_debug";
-const R = "/arms/crsf_rx";
-const M = "/arms/mission_state";
-const C = "/arms/control_debug";
-const G = "/arms/gps";
-const B = "/arms/battery";
-const CMD = "/arms/command";
-const TX = "/arms/crsf_tx";
-const A = "/arms/attitude";
-const D = "/arms/detections";
-const DR = "/arms/detections_raw";
-const DS = "/arms/detector_status";
+const T = "/arms/control/ibvs_debug";
+const R = "/arms/io/crsf/rx";
+const M = "/arms/mission/state";
+const C = "/arms/control/debug";
+const G = "/arms/vehicle/gps";
+const B = "/arms/vehicle/battery";
+const CMD = "/arms/operator/input";
+const TX = "/arms/io/crsf/tx";
+const A = "/arms/vehicle/attitude";
+const D = "/arms/perception/detections";
+const DR = "/arms/perception/detections_raw";
+const DS = "/arms/perception/status";
 
 // ---------------------------------------------------------------- 필드 수식
 // 범례는 필드명 그대로. 수식은 패널 위 표와 범례 툴팁에 나온다.
@@ -420,7 +420,7 @@ async function openRecord(id) {
 }
 
 function buildStateSegs() {
-  const src = rec.topics[T]?.strings?.state ? rec.topics[T] : rec.topics["/arms/mission_state"];
+  const src = rec.topics[T]?.strings?.state ? rec.topics[T] : rec.topics["/arms/mission/state"];
   const st = src?.strings?.state;
   if (!st) return [];
   const segs = [];

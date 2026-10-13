@@ -155,7 +155,7 @@ def _setup(context, *args, **kwargs):
     # 첫 부팅은 위 PX4가 Gazebo와 기체를 생성한다. 이후 패널 RESET은 이 관리
     # 노드가 Gazebo를 유지한 채 world reset 후 PX4만 standalone으로 재기동한다.
     actions.append(Node(
-        package="arms_sim", executable="sitl_reset_manager", name="arms_sitl_reset_manager",
+        package="arms_sim", executable="sitl_reset_manager", namespace="arms", name="arms_sitl_reset_manager",
         output="screen",
         parameters=[str(share / "config" / "sim_params.yaml"), {
             "px4_dir": str(px4_dir), "world": world, "model": model,

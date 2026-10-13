@@ -98,7 +98,7 @@ class PanelNode(Node):
         super().__init__("arms_panel_node")
         self.q = q
         self.create_subscription(MissionState, "mission/state", self._cb_state, 10)
-        self.reset_client = self.create_client(Trigger, "/arms/sitl/reset")
+        self.reset_client = self.create_client(Trigger, "sim/reset")
 
     def _cb_state(self, msg):
         self.q.put(msg)

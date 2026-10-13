@@ -57,8 +57,8 @@ class SitlResetManager(Node):
         # 자기 pose(0 0 0.24)가 곧 출발점이다. 지면에 닿으며 0.19 근처로 가라앉는다.
         self.require_parameter("spawn_pose", Parameter.Type.DOUBLE_ARRAY)
         self._busy = threading.Lock()
-        self._reset_pub = self.create_publisher(Empty, "/arms/reset", 10)
-        self.create_service(Trigger, "/arms/sitl/reset", self._reset)
+        self._reset_pub = self.create_publisher(Empty, "sim/reset_event", 10)
+        self.create_service(Trigger, "sim/reset", self._reset)
 
     def _reset(self, _request, response):
         if not self._busy.acquire(blocking=False):

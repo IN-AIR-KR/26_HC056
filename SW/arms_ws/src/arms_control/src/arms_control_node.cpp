@@ -570,7 +570,7 @@ class ArmsControlNode : public rclcpp::Node {
 
     // 심판(referee)의 직격 통지. SITL에서 실제 접촉이 확인되면 TRACK을 RTL로 전이한다.
     sub_hit_ = create_subscription<std_msgs::msg::Empty>(
-        "/arms/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
+        "sim/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
           if (hit_rtl_via_referee_) {
             const auto prev = to_string(sm_->state());
             sm_->on_hit();   // 심판 직격 명중 → RTL (SITL 지상진실 판정)
@@ -587,7 +587,7 @@ class ArmsControlNode : public rclcpp::Node {
     // SITL 패널 RESET: PX4가 다시 붙는 동안 이전 에피소드의 TRACK/RTL 상태나
     // arm 스위치가 새 기체로 이어지지 않도록 제어 상태를 안전한 IDLE로 비운다.
     sub_reset_ = create_subscription<std_msgs::msg::Empty>(
-        "/arms/reset", 10, [this](std_msgs::msg::Empty::SharedPtr) {
+        "sim/reset_event", 10, [this](std_msgs::msg::Empty::SharedPtr) {
           sm_->disarm();
           pid_roll_->reset();
           pid_pitch_->reset();

@@ -86,11 +86,11 @@ class CrsfIoNode(Node):
         self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
         # Track A preserves the established telemetry/logging API.  Only the
         # command boundary and I/O ownership move in this track.
-        self._tx_pub = self.create_publisher(Int16MultiArray, "/arms/crsf_tx", 10)
-        self._rx_pub = self.create_publisher(CrsfTelemetry, "/arms/crsf_rx", 10)
-        self._gps_pub = self.create_publisher(GpsTelemetry, "/arms/gps", 10)
-        self._att_pub = self.create_publisher(AttitudeTelemetry, "/arms/attitude", 10)
-        self._bat_pub = self.create_publisher(BatteryTelemetry, "/arms/battery", 10)
+        self._tx_pub = self.create_publisher(Int16MultiArray, "io/crsf/tx", 10)
+        self._rx_pub = self.create_publisher(CrsfTelemetry, "io/crsf/rx", 10)
+        self._gps_pub = self.create_publisher(GpsTelemetry, "vehicle/gps", 10)
+        self._att_pub = self.create_publisher(AttitudeTelemetry, "vehicle/attitude", 10)
+        self._bat_pub = self.create_publisher(BatteryTelemetry, "vehicle/battery", 10)
         self._status_pub = self.create_publisher(IoStatus, "io/status", 10)
         self.create_timer(1.0 / float(self.get_parameter("send_rate_hz").value), self._send)
         self.create_timer(0.005, self._poll_rx)

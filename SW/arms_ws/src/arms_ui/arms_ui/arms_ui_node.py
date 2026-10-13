@@ -171,9 +171,9 @@ class ArmsUINode(Node):
         # Hardware input is best-effort while the GUI is reliable.
         self.create_subscription(OperatorInput, "/arms/operator/input", self._cb_command, best_effort_qos)
         # 배터리는 I/O 원시 통신 스냅샷이 아니라 정규화된 전용 토픽을 구독한다.
-        self.create_subscription(BatteryTelemetry, "/arms/battery", self._cb_battery, 10)
+        self.create_subscription(BatteryTelemetry, "vehicle/battery", self._cb_battery, 10)
         # GPS는 활성 flight I/O adapter가 정규화해 발행한다.
-        self.create_subscription(GpsTelemetry, "/arms/gps", self._cb_gps, 10)
+        self.create_subscription(GpsTelemetry, "vehicle/gps", self._cb_gps, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
         self.create_subscription(Float32MultiArray, "perception/status",
                                  self._cb_detstatus, 10)

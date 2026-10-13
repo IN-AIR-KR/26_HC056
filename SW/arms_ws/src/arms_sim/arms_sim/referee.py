@@ -170,8 +170,8 @@ class BalloonReferee(Node):
         # "영상이 발사 판정했다" 와 "실제로 닿았다" 가 같은 값이 되어버린다.
         # 이제 둘은 독립이고, 어긋나는 것 자체가 정보다.
         # /arms/hit 은 통지용 — arms_control 은 이걸 로그로만 쓴다.
-        self._hit_pub = self.create_publisher(Empty, "/arms/hit", 10)
-        self.create_subscription(Empty, "/arms/reset", self._on_reset, 10)
+        self._hit_pub = self.create_publisher(Empty, "sim/hit", 10)
+        self.create_subscription(Empty, "sim/reset_event", self._on_reset, 10)
         self._last_dist_log = 0.0     # 접근거리 로그 스로틀
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
         self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)
