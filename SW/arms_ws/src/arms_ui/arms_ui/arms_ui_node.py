@@ -46,6 +46,15 @@ STATE_COLORS = {
     "RTL":    (255, 180, 0),
 }
 
+# 실기체와 SITL은 영상·운용자 입력 구현만 다르다. 둘 중 하나가 ROS graph에 있으면
+# 해당 구성요소가 online이다.
+COMPONENT_NODES = {
+    "Video": ("/arms/arms_video_node", "/arms/arms_video_up"),
+    "Detection": ("/arms/arms_detection_node",),
+    "Control": ("/arms/arms_control_node",),
+    "Operator": ("/arms/arms_operator_hardware_node", "/arms/arms_operator_gui_node"),
+}
+
 
 class ArmsUINode(Node):
     def require_parameter(self, name, parameter_type):
@@ -243,6 +252,9 @@ class ArmsUINode(Node):
         self.create_timer(0.05, self._beep_tick)
         # 영상이 없어도 창이 뜨도록 대기화면을 주기적으로 그린다(카메라 미연결 대비).
         self.create_timer(0.1, self._ui_tick)
+        self._component_online = {name: False for name in COMPONENT_NODES}
+        self._update_component_status()
+        self.create_timer(1.0, self._update_component_status)
 
         self.get_logger().info("arms_ui_node started.")
 
@@ -252,6 +264,17 @@ class ArmsUINode(Node):
 
     def _cb_detections(self, msg: DetectionArray):
         self._latest_detections = msg
+
+    def _update_component_status(self):
+        """ROS graph의 node list만 1 Hz로 확인하는 경량 시작 상태 표시."""
+        nodes = set()
+        for name, namespace in self.get_node_names_and_namespaces():
+            base = namespace.rstrip("/")
+            nodes.add(f"{base}/{name}" if base else f"/{name}")
+        self._component_online = {
+            label: any(candidate in nodes for candidate in candidates)
+            for label, candidates in COMPONENT_NODES.items()
+        }
 
     def _cb_state(self, msg: MissionState):
         self._latest_state = msg
@@ -418,6 +441,7 @@ class ArmsUINode(Node):
         # 대기화면에선 중앙 십자선·부제를 그리지 않는다(요청).
         self._draw_link_status(frame)            # 모드·TELM 연결 표시
         self._draw_battery(frame)
+        self._draw_component_status(frame)
         self._draw_power_ui(frame)               # 전원 버튼 사용 가능하게
         self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 이미 화면 크기 → 항등(터치 매핑)
         cv2.imshow("A.R.M.S.", frame)
@@ -622,6 +646,7 @@ class ArmsUINode(Node):
         self._draw_battery(frame)
         # GPS fix/위성수/고도/지상속도는 우상단에 네 줄로 표시한다.
         self._draw_gps(frame)
+        self._draw_component_status(frame)
         # 검출기 작동여부·confidence·모드 텍스트는 디버그 모드에서만(메인은 깔끔하게).
         if self._debug and not self._manual_mode and (
                 self._latest_state.state or "IDLE") in (
@@ -1086,6 +1111,30 @@ class ArmsUINode(Node):
             line_color = color if i == 0 else (255, 255, 255)
             cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
             cv2.putText(frame, text, (x, y), font, scale, line_color, thick, cv2.LINE_AA)
+
+    def _draw_component_status(self, frame):
+        """좌측 중단의 node-list 기반 구성요소 상태 (online/missing)."""
+        h, _ = frame.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.42, h / 1150.0)
+        thick = max(1, int(round(scale * 2)))
+        margin = max(10, int(h * 0.02))
+        line_h = max(20, int(h * 0.048))
+        y0 = int(h * 0.43)
+        status_x = margin + max(
+            cv2.getTextSize(label, font, scale, thick)[0][0]
+            for label in COMPONENT_NODES
+        ) + max(14, int(h * 0.025))
+        for i, label in enumerate(COMPONENT_NODES):
+            online = self._component_online.get(label, False)
+            status = "online" if online else "missing"
+            status_color = (0, 220, 0) if online else (0, 0, 255)
+            y = y0 + i * line_h
+            for text, x, color in ((label, margin, (255, 255, 255)),
+                                   (status, status_x, status_color)):
+                cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2,
+                            cv2.LINE_AA)
+                cv2.putText(frame, text, (x, y), font, scale, color, thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
         """검출 필터 상태(TRK)·YOLO/HSV 상태·후보 카운트를 좌상단에 표시."""
