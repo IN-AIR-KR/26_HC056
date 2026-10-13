@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <set>
 #include <string>
 #include <vector>
@@ -29,88 +30,97 @@ namespace arms_control {
 
 class ArmsControlNode : public rclcpp::Node {
  public:
+  void declare_required_parameter(const std::string& name) {
+    const auto& value = declare_parameter(name);
+    if (value.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
+      throw std::runtime_error(
+          "Required parameter '" + name + "' is missing for " +
+          get_fully_qualified_name());
+    }
+  }
+
   ArmsControlNode() : Node("arms_control_node") {
     // ----------------------------------------------------------------
     // Declare & load parameters
     // ----------------------------------------------------------------
-    declare_parameter("mission.detection_confidence_threshold", 0.32);
-    declare_parameter("mission.lock_duration_sec", 1.0);
-    declare_parameter("mission.detection_timeout_sec", 1.0);
-    declare_parameter("mission.intercept_align_tol", 0.2);  // 종말 RTL 정렬 허용오차
+    declare_required_parameter("mission.detection_confidence_threshold");
+    declare_required_parameter("mission.lock_duration_sec");
+    declare_required_parameter("mission.detection_timeout_sec");
+    declare_required_parameter("mission.intercept_align_tol");
     // 비전 looming(τ) 기반 종말 RTL — bbox 팽창률로 충돌 임박을 판정한다.
-    declare_parameter("mission.tau_rtl_sec", 0.3);       // 충돌까지 시간(τ) 임계 [s]
-    declare_parameter("mission.loom_s_min", 0.1);        // 종말 RTL 최소 bbox 크기(정규화)
-    declare_parameter("mission.loom_size_alpha", 0.3);   // bbox 크기 EMA (지터 억제)
-    declare_parameter("mission.loom_rate_alpha", 0.3);   // 크기변화율(ṡ) EMA
+    declare_required_parameter("mission.tau_rtl_sec");
+    declare_required_parameter("mission.loom_s_min");
+    declare_required_parameter("mission.loom_size_alpha");
+    declare_required_parameter("mission.loom_rate_alpha");
 
-    declare_parameter("control.roll_pid.kp", 455.0);
-    declare_parameter("control.roll_pid.ki", 0.0);
-    declare_parameter("control.roll_pid.kd", 3.5);
-    declare_parameter("control.pitch_pid.kp", 455.0);
-    declare_parameter("control.pitch_pid.ki", 0.0);
-    declare_parameter("control.pitch_pid.kd", 3.5);
-    declare_parameter("control.track_throttle", 0.66);
-    declare_parameter("control.lead_gain", 0.0);
-    declare_parameter("control.roll_sign", 1.0);
-    declare_parameter("control.pitch_sign", 1.0);
+    declare_required_parameter("control.roll_pid.kp");
+    declare_required_parameter("control.roll_pid.ki");
+    declare_required_parameter("control.roll_pid.kd");
+    declare_required_parameter("control.pitch_pid.kp");
+    declare_required_parameter("control.pitch_pid.ki");
+    declare_required_parameter("control.pitch_pid.kd");
+    declare_required_parameter("control.track_throttle");
+    declare_required_parameter("control.lead_gain");
+    declare_required_parameter("control.roll_sign");
+    declare_required_parameter("control.pitch_sign");
     // Mode 0 중력 처짐 보상: 양수면 카메라 중심을 표적보다 화면 위쪽으로 조준한다.
-    declare_parameter("control.mode0_aim_above_offset", 0.03);
-    declare_parameter("control.error_lpf_alpha", 0.25);
-    declare_parameter("control.control_rate_hz", 50.0);
-    declare_parameter("control.deadzone", 0.04);
-    declare_parameter("control.deriv_lpf_alpha", 0.25);
+    declare_required_parameter("control.mode0_aim_above_offset");
+    declare_required_parameter("control.error_lpf_alpha");
+    declare_required_parameter("control.control_rate_hz");
+    declare_required_parameter("control.deadzone");
+    declare_required_parameter("control.deriv_lpf_alpha");
 
-    declare_parameter("mission.sitl_auto_launch", true);
+    declare_required_parameter("mission.sitl_auto_launch");
     // 종말 RTL 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
     //   hit_rtl_via_referee: 심판 /arms/hit(지상진실 접촉)를 받으면 RTL.
     //       SITL 전용(Gazebo 접촉 심판이 /arms/hit 발행). 실기체엔 발행자가 없어 false.
     //   looming_rtl_enabled: 비전 τ(bbox 팽창률)로 충돌 임박을 판정해 RTL.
     //   조합: SITL=(true,false) / 실기체 현재=(false,false) / 자동 종말=(false,true).
-    declare_parameter("mission.hit_rtl_via_referee", true);
-    declare_parameter("mission.looming_rtl_enabled", false);
-    declare_parameter("mission.auto_launch_delay_sec", 0.5);
+    declare_required_parameter("mission.hit_rtl_via_referee");
+    declare_required_parameter("mission.looming_rtl_enabled");
+    declare_required_parameter("mission.auto_launch_delay_sec");
 
     // 자동 모드 CH5(FC arm)를 켜는 상태 목록. 자동 모드에선 arm 을 스위치와 분리해
     //   컨트롤 노드가 상태머신 상태로 결정한다. 기본=발사(TRACK)부터 무장.
     //   나중에 SEARCH 등에서 arm 하도록 바꾸려면 이 목록만 수정하면 된다.
-    declare_parameter("control.auto_arm_states", std::vector<std::string>{"SEARCH", "LOCK", "TRACK", "RTL"});
+    declare_required_parameter("control.auto_arm_states");
 
     // 수동 arm pre-arm 안전 확인: arm 순간 스틱이 idle(throttle 최저 + roll/pitch/yaw 중앙)
     //   이어야만 실제 arm 되게 한다(급상승/오발 방지). 한 번 arm 되면 비행 중엔 무관.
-    declare_parameter("control.prearm_check", true);
-    declare_parameter("control.prearm_throttle_max", -0.85);  // throttle(axes[1]) 이 이하(최저)
-    declare_parameter("control.prearm_stick_tol", 0.15);      // roll/pitch/yaw 중앙 허용오차
-    declare_parameter("control.operator_input_timeout_sec", 0.3);
+    declare_required_parameter("control.prearm_check");
+    declare_required_parameter("control.prearm_throttle_max");
+    declare_required_parameter("control.prearm_stick_tol");
+    declare_required_parameter("control.operator_input_timeout_sec");
 
     // 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs). SITL 은 enabled=false.
-    declare_parameter("servo.enabled", false);
-    declare_parameter("servo.chip_path", std::string("/sys/class/pwm/pwmchip0"));
-    declare_parameter("servo.channel", 0);
-    declare_parameter("servo.period_ns", 20000000);    // 50Hz = 20ms
-    declare_parameter("servo.lock_duty_ns", 1500000);  // 90°  = 1.5ms (LOCK 기본)
-    declare_parameter("servo.open_duty_ns", 2500000);  // 180° = 2.5ms (OPEN 기본)
+    declare_required_parameter("servo.enabled");
+    declare_required_parameter("servo.chip_path");
+    declare_required_parameter("servo.channel");
+    declare_required_parameter("servo.period_ns");
+    declare_required_parameter("servo.lock_duty_ns");
+    declare_required_parameter("servo.open_duty_ns");
 
     // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
     // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
     // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
     // autonomous_acro 도 같이 없앴다(CH6 low = ACRO 고정).
-    declare_parameter("control.max_rate_dps", 400.0);  // 풀스틱 각속도[deg/s], PX4 MC_ACRO_*_MAX 와 일치
+    declare_required_parameter("control.max_rate_dps");
     // 추격 궤적(Pursuit): 정렬 기다리지 않고 조준하며 처음부터 상승.
-    declare_parameter("control.hover_throttle", 0.32);  // 겨냥 안 될 때 최소 상승(호버)
-    declare_parameter("control.pursuit_gate", 0.25);    // 오차 이 이하면 full 상승(공쪽으로 돌진)
+    declare_required_parameter("control.hover_throttle");
+    declare_required_parameter("control.pursuit_gate");
     // pursuit_center_boost: true=중앙 정렬될수록 추력↑(center_q 스케일, 기존동작).
     //                       false=정렬 무관 상수 추력(track_throttle 고정) → "정렬시 추력증가" 비활성.
-    declare_parameter("control.pursuit_center_boost", true);
+    declare_required_parameter("control.pursuit_center_boost");
     // 표적 속도추정(err_dot): LOS 미분+LPF. guidance_mode 0 의 리드(lead_gain)와 gain_shaping 이 공유.
     //   PN(mode 1)은 이 값을 안 쓰고 alpha-beta(pn_alpha/beta) 로 리드를 따로 만든다.
-    declare_parameter("control.err_dot_alpha", 0.2);    // 표적 속도추정 LPF(클수록 민첩/노이즈↑)
-    declare_parameter("control.err_dot_clamp", 0.6);    // 속도추정 스파이크 제한[1/s]
+    declare_required_parameter("control.err_dot_alpha");
+    declare_required_parameter("control.err_dot_clamp");
     // 각도 단계는 없다. PID/PN 이 곧바로 각속도[deg/s] 명령을 낸다.
     //   예전에는 PID -> '목표기울기[deg]' -> clamp(max_tilt) -> x att_p -> 각속도 였는데,
     //   자세 피드백이 없어서 그 '각도'는 이름뿐이었고 att_p 는 kp 와 직렬로 곱해지는
     //   두 번째 게인일 뿐이었다. att_p 는 kp/kd/pn_* 게인에 흡수했고(3.5배),
     //   max_tilt_deg 클램프는 아래 max_cmd_rate_dps 로 대체했다.
-    declare_parameter("control.max_cmd_rate_dps", 227.5);
+    declare_required_parameter("control.max_cmd_rate_dps");
     // 중심 근처 게인 감쇠(gain_scale / pitch_scale) 를 켤지. 기본 false = 순수 P.
     //   true 면 아래 두 가지가 켜진다:
     //     · 느린 표적(|LOS각속도| < 0.2) 이 중심 근처일 때 게인 감쇠 (0.08→x0.5, 0.20→x0.75)
@@ -119,15 +129,15 @@ class ArmsControlNode : public rclcpp::Node {
     //   재검증된 적이 없다. deadzone 과 함께 "중심 근처에서 일부러 약해지는" 장치라,
     //   표적이 중앙에 안 붙는 증상을 만들 수 있다. 먼저 끄고 순수 P 를 본 뒤,
     //   지터가 실제로 보이면 그때 켠다.
-    declare_parameter("control.gain_shaping", false);  // 유도 출력 각속도 상한[deg/s]
+    declare_required_parameter("control.gain_shaping");
     // 유도 방식: 0=기본 추적(현위치 추종 PID), 1=비례항법(PN, 시선각속도 제거/빠른표적),
     //            2=IBVS 공선유도(배리어 Lyapunov). 현재 기본값.
-    declare_parameter("control.guidance_mode", 2);
-    declare_parameter("control.pn_nav_gain", 175.0);    // PN 항법이득 N (LOS각속도→기울기). 못따라가면↑ 떨리면↓
-    declare_parameter("control.pn_center_gain", 52.5);  // 표적 중심유지(화면 이탈 방지)
-    declare_parameter("control.pn_alpha", 0.35);         // alpha-beta 위치이득 (표적 상태추정)
-    declare_parameter("control.pn_beta", 0.02);         // alpha-beta 속도이득 (LOS각속도 추정)
-    declare_parameter("control.pn_los_clamp", 1.5);     // PN 시선각속도 제한(0=무제한)
+    declare_required_parameter("control.guidance_mode");
+    declare_required_parameter("control.pn_nav_gain");
+    declare_required_parameter("control.pn_center_gain");
+    declare_required_parameter("control.pn_alpha");
+    declare_required_parameter("control.pn_beta");
+    declare_required_parameter("control.pn_los_clamp");
 
     // ── IBVS 공선유도 [mode 2 전용] ─────────────────────────────────────
     // 논문: Yang, Bai, She, Quan, "High-Speed Interception Multicopter Control
@@ -146,35 +156,34 @@ class ArmsControlNode : public rclcpp::Node {
     //   x_n = 2*tan(hfov/2) * error_x,   y_n = 2*tan(hfov/2)*aspect * error_y
     // SITL 기본값은 arms_sim 기체 SDF 의 upward_camera 스펙(hfov 0.7610rad = Phoenix 2 SE V2 + 8mm, 720x480).
     // ★ 실기체는 hw_overrides.yaml 의 control.camera.* (체커보드 캘리)가 이 근사를 대체한다.
-    declare_parameter("control.ibvs_hfov_deg", 43.6028);   // 수평 화각[deg] (=0.7610 rad)
-    declare_parameter("control.ibvs_aspect", 0.6666667);   // 세로/가로 = 480/720
+    declare_required_parameter("control.ibvs_hfov_deg");
+    declare_required_parameter("control.ibvs_aspect");
     // 카메라 내부파라미터(체커보드 캘리). calibrated=true 면 위 hfov/aspect 근사 대신
     //   fx,fy,cx,cy + 왜곡 역보정으로 x_n,y_n 을 구한다. 실기체 전용 — hw_overrides.yaml.
     //   값은 image_width x image_height 해상도 기준 픽셀 단위(ROS camera_calibration 출력 그대로).
     //   기본값은 SITL upward_camera 와 동일한 이상적 핀홀(fx = 360/tan(0.3805) = 360/0.4 = 900, 왜곡 0).
     //   ※ 기동 시 1회만 읽는다(런타임 변경 미지원).
-    declare_parameter("control.camera.calibrated", false);
-    declare_parameter("control.camera.image_width", 720);
-    declare_parameter("control.camera.image_height", 480);
-    declare_parameter("control.camera.fx", 900.0);
-    declare_parameter("control.camera.fy", 900.0);
-    declare_parameter("control.camera.cx", 360.0);
-    declare_parameter("control.camera.cy", 240.0);
+    declare_required_parameter("control.camera.calibrated");
+    declare_required_parameter("control.camera.image_width");
+    declare_required_parameter("control.camera.image_height");
+    declare_required_parameter("control.camera.fx");
+    declare_required_parameter("control.camera.fy");
+    declare_required_parameter("control.camera.cx");
+    declare_required_parameter("control.camera.cy");
     // "plumb_bob"(k1,k2,p1,p2[,k3]) | "equidistant"(fisheye k1,k2,k3,k4)
-    declare_parameter("control.camera.distortion_model", std::string("plumb_bob"));
-    declare_parameter("control.camera.distortion",
-                      std::vector<double>{0.0, 0.0, 0.0, 0.0, 0.0});
+    declare_required_parameter("control.camera.distortion_model");
+    declare_required_parameter("control.camera.distortion");
     // 배리어 kb: z1 이 이 값에 닿으면 게인이 발산한다 = "여기는 못 넘어간다".
     //   z1 = 1 - cos(theta) 이므로 kb 는 허용 최대 이탈각으로 환산된다.
     //   화면 모서리의 z1 = 0.099 (hfov 43.6°, 3:2) 이므로 그보다 약간 크게 잡는다.
     //   낮추면 표적을 더 중앙에 붙잡아두려 하고(공격적), 높이면 가장자리까지 허용.
-    declare_parameter("control.ibvs_kb", 0.11);
+    declare_required_parameter("control.ibvs_kb");
     // 배리어항 계수[deg/s]. 유도 전체의 세기. 못 따라가면 ↑, 과조향이면 ↓.
-    declare_parameter("control.ibvs_gain", 200.0);
+    declare_required_parameter("control.ibvs_gain");
     // 선형항 계수[deg/s]. 순수 배리어는 중앙 근처에서 theta^3 라 거의 0 이다
     //   (논문은 그 구간을 자세루프 omega2 가 메우는데 지금은 omega1 만 쓴다).
     //   0 으로 두면 논문 그대로의 순수 배리어 거동을 볼 수 있다.
-    declare_parameter("control.ibvs_center_gain", 100.0);
+    declare_required_parameter("control.ibvs_center_gain");
     // LOS각속도항 계수 — ★횡단 표적 요격의 핵심★
     //   alpha-beta 가 추정한 시선각속도(losf_*_dot_)에 곱한다. 한 항이 두 일을 한다:
     //     · 표적이 화면을 가로지를 때  → 예측 조준(리드). PN 과 같은 역할.
@@ -199,7 +208,7 @@ class ArmsControlNode : public rclcpp::Node {
     //   (=논문의 R_b^e 보정과 같은 역할, 지금은 미구현) 그건 더 큰 변경이다.
     //   흔들리면 ↓ (175까지, 그래도 흔들리면 pn_alpha/pn_beta 도 원인일 수 있음)
     //   종말에 뒤처지면(못 맞추면) ↑ (350 이상은 SITL 에서 진동 확인됨, 주의)
-    declare_parameter("control.ibvs_los_rate_gain", 220.0);
+    declare_required_parameter("control.ibvs_los_rate_gain");
 
     // ── 근접도 기반 게인/스로틀 스케줄링 ────────────────────────────────
     //   화면 속 표적 크기(loom_s_ema_, 클수록 가까움)를 기준으로 가까워질수록
@@ -207,10 +216,10 @@ class ArmsControlNode : public rclcpp::Node {
     //   가까울수록 화면 오차가 커져 PID/PN이 과민반응(오버슈트)하기 쉽고,
     //   접근 속도가 빠르면 그 과민반응을 보정할 시간도 부족해진다 — 그래서
     //   회전(각속도)과 병진(추력) 둘 다 같이 스케줄링해야 의미가 있다.
-    declare_parameter("control.near_size_start", 0.15);   // 이 크기부터 스케줄링 시작
-    declare_parameter("control.near_size_full", 0.35);    // 이 크기에서 최대(min_*)로 적용됨
-    declare_parameter("control.min_gain_scale", 0.4);     // 가장 가까울 때 회전 게인 배율(하한)
-    declare_parameter("control.min_throttle_scale", 0.6); // 가장 가까울 때 추력 상한 배율(하한)
+    declare_required_parameter("control.near_size_start");
+    declare_required_parameter("control.near_size_full");
+    declare_required_parameter("control.min_gain_scale");
+    declare_required_parameter("control.min_throttle_scale");
 
     // ── τ(충돌까지 시간) 기반 추력 감속 ─────────────────────────────────
     // 위 near_size 스케줄링은 "화면 속 크기"만 보고 "접근 속도"는 모른다 — 같은
@@ -226,9 +235,9 @@ class ArmsControlNode : public rclcpp::Node {
     //   tau_ease_start 보다 멀면(τ 큼) 영향 없음(=지금과 동일).
     //   tau_ease_full  에서 최소 배율까지 눌린다.
     // 표적을 아예 못 볼 때/안 다가올 때는 τ=+inf 이므로 자동으로 영향 없음(1.0).
-    declare_parameter("control.tau_ease_start", 1.0);   // 이 초 전부터 서서히 감속 시작[s]
-    declare_parameter("control.tau_ease_full", 0.3);    // 이 초에서 최소 배율 적용[s] (tau_rtl_sec과 비슷한 크기가 자연스럽다)
-    declare_parameter("control.tau_ease_min_scale", 0.3); // τ 임박시 추력 배율 하한 (0=완전 hover, 1=끔)
+    declare_required_parameter("control.tau_ease_start");
+    declare_required_parameter("control.tau_ease_full");
+    declare_required_parameter("control.tau_ease_min_scale");
 
     // ----------------------------------------------------------------
     // State machine

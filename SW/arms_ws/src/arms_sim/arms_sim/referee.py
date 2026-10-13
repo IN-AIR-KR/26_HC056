@@ -110,17 +110,26 @@ def set_pose(model, x, y, z):
 
 
 class BalloonReferee(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("balloon_referee")
         # enabled=false(기본) 면 표적을 '패스 시작점에 세워둔 채' 대기한다. 패널
         # [비행 시작] 버튼은 등장이 아니라 '움직임 시작'만 담당한다.
-        self.declare_parameter("enabled", False)
+        self.require_parameter("enabled")
         # alt = 비행 고도 [m] (패널 슬라이더로 실시간 조절)
-        self.declare_parameter("alt", ALT)
+        self.require_parameter("alt")
         # speed = 진행 속도 [m/s] (단일, 패널 슬라이더로 실시간 조절)
-        self.declare_parameter("speed", SPEED)
+        self.require_parameter("speed")
         # target = "balloon"(기본) | "drone" : UI 토글로 표적 종류 선택. 선택된 모델만 비행, 나머진 숨김.
-        self.declare_parameter("target", "balloon")
+        self.require_parameter("target")
         self.target_model = MODEL_BALLOON
         self.hit = False
         self.t = 0.0                    # 대각선 진행도 [0→1]

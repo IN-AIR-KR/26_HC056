@@ -157,7 +157,7 @@ def _setup(context, *args, **kwargs):
     actions.append(Node(
         package="arms_sim", executable="sitl_reset_manager", name="arms_sitl_reset_manager",
         output="screen",
-        parameters=[{
+        parameters=[str(share / "config" / "sim_params.yaml"), {
             "px4_dir": str(px4_dir), "world": world, "model": model,
             # PX4 가 spawn 하는 인스턴스 이름 (모델명 + _<instance>) — reset 후 재생성 확인용
             "drone_model": "arms_drone_0",

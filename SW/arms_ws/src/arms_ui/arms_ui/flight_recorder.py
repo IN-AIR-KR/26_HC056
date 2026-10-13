@@ -28,6 +28,15 @@ from arms_msgs.msg import OperatorInput
 
 
 class FlightRecorder(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("flight_recorder")
         # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
@@ -36,36 +45,19 @@ class FlightRecorder(Node):
         #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
         #   battery=배터리 전용 토픽이다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.
-        self.declare_parameter("record_topics", [
-            "/arms/ui_image/compressed",
-            "/arms/image_raw/compressed",
-            "/arms/detections_raw",
-            "/arms/detections",
-            "/arms/detector_status",
-            "/arms/ibvs_debug",
-            "/arms/control_debug",
-            "/arms/crsf_tx",
-            "/arms/crsf_rx",
-            "/arms/attitude",
-            "/arms/battery",
-            "/arms/gps",
-            "/arms/mission_state",
-            "/arms/operator/input",
-            "/arms/control/flight_command",
-            "/arms/io/status",
-        ])
-        self.declare_parameter("save_dir", "~/arms_flight_logs_ibvs")
+        self.require_parameter("record_topics")
+        self.require_parameter("save_dir")
         # 저장 포맷. 젯슨엔 mcap 플러그인이 없어 sqlite3 로 고정(항상 사용 가능).
-        self.declare_parameter("storage", "sqlite3")
+        self.require_parameter("storage")
         # 폴더명 접미사 (<일시>_<tag>). 실기체 기록과 구분용 — SITL 런치는 "sitl".
-        self.declare_parameter("tag", "")
+        self.require_parameter("tag")
         # 런치가 실제로 해석한 인자와 사용한 제어 설정의 원본 경로. 비행 시작 시
         # manifest.json 및 control_params.yaml 사본으로 남긴다.
-        self.declare_parameter("manifest.control_params_path", "")
+        self.require_parameter("manifest.control_params_path")
         for name in (
                 "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save",
                 "crsf_port", "start_detection", "model", "fullscreen", "debug", "cv_debug"):
-            self.declare_parameter(f"manifest.arg_{name}", "")
+            self.require_parameter(f"manifest.arg_{name}")
         self._topics = list(self.get_parameter("record_topics").value)
         self._save_dir = os.path.expanduser(self.get_parameter("save_dir").value)
         os.makedirs(self._save_dir, exist_ok=True)

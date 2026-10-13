@@ -47,6 +47,15 @@ STATE_COLORS = {
 
 
 class ArmsUINode(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("arms_ui_node")
         self._bridge = CvBridge()
@@ -72,33 +81,33 @@ class ArmsUINode(Node):
         #   raw/compressed 를 골라 본다. 노트북은 compressed 를 구독해 경량 스트리밍/녹화.
         #   여기서 resize·fps 를 걸면 raw 가 작아져 그걸 압축한 compressed 도 자동 경량.
         #   (JPEG 품질은 이 노드가 아니라 republish 의 compressed.jpeg_quality 로 조절한다.)
-        self.declare_parameter("ui.stream_enabled", True)       # 발행 on/off
-        self.declare_parameter("ui.stream_max_width", 480)      # 발행 전 최대 가로폭(0=원본). 대역폭 절감
+        self.require_parameter("ui.stream_enabled")
+        self.require_parameter("ui.stream_max_width")
         # 발행 프레임레이트 상한. UI 렌더는 카메라 fps(~30)를 따르지만, 무선으로 그만큼
         #   보내면 노트북에서 끊긴다(프래그먼트 손실). 여기서 상한을 둬 대역폭↓.
-        self.declare_parameter("ui.stream_fps", 15.0)           # 0=제한 없음(렌더 fps 그대로)
+        self.require_parameter("ui.stream_fps")
         self._last_stream_t = 0.0
         self.pub_ui_raw = self.create_publisher(
             Image, "/arms/ui_image", reliable_qos)
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
-        self.declare_parameter("ui.roi_pip_frac", 0.25)
+        self.require_parameter("ui.roi_pip_frac")
         # ROI PiP 확대 배율: 표적 bbox 를 이 배율로 넓혀 원본 프레임에서 크롭한다.
         #   (검출 컨테이너가 roi_image 를 되쏘지 않고 UI 가 직접 크롭 — 대역폭/지연 절감)
-        self.declare_parameter("ui.roi_pip_margin", 1.8)
+        self.require_parameter("ui.roi_pip_margin")
         # ui.cv_debug: 검출 진단 패널(오른쪽에 HSV 미리보기 + 성능 그래프)을 붙일지.
         #   True 면 /arms/hsv_debug_image 를 구독한다. False(실기체 기본) → 메인 화면만.
         #   hsv_debug 를 구독조차 안 하므로 detection 이 발행을 통째로 스킵(구독자 gated) →
         #   컨테이너→호스트 대용량 UDP 발행이 사라져 검출 발행률이 카메라 fps 를 그대로 따라감.
-        self.declare_parameter("ui.cv_debug", False)
-        self.declare_parameter("ui.diagnostics_history", 180)
+        self.require_parameter("ui.cv_debug")
+        self.require_parameter("ui.diagnostics_history")
         self._cv_debug = bool(self.get_parameter("ui.cv_debug").value)
 
         # ui.debug: 메인 화면 디버그 오버레이(err/cmd 숫자 텍스트, YOLO/HSV 상태 텍스트,
         #   오차·명령 화살표)를 그릴지. 기본 False → 실기체처럼 메인 화면만.
         #   표적 bbox 는 이 값과 무관하게 항상 그린다(아래 _draw_overlay).
         #   arms.launch.py=False(메인만), arms_replay.launch.py=True(디버그) 로 준다.
-        self.declare_parameter("ui.debug", False)
+        self.require_parameter("ui.debug")
         self._debug = bool(self.get_parameter("ui.debug").value)
 
         # S 키 캡처: 소스 트리 기준 SW/output_image. ARMS_SW가 있으면 장비별
@@ -109,31 +118,27 @@ class ArmsUINode(Node):
             Path.cwd(),
         )
         default_sw = Path(os.environ.get("ARMS_SW", str(source_sw)))
-        self.declare_parameter("ui.capture_dir", str(default_sw / "output_image"))
-        self._capture_dir = Path(
-            str(self.get_parameter("ui.capture_dir").value)).expanduser()
+        self.require_parameter("ui.capture_dir")
+        capture_dir = Path(str(self.get_parameter("ui.capture_dir").value)).expanduser()
+        self._capture_dir = capture_dir if capture_dir.is_absolute() else default_sw / capture_dir
         self._pending_capture = None
         self._hsv_subscription = None
         self._transient_hsv_subscription = False
 
-        # 모드 전환 효과음 (MP3). 기본값 = 패키지 share/sounds 설치 경로.
-        try:
-            _snd_dir = os.path.join(get_package_share_directory("arms_ui"), "sounds")
-        except Exception:
-            _snd_dir = ""
-        self.declare_parameter("ui.sound_manual", os.path.join(_snd_dir, "manual.mp3"))
-        self.declare_parameter("ui.sound_auto", os.path.join(_snd_dir, "auto.mp3"))
+        # 모드 전환 효과음 파일명은 config에 두고, 상대경로는 패키지 sounds/에서 찾는다.
+        self.require_parameter("ui.sound_manual")
+        self.require_parameter("ui.sound_auto")
         # 상태 변경 효과음: 수동=arm/disarm, 자동=idle/search
-        self.declare_parameter("ui.sound_arm", os.path.join(_snd_dir, "arm.mp3"))
-        self.declare_parameter("ui.sound_disarm", os.path.join(_snd_dir, "disarm.mp3"))
-        self.declare_parameter("ui.sound_search", os.path.join(_snd_dir, "search.mp3"))
-        self.declare_parameter("ui.sound_idle", os.path.join(_snd_dir, "idle.mp3"))
+        self.require_parameter("ui.sound_arm")
+        self.require_parameter("ui.sound_disarm")
+        self.require_parameter("ui.sound_search")
+        self.require_parameter("ui.sound_idle")
         # ELRS 텔레메트리 연결/끊김 효과음
-        self.declare_parameter("ui.sound_telm_connected", os.path.join(_snd_dir, "telm_connected.mp3"))
-        self.declare_parameter("ui.sound_telm_lost", os.path.join(_snd_dir, "telm_lost.mp3"))
+        self.require_parameter("ui.sound_telm_connected")
+        self.require_parameter("ui.sound_telm_lost")
         # TELM 효과음 안정화: 시작 직후 링크 성립 대기(grace) + 성립 중/운영 중 깜빡임 무시(debounce).
-        self.declare_parameter("ui.telm_startup_grace_sec", 6.0)
-        self.declare_parameter("ui.telm_debounce_sec", 1.5)
+        self.require_parameter("ui.telm_startup_grace_sec")
+        self.require_parameter("ui.telm_debounce_sec")
         self._player = shutil.which("ffplay")
         if self._player is None:
             self.get_logger().warn("ffplay 없음 — 효과음이 재생되지 않습니다.")
@@ -142,12 +147,12 @@ class ArmsUINode(Node):
         # ── 탐지 비프음 (mp3 없이 ffplay lavfi 사인파로 생성) ──────────────
         #   SEARCH: 느린 간격, LOCK/TRACK: 빠른 간격으로 삑삑거린다.
         #   IDLE/RTL 등에선 울리지 않고, 자동(AUTO) 모드에서만 동작한다.
-        self.declare_parameter("ui.beep_enabled", True)
-        self.declare_parameter("ui.beep_search_interval", 0.8)   # SEARCH 비프 간격[s]
-        self.declare_parameter("ui.beep_lock_interval", 0.18)    # LOCK 이후 비프 간격[s]
-        self.declare_parameter("ui.beep_freq_hz", 2000.0)        # 비프 주파수[Hz]
-        self.declare_parameter("ui.beep_duration", 0.06)         # 비프 길이[s]
-        self.declare_parameter("ui.beep_volume", 0.6)            # 비프 음량(0~1)
+        self.require_parameter("ui.beep_enabled")
+        self.require_parameter("ui.beep_search_interval")
+        self.require_parameter("ui.beep_lock_interval")
+        self.require_parameter("ui.beep_freq_hz")
+        self.require_parameter("ui.beep_duration")
+        self.require_parameter("ui.beep_volume")
         self._last_beep_t = 0.0                                  # 마지막 비프 시각(monotonic)
         self._lock_tone_proc = None                             # LOCK 이상: 끊기지 않는 연속 톤 프로세스
         self._last_image_t = 0.0                                # 마지막 영상 프레임 수신 시각(monotonic)
@@ -204,14 +209,14 @@ class ArmsUINode(Node):
         self._prev_state = None         # MissionState.state 이전값 (자동 idle/search)
 
         # 실기체 런치에서만 fullscreen:=true → 전체화면. SITL 등은 기본값 False(창 모드).
-        self.declare_parameter("ui.fullscreen", False)
+        self.require_parameter("ui.fullscreen")
         self._fullscreen = self.get_parameter("ui.fullscreen").value
-        self.declare_parameter("ui.gps_timeout_sec", 2.0)
+        self.require_parameter("ui.gps_timeout_sec")
         self._keep_aspect = True    # True=레터박스(비율 유지, 잘림 없음), False=강제 스트레치
 
         # 터치(=마우스 클릭)로 누르는 전원 종료 버튼. 누르면 즉시 끄지 않고 확인 받는다.
-        self.declare_parameter("ui.power_button", False)
-        self.declare_parameter("ui.power_off_cmd", "systemctl poweroff")
+        self.require_parameter("ui.power_button")
+        self.require_parameter("ui.power_off_cmd")
         self._confirm_shutdown = False    # 확인 다이얼로그 표시 중 여부
         self._btn_rects = {}              # 버튼 히트박스(원본 프레임 좌표): name→(x1,y1,x2,y2)
         self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 표시좌표→원본좌표 역변환(x0,y0,sx,sy)
@@ -352,6 +357,8 @@ class ArmsUINode(Node):
 
     def _play_sound(self, path):
         """ffplay 로 효과음을 비동기 즉시 재생 (UI 렌더링을 막지 않음, 지연 없음)."""
+        if not os.path.isabs(path):
+            path = os.path.join(get_package_share_directory("arms_ui"), "sounds", path)
         # 트리거가 실제로 걸렸는지 항상 로그로 남긴다 (재생 성공 여부와 별개).
         #   → 로그는 뜨는데 소리가 없으면 오디오/ffplay 문제, 로그도 없으면 토픽/필드 문제.
         self.get_logger().info(

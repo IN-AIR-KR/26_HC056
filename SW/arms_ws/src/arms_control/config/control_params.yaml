@@ -1,7 +1,6 @@
-# arms_control_node 파라미터 (SITL 기준값 = 코드 기본값).
+# arms_control_node 파라미터 (SITL 기준값).
 #
-# ★ 여기 값은 arms_control_node.cpp 의 declare_parameter 기본값과 같게 유지한다.
-#   값을 바꿀 땐 반드시 둘 다 바꿔라.
+# 이 파일은 제어 파라미터의 유일한 기본 원천이다. 누락된 키는 노드가 기동을 거부한다.
 #
 # 실기체는 hw_overrides.yaml 이 이 위에 얹혀 델타만 덮어쓴다
 # (control.launch.py / arms.launch.py). SITL 런치는 이 파일만 읽는다.
@@ -63,16 +62,6 @@
       period_ns: 20000000    # 50Hz = 20ms
       lock_duty_ns: 1500000  # 90°  = 1.5ms (LOCK 기본)
       open_duty_ns: 2500000  # 180° = 2.5ms (OPEN 기본)
-
-    # =====================================================================
-    # 배터리 잔량(%) 계산  — UI 좌측 하단 표시에 쓰인다.
-    # =====================================================================
-    # 셀 수는 전압으로 자동 감지한다(cells = ceil(V / 4.3), 연결 시점 전압으로 6S/4S 등 판별,
-    #   첫 유효 전압에서 1회 감지 후 래치). 잔량은 감지된 셀 수로 선형 근사한다:
-    #     pct = (전압 - cells·cell_empty_v) ÷ (cells·(cell_full_v - cell_empty_v)),  0~100% clamp
-    battery:
-      cell_full_v: 4.2     # 만충 시 셀당 전압[V]
-      cell_empty_v: 3.5    # 방전(0%) 셀당 전압[V]
 
     # =====================================================================
     # 제어
@@ -198,6 +187,16 @@
       #      틀리면 각도 환산이 통째로 어긋나 게인이 전부 어긋난다.
       ibvs_hfov_deg: 43.6028
       ibvs_aspect: 0.6666667   # 세로/가로 = 480/720
+      camera:
+        calibrated: false
+        image_width: 720
+        image_height: 480
+        fx: 900.0
+        fy: 900.0
+        cx: 360.0
+        cy: 240.0
+        distortion_model: plumb_bob
+        distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
 
       # 배리어 한계 kb. z1 이 여기 닿으면 게인이 발산한다 = "못 넘어가는 벽".
       #   z1 = 1 - cos(theta) 환산:  kb 0.07→21°  0.11→27°  0.29→45°  0.55→63°

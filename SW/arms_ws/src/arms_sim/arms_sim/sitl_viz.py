@@ -91,17 +91,26 @@ def _quat_from_rpy(roll, pitch, yaw):
 
 
 class SitlViz(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("arms_sitl_viz")
 
-        self.declare_parameter("world", "arms_sitl")
-        self.declare_parameter("frame_id", "map")
-        self.declare_parameter("rate_hz", 20.0)          # 발행/샘플링 주기
-        self.declare_parameter("path_max_points", 3000)  # 링버퍼 길이
-        self.declare_parameter("path_min_dist", 0.25)    # 이만큼 움직여야 점 추가 [m]
+        self.require_parameter("world")
+        self.require_parameter("frame_id")
+        self.require_parameter("rate_hz")
+        self.require_parameter("path_max_points")
+        self.require_parameter("path_min_dist")
         # 조준 보조선: 기체 yaw축(= body +Z = 상방 카메라 보어사이트) 방향으로 뻗는 선.
         # 표적 고도(기본 30m)보다 넉넉히 길어야 '겨냥했는지'가 눈에 보인다. 0 이면 끔.
-        self.declare_parameter("aim_line_m", 60.0)
+        self.require_parameter("aim_line_m")
 
         self._frame = self.get_parameter("frame_id").value
         self._max_pts = int(self.get_parameter("path_max_points").value)

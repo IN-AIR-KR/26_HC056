@@ -40,11 +40,20 @@ ATTITUDE_STREAM_INTERVAL_US = 33_333  # 30 Hz: 3D 자세 표현과 rosbag 분석
 
 
 class ArmsSITLCommNode(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("arms_sitl_bridge_node")
 
-        self.declare_parameter("connection", "udpin:0.0.0.0:14540")
-        self.declare_parameter("send_rate_hz", 50.0)
+        self.require_parameter("connection")
+        self.require_parameter("send_rate_hz")
 
         self._conn_str   = self.get_parameter("connection").value
         self._send_rate  = self.get_parameter("send_rate_hz").value

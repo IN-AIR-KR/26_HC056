@@ -24,6 +24,7 @@ setup(
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.py")),
+        (f"share/{package_name}/config", glob("config/*.yaml")),
         # 시뮬 자산: assets/{models,worlds}(Gazebo) + assets/px4/airframes(PX4 ROMFS).
         #   메시가 몇 MB 라 colcon build --symlink-install 권장.
         *_tree("assets"),

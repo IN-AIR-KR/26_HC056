@@ -1,0 +1,23 @@
+arms_sitl_reset_manager:
+  ros__parameters:
+    px4_dir: ~/PX4-Autopilot
+    world: arms_sitl
+    model: gz_arms_drone
+    drone_model: arms_drone_0
+    spawn_pose: [0.0, 0.0, 0.24]
+
+balloon_referee:
+  ros__parameters:
+    enabled: false
+    alt: 30.0
+    speed: 3.6
+    target: balloon
+
+arms_sitl_viz:
+  ros__parameters:
+    world: arms_sitl
+    frame_id: map
+    rate_hz: 20.0
+    path_max_points: 3000
+    path_min_dist: 0.25
+    aim_line_m: 60.0

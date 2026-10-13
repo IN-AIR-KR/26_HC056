@@ -54,14 +54,23 @@ def _packed_channels(channels: list[int]) -> bytes:
 
 
 class CrsfIoNode(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("arms_crsf_io_node")
-        self.declare_parameter("port", "/dev/ttyUSB0")
-        self.declare_parameter("baud", 400000)
-        self.declare_parameter("send_rate_hz", 50.0)
-        self.declare_parameter("telemetry_timeout_sec", 2.0)
-        self.declare_parameter("battery.cell_full_v", 4.2)
-        self.declare_parameter("battery.cell_empty_v", 3.5)
+        self.require_parameter("port")
+        self.require_parameter("baud")
+        self.require_parameter("send_rate_hz")
+        self.require_parameter("telemetry_timeout_sec")
+        self.require_parameter("battery.cell_full_v")
+        self.require_parameter("battery.cell_empty_v")
         self._port = self.get_parameter("port").value
         self._baud = int(self.get_parameter("baud").value)
         self._timeout = float(self.get_parameter("telemetry_timeout_sec").value)

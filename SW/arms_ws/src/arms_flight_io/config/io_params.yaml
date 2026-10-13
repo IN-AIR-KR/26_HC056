@@ -1,0 +1,14 @@
+/arms/arms_sitl_bridge_node:
+  ros__parameters:
+    connection: "udpin:0.0.0.0:14540"
+    send_rate_hz: 50.0
+
+/arms/arms_crsf_io_node:
+  ros__parameters:
+    port: "/dev/ttyUSB0"
+    baud: 400000
+    send_rate_hz: 50.0
+    telemetry_timeout_sec: 2.0
+    battery:
+      cell_full_v: 4.2
+      cell_empty_v: 3.5

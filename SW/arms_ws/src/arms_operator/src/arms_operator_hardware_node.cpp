@@ -43,17 +43,28 @@ struct ControllerPacket
 class ArmsOperatorHardwareNode : public rclcpp::Node
 {
 public:
+  void declare_required_parameter(const std::string & name)
+  {
+    const auto & value = declare_parameter(name);
+    if (value.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
+      throw std::runtime_error(
+        "Required parameter '" + name + "' is missing for " + get_fully_qualified_name());
+    }
+  }
+
   ArmsOperatorHardwareNode()
   : Node("arms_operator_hardware_node")
   {
-    topic_name_ = declare_parameter<std::string>("topic_name", "operator/input");
-
-    serial_device_ =
-      declare_parameter<std::string>("serial.device", "/dev/ttyACM0");
-    serial_baud_ = declare_parameter<int>("serial.baud", 115200);
-    poll_rate_hz_ = declare_parameter<double>("serial.poll_rate_hz", 200.0);
-    max_line_length_ =
-      declare_parameter<int>("serial.max_line_length", 128);
+    declare_required_parameter("topic_name");
+    declare_required_parameter("serial.device");
+    declare_required_parameter("serial.baud");
+    declare_required_parameter("serial.poll_rate_hz");
+    declare_required_parameter("serial.max_line_length");
+    topic_name_ = get_parameter("topic_name").as_string();
+    serial_device_ = get_parameter("serial.device").as_string();
+    serial_baud_ = get_parameter("serial.baud").as_int();
+    poll_rate_hz_ = get_parameter("serial.poll_rate_hz").as_double();
+    max_line_length_ = get_parameter("serial.max_line_length").as_int();
 
     if (poll_rate_hz_ <= 0.0) {
       throw std::runtime_error("serial.poll_rate_hz must be greater than 0");

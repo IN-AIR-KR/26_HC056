@@ -47,6 +47,8 @@ def generate_launch_description():
     control_dir = Path(get_package_share_directory("arms_control")) / "config"
     control_config = control_dir / "control_params.yaml"
     hw_config = control_dir / "hw_overrides.yaml"
+    io_config = Path(get_package_share_directory("arms_flight_io")) / "config" / "io_params.yaml"
+    ui_config = Path(get_package_share_directory("arms_ui")) / "config" / "ui_params.yaml"
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
@@ -118,7 +120,7 @@ def generate_launch_description():
         Node(
             package="arms_flight_io", executable="arms_crsf_io_node",
             namespace="arms", name="arms_crsf_io_node", output="screen",
-            parameters=[{"port": LaunchConfiguration("crsf_port")}],
+            parameters=[str(io_config), {"port": LaunchConfiguration("crsf_port")}],
         ),
         # OpenCV UI. fullscreen/debug 는 런치 인자로 제어(실기체 기본: 전체화면·메인만).
         #   ui.debug=false → hsv_debug_image 미구독 → detection 발행 부하 최소.
@@ -127,7 +129,7 @@ def generate_launch_description():
             executable="arms_ui_node",
             name="arms_ui_node",
             output="screen",
-            parameters=[{
+            parameters=[str(ui_config), {
                 "ui.fullscreen": ParameterValue(
                     LaunchConfiguration("fullscreen"), value_type=bool),
                 "ui.debug": ParameterValue(
@@ -172,7 +174,7 @@ def generate_launch_description():
             executable="flight_recorder",
             name="flight_recorder",
             output="screen",
-            parameters=[{
+            parameters=[str(ui_config), {
                 "manifest.control_params_path": str(control_config),
                 "manifest.arg_crsf_port": ParameterValue(LaunchConfiguration("crsf_port"), value_type=str),
                 "manifest.arg_start_detection": ParameterValue(LaunchConfiguration("start_detection"), value_type=str),

@@ -110,7 +110,7 @@ def _detection(context, *args, **kwargs):
     actions.append(Node(
         package="arms_detection", executable="arms_detection_node",
         name="arms_detection_node", output="screen",
-        parameters=[str(det_config)] if det_config.exists() else [],
+        parameters=[str(det_config)],
         # YOLO on/off 는 파라미터가 아니라 이 환경변수다 — 모델이 로드돼야 검출을
         # 발행한다(HSV 단독 발행 금지). 노드 기동 시점에 한 번만 읽는다.
         additional_env={"ARMS_MODEL": model},
@@ -141,6 +141,9 @@ def generate_launch_description():
     control_config = (
         Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
     )
+    io_config = Path(get_package_share_directory("arms_flight_io")) / "config" / "io_params.yaml"
+    ui_config = Path(get_package_share_directory("arms_ui")) / "config" / "ui_params.yaml"
+    sim_config = Path(get_package_share_directory("arms_sim")) / "config" / "sim_params.yaml"
     bringup_cfg = Path(get_package_share_directory("arms_bringup")) / "config"
     pj_layout = bringup_cfg / "sitl_debug.xml"
     rviz_cfg = bringup_cfg / "sitl.rviz"
@@ -201,7 +204,7 @@ def generate_launch_description():
         Node(
             package="arms_flight_io", executable="sitl_bridge_node",
             namespace="arms", name="arms_sitl_bridge_node", output="screen",
-            parameters=[{"connection":   "udpin:0.0.0.0:14540",
+            parameters=[str(io_config), {"connection":   "udpin:0.0.0.0:14540",
                          "send_rate_hz": 50.0}],
         ),
         # SITL 가상 운용자 입력.
@@ -219,11 +222,13 @@ def generate_launch_description():
         Node(
             package="arms_sim", executable="referee",
             name="balloon_referee", output="screen",
+            parameters=[str(sim_config)],
         ),
         # UI 오버레이
         Node(
             package="arms_ui", executable="arms_ui_node",
             name="arms_ui_node", output="screen",
+            parameters=[str(ui_config)],
         ),
         # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image) → compressed(/arms/ui_image/compressed).
         #   arms.launch.py 와 같은 구성. 녹화기(auto_save)가 이 compressed 를 녹화한다.
@@ -257,7 +262,7 @@ def generate_launch_description():
         Node(
             package="arms_ui", executable="flight_recorder",
             name="flight_recorder", output="screen",
-            parameters=[{
+            parameters=[str(ui_config), {
                 "tag": "sitl",
                 "record_topics": [
                     "/arms/ui_image/compressed",
@@ -292,6 +297,7 @@ def generate_launch_description():
         Node(
             package="arms_sim", executable="sitl_viz",
             name="arms_sitl_viz", output="screen",
+            parameters=[str(sim_config)],
             condition=IfCondition(LaunchConfiguration("rviz")),
         ),
         Node(

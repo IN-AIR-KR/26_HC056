@@ -1,0 +1,69 @@
+arms_ui_node:
+  ros__parameters:
+    ui:
+      stream_enabled: true
+      stream_max_width: 480
+      stream_fps: 15.0
+      roi_pip_frac: 0.25
+      roi_pip_margin: 1.8
+      cv_debug: false
+      diagnostics_history: 180
+      debug: false
+      capture_dir: output_image
+      sound_manual: manual.mp3
+      sound_auto: auto.mp3
+      sound_arm: arm.mp3
+      sound_disarm: disarm.mp3
+      sound_search: search.mp3
+      sound_idle: idle.mp3
+      sound_telm_connected: telm_connected.mp3
+      sound_telm_lost: telm_lost.mp3
+      telm_startup_grace_sec: 6.0
+      telm_debounce_sec: 1.5
+      beep_enabled: true
+      beep_search_interval: 0.8
+      beep_lock_interval: 0.18
+      beep_freq_hz: 2000.0
+      beep_duration: 0.06
+      beep_volume: 0.6
+      fullscreen: false
+      gps_timeout_sec: 2.0
+      power_button: false
+      power_off_cmd: systemctl poweroff
+
+flight_recorder:
+  ros__parameters:
+    record_topics:
+      - /arms/ui_image/compressed
+      - /arms/image_raw/compressed
+      - /arms/detections_raw
+      - /arms/detections
+      - /arms/detector_status
+      - /arms/ibvs_debug
+      - /arms/control_debug
+      - /arms/crsf_tx
+      - /arms/crsf_rx
+      - /arms/attitude
+      - /arms/battery
+      - /arms/gps
+      - /arms/mission_state
+      - /arms/operator/input
+      - /arms/control/flight_command
+      - /arms/io/status
+    save_dir: ~/arms_flight_logs_ibvs
+    storage: sqlite3
+    tag: ''
+    manifest:
+      control_params_path: ''
+      arg_px4: ''
+      arg_px4_dir: ''
+      arg_rviz: ''
+      arg_detection: ''
+      arg_det_model: ''
+      arg_auto_save: ''
+      arg_crsf_port: ''
+      arg_start_detection: ''
+      arg_model: ''
+      arg_fullscreen: ''
+      arg_debug: ''
+      arg_cv_debug: ''

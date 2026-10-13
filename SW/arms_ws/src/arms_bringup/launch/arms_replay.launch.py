@@ -62,6 +62,8 @@ def generate_launch_description():
     control_config = (
         Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
     )
+    io_config = Path(get_package_share_directory("arms_flight_io")) / "config" / "io_params.yaml"
+    ui_config = Path(get_package_share_directory("arms_ui")) / "config" / "ui_params.yaml"
     replay_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video_replay.launch.py"
     )
@@ -164,7 +166,7 @@ def generate_launch_description():
         Node(
             package="arms_flight_io", executable="arms_crsf_io_node",
             namespace="arms", name="arms_crsf_io_node", output="screen",
-            parameters=[{"port": LaunchConfiguration("crsf_port")}],
+            parameters=[str(io_config), {"port": LaunchConfiguration("crsf_port")}],
         ),
         # OpenCV UI (replay 기본: 메인 화면 디버그 오버레이 on). cv_debug:=true 를 주면
         #   우측 HSV 진단+성능 그래프 패널도 붙는다(그때만 hsv_debug_image 구독 →
@@ -174,7 +176,7 @@ def generate_launch_description():
             executable="arms_ui_node",
             name="arms_ui_node",
             output="screen",
-            parameters=[{
+            parameters=[str(ui_config), {
                 "ui.fullscreen": ParameterValue(
                     LaunchConfiguration("fullscreen"), value_type=bool),
                 "ui.debug": ParameterValue(

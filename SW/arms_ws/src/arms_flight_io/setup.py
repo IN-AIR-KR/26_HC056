@@ -1,3 +1,4 @@
+from glob import glob
 from setuptools import setup
 
 setup(
@@ -5,7 +6,8 @@ setup(
     version="0.1.0",
     packages=["arms_flight_io"],
     data_files=[("share/ament_index/resource_index/packages", ["resource/arms_flight_io"]),
-                ("share/arms_flight_io", ["package.xml"])],
+                ("share/arms_flight_io", ["package.xml"]),
+                ("share/arms_flight_io/config", glob("config/*.yaml"))],
     install_requires=["setuptools"],
     zip_safe=True,
     entry_points={"console_scripts": [

@@ -4,8 +4,7 @@
 # --params-file 로 로드한다. 실내 등은 detection.indoor.yaml override 를 위에 얹는다:
 #   ARMS_DET_CONFIG=detection.indoor.yaml docker compose ... up -d   (SETUP.md A-5 참고)
 #
-# ★ 여기 값은 arms_detection_node.py 의 declare_parameter 기본값과 같게 유지한다.
-#   (config 없이 노드만 띄워도 동일 동작. 값을 바꿀 땐 둘 다 바꾼다 — control_params.yaml 과 동일.)
+# 이 파일은 검출 파라미터의 유일한 기본 원천이다. 누락된 키는 노드가 기동을 거부한다.
 #
 # ※ YOLO 모델 경로/conf/iou/imgsz/입력형식 등은 컨테이너·엔진에 종속되므로
 #   ROS 파라미터가 아니라 docker compose 의 environment(ARMS_*) 로 관리한다.

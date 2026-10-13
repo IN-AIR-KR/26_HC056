@@ -237,37 +237,46 @@ class _TargetFilter:
 # ---------------------------------------------------------------------------
 
 class ArmsDetectionNode(Node):
+    def require_parameter(self, name):
+        self.declare_parameter(name)
+        value = self.get_parameter(name).value
+        if value is None:
+            raise RuntimeError(
+                f"Required parameter '{name}' is missing for "
+                f"{self.get_fully_qualified_name()}")
+        return value
+
     def __init__(self):
         super().__init__("arms_detection_node")
 
-        # 파라미터 기본값(= 기본 운용 환경 실외). 환경별 튜닝은 config/detection.yaml
-        # (및 detection.indoor.yaml override)로 덮는다 — compose 가 --params-file 로 주입.
-        self.declare_parameter("proc_width", 320)             # 검출 처리 가로 해상도[px], 0=원본
-        self.declare_parameter("use_hsv", True)               # HSV 후보 제안 on/off (off=순수 전체화면 YOLO)
+        # config/detection.yaml의 필수 파라미터. 환경별 튜닝은
+        # detection.indoor.yaml override로 덮는다.
+        self.require_parameter("proc_width")
+        self.require_parameter("use_hsv")
         # HSV→ROI YOLO 가 못 찾은 프레임에 전체 화면 YOLO 를 도는 주기(1=매프레임, 0=끔).
-        self.declare_parameter("yolo.full_fallback_interval", 1)
-        self.declare_parameter("yolo.proposal_crop_px", 192)  # HSV 후보 검증용 crop 한 변[px]
+        self.require_parameter("yolo.full_fallback_interval")
+        self.require_parameter("yolo.proposal_crop_px")
 
         # HSV 붉은색 후보 제안 (단독 LOCK 금지 — 최종 승인은 YOLO)
-        self.declare_parameter("hsv.max_candidates", 3)       # YOLO 검증할 상위 후보 수
-        self.declare_parameter("hsv.texture_shortlist", 10)   # 질감 계산 적용 상위 후보 수
-        self.declare_parameter("hsv.min_area_ratio", 0.0004)  # 면적비 하한(노이즈 컷). 상한 없음(근접 표적 유지)
-        self.declare_parameter("hsv.hue_sigma", 15.0)         # 빨강 원형 Gaussian 폭
-        self.declare_parameter("hsv.prob_threshold", 0.25)    # 붉은색 확률 이진화 임계
-        self.declare_parameter("hsv.sat_center", 100.0)       # 채도 sigmoid 중심
-        self.declare_parameter("hsv.sat_scale", 40.0)
-        self.declare_parameter("hsv.val_min", 40.0)           # 명도 하한
-        self.declare_parameter("hsv.val_max_center", 230.0)   # 과포화(조명) 감점 중심
-        self.declare_parameter("hsv.val_scale", 40.0)
-        self.declare_parameter("hsv.min_circularity", 0.30)   # 원형도/종횡비 하한
-        self.declare_parameter("hsv.texture_scale", 120.0)    # 매끈함 점수 스케일
+        self.require_parameter("hsv.max_candidates")
+        self.require_parameter("hsv.texture_shortlist")
+        self.require_parameter("hsv.min_area_ratio")
+        self.require_parameter("hsv.hue_sigma")
+        self.require_parameter("hsv.prob_threshold")
+        self.require_parameter("hsv.sat_center")
+        self.require_parameter("hsv.sat_scale")
+        self.require_parameter("hsv.val_min")
+        self.require_parameter("hsv.val_max_center")
+        self.require_parameter("hsv.val_scale")
+        self.require_parameter("hsv.min_circularity")
+        self.require_parameter("hsv.texture_scale")
 
         # 표적 필터 (KF 평활 + 이상치 게이트)
         #   상태 전이: NEW → TRACKED ⇄ LOST → REMOVED → (다음 검출) NEW
-        self.declare_parameter("filter.confirm_frames", 3)    # NEW→TRACKED: 같은 위치 연속검출 이만큼이면 확정
-        self.declare_parameter("filter.confirm_dist", 0.035)  # NEW: "같은 위치" 연속 판정 중심거리(정규화)
-        self.declare_parameter("filter.jump_gate", 0.4)       # TRACKED 유지 게이트: 예측서 이만큼 넘게 튀면 기각→miss (0=off)
-        self.declare_parameter("filter.max_age", 8)           # LOST→REMOVED: 연속 miss 이만큼이면 표적 제거
+        self.require_parameter("filter.confirm_frames")
+        self.require_parameter("filter.confirm_dist")
+        self.require_parameter("filter.jump_gate")
+        self.require_parameter("filter.max_age")
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
