@@ -224,7 +224,7 @@ mission:
   detection_timeout_sec: 1.0
   lock_duration_sec: 0.3
   tau_rtl_sec: 0.3 # 비전 looming: 충돌까지 시간(τ) 임계 [s] → RTL
-  intercept_align_tol: 0.2 # RTL 전이 전 정렬 허용오차
+  intercept_align_tol: 0.15 # RTL 전이 전 정렬 허용오차 [tan 이미지좌표]
   loom_s_min: 0.1 # looming 판정 최소 bbox 크기(정규화)
   loom_size_alpha: 0.3
   loom_rate_alpha: 0.3
@@ -532,7 +532,7 @@ manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 
 파이프라인 (매 control_rate_hz 틱):
 
-1. **LOS = 픽셀 오차** (`filt_err_x/y`, LPF) → 중앙 데드존.
+1. **LOS = 카메라 tan 이미지좌표 오차** (`filt_err_x/y`, LPF) → 중앙 데드존.
    (예전의 자세보정 LOS는 **제거** — acro 전환으로 attitude 의존 삭제.)
 2. **alpha-beta 필터** (`pn_alpha`/`pn_beta`) 로 매끈한 LOS + **시선각속도(LOS rate)** 추정.
 3. **유도** (`control.guidance_mode`) — 출력은 **각속도[deg/s]** 다:
@@ -595,7 +595,7 @@ arms_control_node
   |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
   |
   +-- [유도·제어]  (TRACK 상태에서 활성)
-  |     LOS(픽셀오차) → alpha-beta 필터 → 유도(기본 추적=PID / PN)
+  |     화면 정규화 오차 → 카메라 tan 좌표 → alpha-beta 필터 → 유도(기본 추적=PID / PN)
   |       → 각속도[deg/s] → clamp(max_cmd_rate_dps) → ÷max_rate_dps → CH1/CH2
   |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
   |     스로틀: hover→track (center_q 기반 추격 상승) → CH3

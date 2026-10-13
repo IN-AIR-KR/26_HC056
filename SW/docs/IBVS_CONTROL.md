@@ -20,7 +20,7 @@
 
 ```mermaid
 flowchart LR
-  A[검출 bbox 중심] -->|"① 오차 + LPF"| B[filt_err]
+  A[검출 bbox 중심] -->|"① 화면 정규화 → tan 변환 + LPF"| B[filt_err]
   B -->|"② alpha-beta"| C[LOS각속도 losf_dot]
   B -->|"③ tan 좌표 → z1, 배리어"| D[배리어항 + 선형항]
   C -->|"④ × los_rate_gain"| E[LOS각속도항]
@@ -52,17 +52,21 @@ $$
 
 ---
 
-## 1. 픽셀 오차와 필터 (LOCK 부터 갱신)
+## 1. 화면 오차를 카메라 tan 좌표로 변환하고 필터링 (LOCK 부터 갱신)
 
 $$
 e_{raw} = \frac{\text{bbox 중심}}{\text{화면 크기}} - 0.5 \quad(\pm 0.5 = \text{화면 가장자리})
 $$
 
 $$
-e_{filt} \leftarrow \alpha_{e}\, e_{raw} + (1-\alpha_{e})\, e_{filt}
+e_{tan}=\operatorname{undistort}\left(\frac{u-c_x}{f_x},\frac{v-c_y}{f_y}\right),\qquad
+e_{filt} \leftarrow \alpha_{e}\, e_{tan} + (1-\alpha_{e})\, e_{filt}
 $$
 
-- **역할**: 검출 좌표의 프레임 간 떨림을 걸러낸다. 이 $e_{filt}$ (= 코드의 `los_x`)가 IBVS 의 입력이다.
+- 화면 정규화값은 검출 메시지·UI 비교용 raw 값으로만 유지한다. 제어는 변환 직후부터
+  종횡비와 $f_x,f_y$를 반영한 $e_{tan}$만 사용한다. 캘리가 없으면
+  $x=2\tan(\mathrm{hfov}/2)e_x$, $y=2\tan(\mathrm{hfov}/2)\,\mathrm{aspect}\,e_y$로 근사한다.
+- **역할**: 검출 좌표의 프레임 간 떨림을 걸러낸다. 이 $e_{filt}$ (= 코드의 `los_x`)가 모든 유도 방식의 입력이다.
 - $\alpha_e$ 가 크면 민첩하지만 떨림이 그대로, 작으면 매끈하지만 늦다.
 - **LOCK 단계부터** 미리 갱신한다(명령은 아직 안 나감). 발사(TRACK 진입) 순간 필터가 0 에서
   다시 시작하는 콜드스타트를 없애기 위함.
@@ -86,7 +90,7 @@ $$
 
 그다음 근거리 폭주 방지로 한 번 더 자른다: $\dot\lambda_{use} = \text{clamp}(\dot\lambda, \pm c_{los})$ ($c_{los}$ = `pn_los_clamp`).
 
-- 단위는 **[화면(정규화)/s]** — 0.5/s 면 "1초에 화면 반폭만큼 이동".
+- 단위는 **[tan/s]** — 카메라 광축에 대한 시선 방향 변화율의 근사다.
 - $\alpha$: 위치를 얼마나 측정 쪽으로 당길지, $\beta$: 속도를 얼마나 빨리 고칠지.
   $\beta$ 를 낮추면 리드가 매끈해지지만 늦게 반응한다.
 - ⚠ **자기회전 오염**: 이 값은 순수 픽셀 변화라서 "표적이 움직여서" 와 "내가 회전해서
@@ -341,7 +345,7 @@ $$
 | `control.error_lpf_alpha` | 0.25 | $\alpha_e$ | 오차 LPF. ↑ 민첩/떨림, ↓ 매끈/지연 |
 | `control.pn_alpha` | 0.35 | $\alpha$ | alpha-beta 위치 이득 |
 | `control.pn_beta` | 0.02 | $\beta$ | alpha-beta 속도 이득. ↓ 리드 매끈/늦음 (IBVS 진동 시 의심) |
-| `control.pn_los_clamp` | 1.5 | — | LOS각속도 상한 [화면/s]. PN(mode 1)과 공유 |
+| `control.pn_los_clamp` | 1.5 | — | LOS각속도 상한 [tan/s]. PN(mode 1)과 공유 |
 | `mission.loom_size_alpha` | 0.3 | $a_s$ | bbox 크기 EMA (근접도·τ 공통) |
 | `mission.loom_rate_alpha` | 0.3 | $a_r$ | 팽창률 EMA (τ 안정화) |
 
@@ -433,18 +437,18 @@ los_rate_term_x = ibvs_los_rate_gain · los_rate_x     (los_rate_x = ldx)
 
 ### Error
 
-_정규화 ±0.5_
+_raw는 화면 정규화 ±0.5, filt는 카메라 tan 좌표_
 
 | 필드 | 수식 |
 |---|---|
 | `raw_err_x` | bbox_cx/W − 0.5 (±0.5 = 화면 끝) |
-| `filt_err_x` | α·raw_err_x + (1−α)·filt_err_x (α = error_lpf_alpha) |
+| `filt_err_x` | α·tan(raw_err_x) + (1−α)·filt_err_x (실기체는 캘리·왜곡 역보정) |
 | `raw_err_y` | bbox_cy/H − 0.5 |
-| `filt_err_y` | α·raw_err_y + (1−α)·filt_err_y |
+| `filt_err_y` | α·tan(raw_err_y) + (1−α)·filt_err_y (실기체는 캘리·왜곡 역보정) |
 
 ### Error angle
 
-_[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
+_[deg] · 카메라 광축 기준 (제어 입력 filt_err 는 이미 tan 좌표)_
 
 | 필드 | 수식 |
 |---|---|
@@ -454,13 +458,13 @@ _[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)_
 
 ### LOS rate
 
-_[화면/s]_
+_[tan/s]_
 
 | 필드 | 수식 |
 |---|---|
-| `losf_x_dot` | alpha-beta 속도 추정 [화면/s], clamp ±3 |
+| `losf_x_dot` | alpha-beta 속도 추정 [tan/s], clamp ±3 |
 | `los_rate_x` | ldx = clamp(losf_x_dot, ±pn_los_clamp) |
-| `losf_y_dot` | alpha-beta 속도 추정 [화면/s], clamp ±3 |
+| `losf_y_dot` | alpha-beta 속도 추정 [tan/s], clamp ±3 |
 | `los_rate_y` | ldy = clamp(losf_y_dot, ±pn_los_clamp) |
 | `err_dot_x` | LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp (mode 0 전용) |
 | `err_dot_y` | LPF(Δfilt_err_y/dt), clamp ±err_dot_clamp (mode 0 전용) |

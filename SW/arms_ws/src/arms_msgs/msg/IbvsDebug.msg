@@ -10,10 +10,10 @@ bool    cmd_active          # TRACK: 실제 회전/추력 명령 생성 중
 bool    manual_out          # 수동/RTL 핸드오버(스틱 passthrough → 아래 명령은 미사용)
 float64 dt                  # 제어 틱 간격[s]
 
-# ── ① 오차 (정규화 픽셀, ±0.5) ────────────────────────────────
-float64 raw_err_x           # 상태머신 원시 오차 (bbox 중심 - 0.5)
+# ── ① 오차 ────────────────────────────────────────────────────
+float64 raw_err_x           # 상태머신 원시 화면 정규화 오차 (bbox 중심 - 0.5, ±0.5)
 float64 raw_err_y
-float64 filt_err_x          # error_lpf_alpha LPF = los_x (IBVS 입력)
+float64 filt_err_x          # tan 이미지좌표의 error_lpf_alpha LPF = los_x (제어 입력)
 float64 filt_err_y
 bool    detection_held      # 검출 끊김 → 마지막 값 유지 중
 

@@ -194,10 +194,8 @@ class ArmsControlNode : public rclcpp::Node {
     //   표적은 거리가 가까워질수록 LOS각속도가 1/거리로 치솟아서(3.6m/s 표적
     //   기준 10m 에서 21deg/s, 3m 에서 69deg/s) 게인을 아무리 올려도 종말에
     //   반드시 빗나간다 — 리드가 없으면 구조적으로 못 맞힌다.
-    //   크기의 의미: 이 값 / (kx * 57.3) = 항법계수 N = 명령각속도 / LOS각속도.
-    //     175 → N=1.0  "시선과 같은 속도로 돈다" = 카메라만 붙어 있고 리드 없음
-    //     220 → N=1.2  약한 리드 (기본값 — 아래 ★주의★ 참고)
-    //     350 → N=2.0  강한 리드. SITL 에서 심한 진동을 유발해 낮췄다.
+    //   tan LOS 속도[rad/s 근사]에 곱하므로, 작은 각도에서 이 값 / 57.3 이
+    //   항법계수 N(명령각속도/LOS각속도)이다. 57.3이면 N=1, 115면 N=2.
     //
     //   ★주의★ 이 항은 losf_x_dot_(alpha-beta 로 추정한 '화면이 움직이는 속도')
     //   에 곱하는데, 그 속도에는 "표적이 움직여서"뿐 아니라 "내가 회전해서
@@ -208,8 +206,8 @@ class ArmsControlNode : public rclcpp::Node {
     //   있다. 게인을 낮추면 이 되먹임의 증폭이 줄어 완화되지만 원인 자체가
     //   없어지진 않는다. 근본 해결은 자이로 각속도로 자기회전분을 빼는 것인데
     //   (=논문의 R_b^e 보정과 같은 역할, 지금은 미구현) 그건 더 큰 변경이다.
-    //   흔들리면 ↓ (175까지, 그래도 흔들리면 pn_alpha/pn_beta 도 원인일 수 있음)
-    //   종말에 뒤처지면(못 맞추면) ↑ (350 이상은 SITL 에서 진동 확인됨, 주의)
+    //   흔들리면 ↓ (그래도 흔들리면 pn_alpha/pn_beta 도 원인일 수 있음).
+    //   종말에 뒤처지면(못 맞추면) ↑. 한 번에 크게 올리지 않는다.
     declare_required_parameter("control.ibvs_los_rate_gain", rclcpp::ParameterType::PARAMETER_DOUBLE);
 
     // ── 근접도 기반 게인/스로틀 스케줄링 ────────────────────────────────
@@ -301,7 +299,7 @@ class ArmsControlNode : public rclcpp::Node {
     roll_sign_ = get_parameter("control.roll_sign").as_double();
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
     mode0_aim_above_offset_ = std::clamp(
-        get_parameter("control.mode0_aim_above_offset").as_double(), -0.5, 0.5);
+        get_parameter("control.mode0_aim_above_offset").as_double(), -1.0, 1.0);
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
     control_rate_hz_ = get_parameter("control.control_rate_hz").as_double();
     deadzone_ = get_parameter("control.deadzone").as_double();
@@ -380,7 +378,7 @@ class ArmsControlNode : public rclcpp::Node {
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
             else if (n == "control.mode0_aim_above_offset")
-              mode0_aim_above_offset_ = std::clamp(p.as_double(), -0.5, 0.5);
+              mode0_aim_above_offset_ = std::clamp(p.as_double(), -1.0, 1.0);
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
             else if (n == "control.deadzone")
@@ -662,7 +660,11 @@ class ArmsControlNode : public rclcpp::Node {
                    : std::numeric_limits<double>::infinity();
     tau_sec_ = tau;   // control_loop() 의 추력 스케줄링이 재사용
     if (looming_rtl_enabled_) {
-      sm_->on_intercept(tau, loom_s_ema_);
+      // 상태머신은 검출 메시지 형식에 종속되지 않는다. 화면 정규화 오차는 여기서
+      // 카메라 tan 좌표로 바꿔 종말 정렬 판정에도 제어와 같은 단위를 쓴다.
+      double align_x = 0.0, align_y = 0.0;
+      error_to_tan(sm_->current_error_x(), sm_->current_error_y(), align_x, align_y);
+      sm_->on_intercept(tau, loom_s_ema_, std::hypot(align_x, align_y));
     }
 
     geometry_msgs::msg::Vector3 lm;
@@ -827,14 +829,19 @@ class ArmsControlNode : public rclcpp::Node {
     // 실제 회전/추력 명령은 TRACK에서만 나가지만(아래 안쪽 if),
     // TRACK 진입 순간 filt_err_x_/y_ 등이 0부터 다시 시작하는 콜드스타트를 없애기 위함.
     if (state == State::LOCK || state == State::TRACK) {
-      double raw_ex = sm_->current_error_x();
-      double raw_ey = sm_->current_error_y();
+      // BoundingBox가 주는 값은 화면 폭/높이로 각각 나눈 raw 정규화 오차다.
+      // 그것은 전송·UI 표시에는 적합하지만, 두 축의 1.0이 같은 시선각을 뜻하지
+      // 않는다. 제어 경로는 입력 즉시 tan 이미지좌표로 바꾼 뒤 끝까지 유지한다.
+      const double raw_ex_norm = sm_->current_error_x();
+      const double raw_ey_norm = sm_->current_error_y();
+      double raw_ex = 0.0, raw_ey = 0.0;
+      error_to_tan(raw_ex_norm, raw_ey_norm, raw_ex, raw_ey);
       filt_err_x_ =
           error_lpf_alpha_ * raw_ex + (1.0 - error_lpf_alpha_) * filt_err_x_;
       filt_err_y_ =
           error_lpf_alpha_ * raw_ey + (1.0 - error_lpf_alpha_) * filt_err_y_;
 
-      // ---- LOS = 픽셀 오차 ----
+      // ---- LOS = 카메라 tan 이미지좌표 오차 ----
       //   (예전엔 실제 자세로 카메라-기울기 성분을 보정했으나, acro 제어 전환으로 attitude
       //    의존을 제거함. FC 가 ACRO 로 각속도를 직접 처리하므로 젯슨 자세 루프 불필요.)
       double los_x = filt_err_x_;
@@ -842,7 +849,7 @@ class ArmsControlNode : public rclcpp::Node {
 
       // ---- 중앙 데드존 (보정된 LOS 기준) ----
       double ex = apply_deadzone(los_x, deadzone_);
-      // Mode 0에서 양의 offset은 풍선이 화면 중심보다 아래(raw_err_y>0)에
+      // Mode 0에서 양의 offset은 풍선이 화면 중심보다 아래(tan y>0)에
       // 머물도록 만든다. 즉 카메라 중심/추력축은 풍선보다 화면 위를 조준한다.
       // 상수항은 미분 전에 넣지 않아 err_dot/PN/IBVS 추정을 오염시키지 않는다.
       const double mode0_y_reference =
@@ -863,8 +870,10 @@ class ArmsControlNode : public rclcpp::Node {
 
       bool held = sm_->is_detection_held();
       idbg.filter_active = true;
-      idbg.raw_err_x = raw_ex;
-      idbg.raw_err_y = raw_ey;
+      // raw_err_*는 검출 원본(화면 정규화)으로 남겨 영상·검출 로그와 직접 대조한다.
+      // filt_err_*부터는 모두 tan 이미지좌표다.
+      idbg.raw_err_x = raw_ex_norm;
+      idbg.raw_err_y = raw_ey_norm;
       idbg.filt_err_x = filt_err_x_;
       idbg.filt_err_y = filt_err_y_;
       idbg.detection_held = held;
@@ -914,10 +923,10 @@ class ArmsControlNode : public rclcpp::Node {
         //   목표: 추력축을 시선에 정렬 = "표적을 겨누면 곧 표적으로 가속한다".
         //   자세/거리/속도 없이 픽셀과 화각만으로 계산된다 (자세 R_b^e 가 상쇄됨).
 
-        // ① 픽셀오차 → tan 단위 정규화 이미지좌표. error=±0.5 가 화면 가장자리.
-        //    실기체는 캘리(fx,fy,cx,cy,왜곡)로, SITL 은 hfov 근사로 환산한다.
-        double x_n = 0.0, y_n = 0.0;
-        error_to_tan(los_x, los_y, x_n, y_n);
+        // ① LOS는 이미 tan 단위 이미지좌표다. 실기체는 캘리(fx,fy,cx,cy,왜곡),
+        //    SITL은 hfov 근사로 제어 경로 입구에서 환산했다.
+        const double x_n = los_x;
+        const double y_n = los_y;
         const double Nn  = std::sqrt(1.0 + x_n * x_n + y_n * y_n);
 
         // ② 공선 오차 z1 = 1 - cos(theta). theta = 광축에서 벗어난 각도.
@@ -1355,7 +1364,7 @@ class ArmsControlNode : public rclcpp::Node {
   double lead_gain_{0.0};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
-  double mode0_aim_above_offset_{0.03};  // 정규화 영상 높이, 양수=표적보다 화면 위 조준
+  double mode0_aim_above_offset_{0.016};  // tan y 단위, 양수=표적보다 화면 위 조준
   double error_lpf_alpha_{0.25};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
@@ -1424,7 +1433,7 @@ class ArmsControlNode : public rclcpp::Node {
   // 자동요격 제어(ACRO 각속도 + 유도). 각도 단계 없음.
   double max_rate_dps_{400.0};
   double hover_throttle_{0.32};
-  double pursuit_gate_{0.25};
+  double pursuit_gate_{0.20};
   bool   pursuit_center_boost_{true};   // 중앙 정렬시 추력증가 on/off (config)
   double err_dot_alpha_{0.2};
   double err_dot_clamp_{0.6};

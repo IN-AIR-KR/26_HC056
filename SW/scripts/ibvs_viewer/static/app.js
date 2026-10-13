@@ -24,13 +24,13 @@ const RATE_STEP_SEC = 0.1;
 const FIELD_INFO = {
   raw_err_x: "bbox_cx/W − 0.5   (±0.5 = 화면 끝)",
   raw_err_y: "bbox_cy/H − 0.5",
-  filt_err_x: "α·raw_err_x + (1−α)·filt_err_x   (α = error_lpf_alpha)",
-  filt_err_y: "α·raw_err_y + (1−α)·filt_err_y",
+  filt_err_x: "LPF(tan(raw_err_x))   (α = error_lpf_alpha, tan image coordinate)",
+  filt_err_y: "LPF(tan(raw_err_y))   (camera y tan coordinate)",
   emag: "√(filt_err_x² + filt_err_y²)",
   losf_x: "alpha-beta 위치 추정 (입력 filt_err_x)",
   losf_y: "alpha-beta 위치 추정 (입력 filt_err_y)",
-  losf_x_dot: "alpha-beta 속도 추정 [화면/s], clamp ±3",
-  losf_y_dot: "alpha-beta 속도 추정 [화면/s], clamp ±3",
+  losf_x_dot: "alpha-beta 속도 추정 [tan/s], clamp ±3",
+  losf_y_dot: "alpha-beta 속도 추정 [tan/s], clamp ±3",
   los_rate_x: "ldx = clamp(losf_x_dot, ±pn_los_clamp)",
   los_rate_y: "ldy = clamp(losf_y_dot, ±pn_los_clamp)",
   err_dot_x: "LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp   (mode 0 전용)",
@@ -186,14 +186,14 @@ const GENERAL_PANELS = [
 // series: {t: 토픽(기본 T), f: 필드(또는 DERIVED 이름), scale: "y"|"y2", dash, width, step, show,
 //          mul/add: 표시용 변환(범례에는 원값 표시)}
 const PANELS = [
-  { title: "Error", note: "정규화 ±0.5",
+  { title: "Error", note: "dashed: raw screen-normalized ±0.5 · solid: filtered camera tan coordinate",
     series: [
       { f: "raw_err_x", dash: [4, 3], width: 1 }, { f: "filt_err_x" },
       { f: "raw_err_y", dash: [4, 3], width: 1 }, { f: "filt_err_y" },
     ] },
-  { title: "Error angle", note: "[deg] · 카메라 광축 기준 (IBVS 입력 filt_err 를 캘리로 환산)",
+  { title: "Error angle", note: "[deg] · camera optical axis (filtered tan-coordinate control input)",
     series: [{ f: "err_angle_x" }, { f: "err_angle_y" }, { f: "theta_deg", width: 2 }] },
-  { title: "LOS rate", note: "[화면/s]",
+  { title: "LOS rate", note: "[tan/s]",
     series: [
       { f: "losf_x_dot" }, { f: "los_rate_x", dash: [4, 3] },
       { f: "losf_y_dot" }, { f: "los_rate_y", dash: [4, 3] },
