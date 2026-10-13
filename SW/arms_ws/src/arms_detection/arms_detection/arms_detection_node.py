@@ -290,10 +290,9 @@ class ArmsDetectionNode(Node):
         self._diag_hsv_proposals = []   # 파이프라인 후보(max_candidates) — hsv_debug_image 용
         self._diag_hsv_all = []         # 상위 10개 후보 — debug_image 전체 후보 뷰 용
 
-        # YOLO: 같은 프로세스에서 직접 추론. ultralytics/모델이 없으면(호스트/SITL)
-        # 조용히 비활성화한다. HSV 단독 후보는 안전상 검출로 발행하지 않는다.
-        # 모델 경로/파라미터는 환경변수로 (컨테이너 compose 가 주입).
-        self._yolo = None
+        # YOLO는 같은 프로세스에서 직접 추론한다. 모델 경로/파라미터는 컨테이너
+        # compose 또는 host 런치가 환경변수로 주입한다. 유효한 모델 없이 검출 노드가
+        # 살아 있으면 node-list 기반 health가 거짓 양성이 되므로 시작을 실패시킨다.
         # 카메라 재학습 모델의 validation F1 최적점은 약 0.32다.
         self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.32"))
         self._yolo_iou  = float(os.environ.get("ARMS_IOU",  "0.45"))
@@ -302,28 +301,25 @@ class ArmsDetectionNode(Node):
             "ARMS_FULL_IMGSZ", legacy_imgsz or "512"))
         self._yolo_roi_imgsz = int(os.environ.get(
             "ARMS_ROI_IMGSZ", legacy_imgsz or "320"))
-        model_path = os.environ.get("ARMS_MODEL", "")
+        model_path = os.environ.get("ARMS_MODEL", "").strip()
+        if not model_path:
+            raise RuntimeError("ARMS_MODEL is required for arms_detection_node")
         # 고정 batch TensorRT engine은 여러 ndarray 입력을 못 받아 후보별 순차 추론한다.
         # .pt 모델은 list 입력으로 한 번에 batch 추론한다.
         self._yolo_batch_enabled = not model_path.lower().endswith(".engine")
-        if model_path:
-            try:
-                from ultralytics import YOLO
-                self.get_logger().info(f"Loading YOLO model: {model_path}")
-                self._yolo = YOLO(model_path, task="detect")
-                # 시작 시 워밍업 predict 1회 — 엔진 로드·CUDA 컨텍스트·오토튜닝을 여기서
-                #   끝낸다. (1) 첫 프레임 지연 스파이크 제거, (2) OOM/버전불일치면 여기서
-                #   바로 드러남. 정적 엔진은 로드 때 메모리를 다 잡으므로 여기서 통과하면
-                #   이후 프레임은 같은 버퍼 재사용 → 자기 추론으로 OOM 나지 않는다.
-                dummy = np.zeros((self._yolo_roi_imgsz, self._yolo_roi_imgsz, 3), np.uint8)
-                self._yolo.predict(dummy, imgsz=self._yolo_roi_imgsz, verbose=False)
-                self.get_logger().info("YOLO loaded + warmed up (in-process).")
-            except Exception as e:
-                self._yolo = None   # 로드/워밍업 실패 → 검출 비활성(노드는 유지)
-                self.get_logger().error(
-                    f"YOLO 로드/워밍업 실패 — 검출 비활성 (GPU OOM/엔진 불일치 등): {e}")
-        else:
-            self.get_logger().info("ARMS_MODEL unset → detection disabled (HSV proposal only).")
+        try:
+            from ultralytics import YOLO
+            self.get_logger().info(f"Loading YOLO model: {model_path}")
+            self._yolo = YOLO(model_path, task="detect")
+            # 시작 시 워밍업 predict 1회 — 엔진 로드·CUDA 컨텍스트·오토튜닝을 여기서
+            # 끝낸다. 여기서 실패하면 이후 프레임에서도 정상 추론할 수 없으므로 노드를
+            # 종료해 system health가 missing으로 표시되게 한다.
+            dummy = np.zeros((self._yolo_roi_imgsz, self._yolo_roi_imgsz, 3), np.uint8)
+            self._yolo.predict(dummy, imgsz=self._yolo_roi_imgsz, verbose=False)
+            self.get_logger().info("YOLO loaded + warmed up (in-process).")
+        except Exception as exc:
+            raise RuntimeError(
+                f"YOLO model load or cold-start warmup failed: {exc}") from exc
 
         # 입력 전송: ARMS_INPUT_COMPRESSED=1 이면 압축(CompressedImage)을 구독·디코드
         # → 컨테이너로 오는 UDP 데이터량 급감(조각 드롭↓). 아니면 raw Image.
@@ -816,15 +812,17 @@ class ArmsDetectionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ArmsDetectionNode()
+    node = None
     try:
+        node = ArmsDetectionNode()
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         # Ctrl-C / docker stop(SIGINT·SIGTERM): rclpy 가 컨텍스트를 이미 닫으므로
         # 여기서 조용히 빠져나온다(아래 rclpy.ok() 가드로 이중 shutdown 방지).
         pass
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 

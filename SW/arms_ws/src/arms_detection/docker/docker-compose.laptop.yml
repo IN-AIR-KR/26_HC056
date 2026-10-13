@@ -47,4 +47,6 @@ services:
       - bash
       - -c
       - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args --params-file /params/detection.yaml $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
-    restart: unless-stopped
+    # 모델 로드·cold-start 실패는 설정/환경 오류다. 재시작 루프가 UI health를
+    # 잠깐 online으로 보이게 하지 않도록, 수정 후 명시적으로 다시 기동한다.
+    restart: "no"
