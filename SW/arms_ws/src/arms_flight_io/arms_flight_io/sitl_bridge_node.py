@@ -112,6 +112,14 @@ class ArmsSITLCommNode(Node):
             try:
                 self.get_logger().info(f"Connecting to PX4: {self._conn_str} ...")
                 mav = mavutil.mavlink_connection(self._conn_str)
+                # HITL에서는 Jetson이 PX4가 있는 다른 호스트의 UDP 수신 포트로
+                # ``udpout:`` 연결한다. PX4 UDP server가 이 송신지를 telemetry
+                # 반환 peer로 등록하도록 heartbeat를 먼저 보낸다.
+                if self._conn_str.startswith("udpout:"):
+                    mav.mav.heartbeat_send(
+                        mavutil.mavlink.MAV_TYPE_GCS,
+                        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                        0, 0, 0)
                 mav.wait_heartbeat(timeout=15)
                 self._mav = mav
                 self.get_logger().info(
