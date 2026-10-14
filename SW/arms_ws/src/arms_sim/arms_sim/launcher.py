@@ -4,8 +4,8 @@ launcher.py — 견착 발사기 SITL 노드  [arms_sim]
 
 하는 일
   1) 앙각/방위 조절: ROS 파라미터 elevation_deg / azimuth_deg (패널 슬라이더가 씀).
-     각도 변경 때 드론을 분리하고 목표 위치·자세로 set_pose 한 뒤 다시 고정한다.
-     시각용 발사관도 같은 자세로 set_pose 한다. 물리 관절·PID는 사용하지 않는다.
+     각도 변경 때 PID 없는 kinematic 발사관을 set_pose 한다. DetachableJoint에 붙은
+     드론은 발사관을 즉시 따라가며, 물리 관절·PID는 사용하지 않는다.
   2) 발사(분리): 실기체 발사 걸쇠 서보가 여는 순간과 같은 조건에서 조인트를 끊는다.
        - 자동: 미션 상태가 TRACK 으로 '들어오는 순간' (실기체 servo_lock 이 OPEN 하는 전이)
        - 수동: ARM + 수동모드 + 스로틀을 호버(스틱 중앙) 이상으로 잠깐 유지
@@ -20,8 +20,8 @@ launcher.py — 견착 발사기 SITL 노드  [arms_sim]
 설계 원칙 (예전 시도에서 실패한 것들)
   - 발사기 모델에는 collision 이 하나도 없다 → 물리적으로 드론 비행을 절대 방해 못 함.
   - 드론을 붙잡는 건 DetachableJoint(고정 조인트) 하나뿐 → 기울여도 안 떨어짐.
-  - 발사관은 visual-only 모델이며, DetachableJoint의 부모는 움직이지 않는 base이다.
-    따라서 발사각 설정 중 기체에 관절 토크나 각속도가 전달되지 않는다.
+  - 발사관은 kinematic 모델이며, DetachableJoint의 부모다. 발사관 pose를 바꿔
+    기체를 이동시키되 관절 PID·토크·지속 각속도를 사용하지 않는다.
   - 드론이 실제로 물리기 전에는 스폰 자세(수직)를 유지한다.
 
 재장전 순서가 중요한 이유 (gz-sim 8 소스 확인)
@@ -283,9 +283,12 @@ class Launcher(Node):
 
     def _apply_angle_updates(self):
         try:
+            first_update = True
             while rclpy.ok():
-                # 슬라이더의 elevation/azimuth 두 파라미터가 연달아 들어오는 것을 합친다.
-                time.sleep(0.05)
+                # 처음만 짧게 기다려 elevation/azimuth가 연달아 오는 것을 합친다.
+                # 이후 드래그 중에는 최신 pose를 곧바로 적용해 발사관과 드론이 함께 보인다.
+                if first_update:
+                    time.sleep(0.03)
                 with self._lock:
                     generation = self._angle_generation
                     ready, armed = self._rig_ready, self._armed
@@ -299,6 +302,7 @@ class Launcher(Node):
                 with self._lock:
                     if generation == self._angle_generation:
                         return
+                first_update = False
         finally:
             with self._lock:
                 self._angle_worker_running = False
@@ -384,13 +388,13 @@ class Launcher(Node):
             quat = G.drone_orientation(el, az)
             feedback = self._plugin_state is not None
 
-            # 시각용 발사관은 물리 결합과 무관하므로 먼저 즉시 돌린다. 수직 상태에서
-            # 방위만 바뀌어 드론 위치가 같을 때도 이 호출이 필요하다.
+            # 발사관은 DetachableJoint의 kinematic 부모다. 이 pose 변경으로 장전된
+            # 드론도 함께 움직인다. 수직 상태에서 방위만 바뀌어도 호출이 필요하다.
             pivot = (G.PIVOT_X, G.PIVOT_Y, G.PIVOT_Z)
             if not self._set_pose(TUBE_MODEL, pivot, quat):
                 return False, "발사관 visual set_pose 서비스 실패"
 
-            # 0) 이미 제자리에 물려 있으면 드론 재장전은 불필요하다.
+            # 0) 장전된 기체가 발사관 pose를 따라왔다면 재장전은 불필요하다.
             if self._attached and self._pose_near(target, time.monotonic(), 0.5):
                 return True, f"이미 장착 상태 (앙각 {el:.0f}°, 방위 {az:.0f}°)"
 
@@ -404,8 +408,7 @@ class Launcher(Node):
             else:
                 time.sleep(0.1)
 
-            # 2) 드론을 같은 발사 자세로 즉시 배치한다. 발사관은 static visual 모델이라
-            #    관절 토크나 PID가 전혀 없다.
+            # 2) 발사 후 분리된 드론만 같은 발사 자세로 즉시 되돌린다.
             t0 = time.monotonic()
             if not self._set_pose(DRONE, target, quat):
                 return False, "set_pose 서비스 실패"

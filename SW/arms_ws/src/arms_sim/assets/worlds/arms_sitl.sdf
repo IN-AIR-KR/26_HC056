@@ -190,8 +190,8 @@
          ★ collision 이 하나도 없다: 물리적으로 드론 비행을 방해할 수 없게 일부러 뺐다.
            (예전 시도의 실패 원인 = 충돌 형상 있는 구조물이 날아가는 드론을 막음)
          ★ 드론을 붙잡는 것은 DetachableJoint 고정 조인트 하나 → 기울여도 안 떨어진다.
-         ★ 발사관은 시각 전용 모델이다. launcher.py 가 각도 변경 때 드론과 발사관을
-           같은 pose로 즉시 재배치하므로, 물리 관절·PID·토크가 기체에 전달되지 않는다.
+         ★ 발사관은 PID 없는 kinematic 고정대다. launcher.py 가 발사관 pose를 즉시
+           바꾸면 고정 조인트에 붙은 드론도 함께 움직이며, 물리 관절·PID·토크는 없다.
          좌표/수치는 arms_sim/launcher_geometry.py 와 같아야 한다:
            모델 원점 = 어깨 피벗, 높이 PIVOT_Z = 1.20
            드론 무게중심 = 튜브 +Z 로 CG_DIST(0.801) 지점, 드론 꼬리 = TAIL_FROM_PIVOT(0.61)
@@ -222,23 +222,10 @@
         <child>base</child>
       </joint>
 
-      <!-- 드론(PX4 가 나중에 스폰) 을 고정된 받침점에 고정. 자식 모델이 나타날 때까지 매 스텝 찾다가
-           나타나는 순간 '그때의 상대 위치' 로 물린다 → 스폰 위치가 튜브 끝과 맞아야 함
-           (px4_sitl.launch.py 가 launcher_geometry.spawn_pose_str() 로 맞춘다). -->
-      <plugin filename="gz-sim-detachable-joint-system"
-              name="gz::sim::systems::DetachableJoint">
-        <parent_link>base</parent_link>
-        <child_model>arms_drone_0</child_model>
-        <child_link>base_link</child_link>
-        <detach_topic>/arms_sim/launcher/detach</detach_topic>
-        <attach_topic>/arms_sim/launcher/attach</attach_topic>
-        <output_topic>/arms_sim/launcher/state</output_topic>
-        <suppress_child_warning>true</suppress_child_warning>
-      </plugin>
     </model>
 
-    <!-- 물리 결합과 분리된 시각용 발사관. 충돌/질량/관절이 없으며 launcher.py 가
-         /world/arms_sitl/set_pose 로 드론의 발사 자세와 같은 pose에 둔다. -->
+    <!-- PID 없는 kinematic 발사관. 충돌/질량/관절은 없고, launcher.py 가 set_pose 로
+         회전시킨다. DetachableJoint가 붙은 드론은 이 pose를 즉시 따라간다. -->
     <model name="arms_launcher_tube">
       <static>true</static>
       <pose>0 0 1.20 0 0 0</pose>
@@ -250,6 +237,18 @@
           <material><ambient>0.25 0.32 0.14 1</ambient><diffuse>0.33 0.42 0.18 1</diffuse></material>
         </visual>
       </link>
+      <!-- 드론(PX4 가 나중에 스폰)을 이 튜브에 고정. 자식 모델이 나타나는 순간
+           그때의 상대 위치로 물린다 → 최초 스폰 위치가 튜브 끝과 맞아야 한다. -->
+      <plugin filename="gz-sim-detachable-joint-system"
+              name="gz::sim::systems::DetachableJoint">
+        <parent_link>tube_visual</parent_link>
+        <child_model>arms_drone_0</child_model>
+        <child_link>base_link</child_link>
+        <detach_topic>/arms_sim/launcher/detach</detach_topic>
+        <attach_topic>/arms_sim/launcher/attach</attach_topic>
+        <output_topic>/arms_sim/launcher/state</output_topic>
+        <suppress_child_warning>true</suppress_child_warning>
+      </plugin>
     </model>
 
   </world>

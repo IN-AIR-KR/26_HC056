@@ -410,7 +410,7 @@ class PanelGUI:
 
         # ── [발사기] launcher ───────────────────────────────────────────────
         #   슬라이더를 드래그하는 동안 노드에 보낸다(같은 값은 합쳐짐).
-        #   노드는 DISARM 상태에서 드론과 시각용 발사관을 목표 pose로 즉시 재배치한다.
+        #   노드는 DISARM 상태에서 kinematic 발사관 pose를 즉시 바꾸고, 장전된 드론이 따른다.
         g_lch = group(left, "견착 발사기  ·  launcher")
         self.lch_status = tk.Label(g_lch, text="발사기: 노드 대기 중…", fg="white",
                                    bg="#455a64", font=("Arial", 10, "bold"), width=30)

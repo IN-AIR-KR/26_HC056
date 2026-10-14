@@ -2,7 +2,7 @@
 launcher_geometry.py — 견착 발사기 SITL 의 기하 상수 (단일 출처)  [arms_sim]
 
 이 값들을 쓰는 곳:
-  - launcher.py            : 장전 위치·자세, 시각용 발사관 pose, rviz 마커
+  - launcher.py            : 장전 위치·자세, kinematic 발사관 pose, rviz 마커
   - px4_sitl.launch.py     : 최초 스폰 위치 (PX4_GZ_MODEL_POSE)
   - assets/worlds/arms_sitl.sdf 의 arms_launcher 모델
       ★ SDF 는 파이썬을 못 읽으므로 PIVOT_Z, CG_DIST 를 바꾸면 SDF 의
