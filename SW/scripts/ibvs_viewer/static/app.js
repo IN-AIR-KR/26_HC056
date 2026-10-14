@@ -135,10 +135,23 @@ const GENERAL_PANELS = [
       { t: M, f: "lock_elapsed_sec", label: "lock elapsed [s]", scale: "y2" },
       { t: M, f: "manual_mode", label: "mode (0=auto, 1=manual)", step: true, scale: "y2" },
     ] },
+  { title: "Operator input", note: "sticks and AUTO/MANUAL / ARM / RTL switch inputs",
+    series: [
+      { t: CMD, f: "axes_0", label: "yaw" }, { t: CMD, f: "axes_1", label: "throttle" },
+      { t: CMD, f: "axes_2", label: "roll" }, { t: CMD, f: "axes_3", label: "pitch" },
+      { t: CMD, f: "buttons_2", label: "mode (0=auto, 1=manual)", step: true },
+      { t: CMD, f: "buttons_1", label: "arm switch", step: true },
+      { t: CMD, f: "buttons_4", label: "RTL switch", step: true },
+    ] },
   { title: "Control output", note: "final command before CRSF normalization",
     series: [
       { t: C, f: "x", label: "roll rate [deg/s]" }, { t: C, f: "y", label: "pitch rate [deg/s]" },
       { t: C, f: "z", label: "thrust [0..1]", scale: "y2" },
+    ] },
+  { title: "Attitude", note: "source-independent vehicle roll / pitch / yaw",
+    series: [
+      { t: A, f: "roll_deg", label: "roll [deg]" }, { t: A, f: "pitch_deg", label: "pitch [deg]" },
+      { t: A, f: "yaw_deg", label: "yaw [deg]" },
     ] },
   { title: "GPS motion", note: "altitude / ground speed / course",
     series: [
@@ -155,23 +168,10 @@ const GENERAL_PANELS = [
       { t: B, f: "voltage_v", label: "voltage [V]" }, { t: B, f: "current_a", label: "current [A]" },
       { t: B, f: "battery_remaining_pct", label: "remaining [%]", scale: "y2" },
     ] },
-  { title: "Attitude", note: "source-independent vehicle roll / pitch / yaw",
-    series: [
-      { t: A, f: "roll_deg", label: "roll [deg]" }, { t: A, f: "pitch_deg", label: "pitch [deg]" },
-      { t: A, f: "yaw_deg", label: "yaw [deg]" },
-    ] },
   { title: "CRSF link", note: "uplink telemetry received from ELRS",
     series: [
       { t: R, f: "uplink_rssi_dbm", label: "uplink RSSI [dBm]" },
       { t: R, f: "uplink_lq", label: "uplink LQ [%]" }, { t: R, f: "uplink_snr_db", label: "uplink SNR [dB]" },
-    ] },
-  { title: "Operator command / switches", note: "sticks and AUTO/MANUAL / ARM / RTL switch inputs",
-    series: [
-      { t: CMD, f: "axes_0", label: "yaw" }, { t: CMD, f: "axes_1", label: "throttle" },
-      { t: CMD, f: "axes_2", label: "roll" }, { t: CMD, f: "axes_3", label: "pitch" },
-      { t: CMD, f: "buttons_2", label: "mode (0=auto, 1=manual)", step: true },
-      { t: CMD, f: "buttons_1", label: "arm switch", step: true },
-      { t: CMD, f: "buttons_4", label: "RTL switch", step: true },
     ] },
   { title: "CRSF output", note: "channels sent to FC (CH6: auto=ACRO, manual/RTL=self-level)",
     series: [
