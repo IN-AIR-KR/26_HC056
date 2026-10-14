@@ -1034,13 +1034,20 @@ function updateVideoInfo(t) {
     `t = ${t.toFixed(2)} s · frame ${V.want + 1}/${videoData().t.length}${st ? " · " + st : ""}`;
 }
 
-/* 재생 위치를 그래프 커서로 표시 (첫 차트에 커서를 두면 sync 로 전부 따라온다). */
+/* 재생 위치를 모든 그래프의 커서로 표시한다.
+ * uPlot의 cursor sync는 포인터 이벤트는 전파하지만, setCursor()로 넣은 재생 위치는
+ * 다른 차트로 전파하지 않는다. 따라서 각 차트의 동일한 시간 좌표에 직접 둔다. */
 function cursorToTime(t) {
-  const u = charts[0];
-  if (!u) return;
-  const { min, max } = u.scales.x;
+  const first = charts[0];
+  if (!first) return;
+  const { min, max } = first.scales.x;
   if (t < min || t > max) return;
-  u.setCursor({ left: u.valToPos(t, "x"), top: u.bbox.height / devicePixelRatio / 2 });
+  for (const u of charts) {
+    u.setCursor({
+      left: u.valToPos(t, "x"),
+      top: u.bbox.height / devicePixelRatio / 2,
+    });
+  }
 }
 
 function seekVideo(t) {
