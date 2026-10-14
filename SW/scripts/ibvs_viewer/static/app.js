@@ -91,6 +91,7 @@ const FIELD_INFO = {
   roll_deg: "CRSF 텔레메트리 roll [deg]",
   pitch_deg: "CRSF 텔레메트리 pitch [deg]",
   yaw_deg: "CRSF 텔레메트리 yaw [deg]",
+  satellites: "GPS 수신 위성 수",
   video_hz: "1초 이동 윈도우의 compressed video 수신율 [Hz]",
   detection_hz: "1초 이동 윈도우의 detection 메시지 수신율 [Hz]",
   control_hz: "1초 이동 윈도우의 control debug 메시지 수신율 [Hz]",
@@ -158,6 +159,10 @@ const GENERAL_PANELS = [
       { t: G, f: "altitude_m", label: "altitude [m]" },
       { t: G, f: "ground_speed_mps", label: "ground speed [m/s]" },
       { t: G, f: "ground_course_deg", label: "course [deg]", scale: "y2" },
+    ] },
+  { title: "GPS satellites", note: "visible satellite count",
+    series: [
+      { t: G, f: "satellites", label: "satellites", step: true },
     ] },
   { title: "GPS position", note: "latitude / longitude",
     series: [
@@ -277,6 +282,7 @@ let customPanels = loadLS("ibvs_viewer.custom", []);
 let showHelp = loadLS("ibvs_viewer.help", true);   // 필터 칩의 수식 표시
 let layout = loadLS("ibvs_viewer.layout", "graphs");  // "graphs" | "split"(영상 + 그래프)
 let vmode = loadLS("ibvs_viewer.vmode", "play");      // "play"(영상 재생) | "follow"(그래프 커서 따라감)
+let sidebarCollapsed = loadLS("ibvs_viewer.sidebar_collapsed", false);
 // 영상 재생 상태
 const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false, lastTs: 0, lastCursor: 0, topic: null };
 
@@ -1100,8 +1106,18 @@ function applyLayout() {
   if (videoOn() && V.shown < 0) showFrameAt(V.t);
 }
 
+function applySidebar() {
+  document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  $("btn-sidebar").setAttribute("aria-expanded", String(!sidebarCollapsed));
+}
+
 // ---------------------------------------------------------------- 시작
 function bind() {
+  $("btn-sidebar").onclick = () => {
+    sidebarCollapsed = !sidebarCollapsed;
+    saveLS("ibvs_viewer.sidebar_collapsed", sidebarCollapsed);
+    applySidebar();
+  };
   document.querySelectorAll("#layout button").forEach((b) => b.onclick = () => {
     layout = b.dataset.l; saveLS("ibvs_viewer.layout", layout); applyLayout();
   });
@@ -1141,6 +1157,7 @@ function bind() {
   };
   $("btn-help").onclick = () => { showHelp = !showHelp; saveLS("ibvs_viewer.help", showHelp); applyHelp(); };
   applyHelp();
+  applySidebar();
   $("btn-custom").onclick = addCustom;
   $("custom-input").onkeydown = (e) => { if (e.key === "Enter") addCustom(); };
   $("pk-go").onclick = () => browse($("pk-path").value);

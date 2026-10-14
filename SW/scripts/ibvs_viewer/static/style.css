@@ -26,6 +26,7 @@ body {
 .muted { color: var(--muted); }
 
 #app { display: grid; grid-template-columns: 290px 1fr; height: 100vh; }
+body.sidebar-collapsed #app { grid-template-columns: 0 1fr; }
 
 /* ---------------- sidebar ---------------- */
 #sidebar {
@@ -33,6 +34,7 @@ body {
   background: var(--panel);
   display: flex; flex-direction: column; min-height: 0;
 }
+body.sidebar-collapsed #sidebar { overflow: hidden; border-right: 0; }
 .side-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--border); }
 .brand { font-weight: 700; font-size: 15px; margin-bottom: 8px; }
 .root-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
@@ -158,6 +160,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 @media (max-width: 760px) {
   #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; }
   #sidebar { max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  body.sidebar-collapsed #app { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  body.sidebar-collapsed #sidebar { display: none; }
   #main { padding: 0 16px 40px; }
   #topbar { flex-wrap: wrap; }
 }
