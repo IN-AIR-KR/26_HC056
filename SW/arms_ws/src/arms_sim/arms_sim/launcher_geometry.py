@@ -2,7 +2,7 @@
 launcher_geometry.py — 견착 발사기 SITL 의 기하 상수 (단일 출처)  [arms_sim]
 
 이 값들을 쓰는 곳:
-  - launcher.py            : 관절 명령, 장전 위치(드론을 튜브에 되돌릴 때), rviz 마커
+  - launcher.py            : 장전 위치·자세, 시각용 발사관 pose, rviz 마커
   - px4_sitl.launch.py     : 최초 스폰 위치 (PX4_GZ_MODEL_POSE)
   - assets/worlds/arms_sitl.sdf 의 arms_launcher 모델
       ★ SDF 는 파이썬을 못 읽으므로 PIVOT_Z, CG_DIST 를 바꾸면 SDF 의
@@ -15,7 +15,6 @@ launcher_geometry.py — 견착 발사기 SITL 의 기하 상수 (단일 출처)
   - 튜브 축 방향 d = (cosE·cosψ, cosE·sinψ, sinE). 드론 기수(body +Z)가 d 를 향한다.
   - 드론 무게중심 = 피벗 + CG_DIST · d.
   - 드론 자세 = Rz(ψ) · Ry(90°−E)   (E=90, ψ=0 이면 지금처럼 똑바로 선 자세)
-  - 관절: az_joint = ψ [rad],  elev_joint = 90°−E [rad] (수직에서 기울인 각)
 """
 
 import math
@@ -72,11 +71,6 @@ def drone_orientation(elev_deg, az_deg):
     qy = (0.0, math.sin(tilt / 2), 0.0, math.cos(tilt / 2))
     qz = (0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))
     return _quat_mul(qz, qy)
-
-
-def joint_targets(elev_deg, az_deg):
-    """(az_joint, elev_joint) [rad]."""
-    return math.radians(az_deg), math.radians(90.0 - elev_deg)
 
 
 def spawn_pose_str():

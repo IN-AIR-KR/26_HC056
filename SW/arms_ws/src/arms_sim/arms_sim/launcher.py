@@ -3,16 +3,15 @@
 launcher.py — 견착 발사기 SITL 노드  [arms_sim]
 
 하는 일
-  1) 앙각/방위 조절: ROS 파라미터 elevation_deg / azimuth_deg (패널 슬라이더가 씀)
-     → 일정 속도(slew_dps)로 부드럽게 따라가며 Gazebo 관절 명령으로 보낸다.
-     드론은 튜브에 고정 조인트로 물려 있으므로 같이 돌아가고, 드론 카메라 화면
-     (하늘·표적 위치)도 그대로 따라 움직인다. 중력이 있어도 떨어지지 않는다.
+  1) 앙각/방위 조절: ROS 파라미터 elevation_deg / azimuth_deg (패널 슬라이더가 씀).
+     각도 변경 때 드론을 분리하고 목표 위치·자세로 set_pose 한 뒤 다시 고정한다.
+     시각용 발사관도 같은 자세로 set_pose 한다. 물리 관절·PID는 사용하지 않는다.
   2) 발사(분리): 실기체 발사 걸쇠 서보가 여는 순간과 같은 조건에서 조인트를 끊는다.
        - 자동: 미션 상태가 TRACK 으로 '들어오는 순간' (실기체 servo_lock 이 OPEN 하는 전이)
        - 수동: ARM + 수동모드 + 스로틀을 호버(스틱 중앙) 이상으로 잠깐 유지
      분리 후엔 PX4 ACRO 가 '회전명령 0 = 현재 자세 유지' 라서 발사각 그대로 튀어나가고
      IBVS 가 표적 쪽으로 보정한다.
-  3) 재장전(서비스 sim/launcher/reload, Trigger): 드론을 현재 각도의 튜브 위치·자세로
+  3) 재장전(서비스 sim/launcher/reload, Trigger): 드론을 현재 각도의 발사관 위치·자세로
      되돌리고 다시 물린 뒤, '실제로 물렸는지'까지 확인하고 성공/실패를 돌려준다.
      실험 RESET(sitl_reset_manager)이 PX4 를 내린 사이에 부른다.
      패널 [재장전] 버튼은 sim/launcher/reload_manual(토픽)로 오며 DISARM 일 때만 받는다.
@@ -21,9 +20,9 @@ launcher.py — 견착 발사기 SITL 노드  [arms_sim]
 설계 원칙 (예전 시도에서 실패한 것들)
   - 발사기 모델에는 collision 이 하나도 없다 → 물리적으로 드론 비행을 절대 방해 못 함.
   - 드론을 붙잡는 건 DetachableJoint(고정 조인트) 하나뿐 → 기울여도 안 떨어짐.
-  - 각도는 관절 '속도 명령' 방식 위치제어 → 드론 무게(1.05kg)에 밀리지 않음.
-  - 드론이 실제로 물리기 전에는 스폰 자세(수직)를 유지한다. 물리기 전에 튜브를
-    기울이면 드론이 엉뚱한 상대자세로 물리기 때문.
+  - 발사관은 visual-only 모델이며, DetachableJoint의 부모는 움직이지 않는 base이다.
+    따라서 발사각 설정 중 기체에 관절 토크나 각속도가 전달되지 않는다.
+  - 드론이 실제로 물리기 전에는 스폰 자세(수직)를 유지한다.
 
 재장전 순서가 중요한 이유 (gz-sim 8 소스 확인)
   set_pose 서비스(비차단)는 명령을 '큐에 넣고' 바로 true 를 돌려준다. 같은 스텝에 attach 가
@@ -33,8 +32,6 @@ launcher.py — 견착 발사기 SITL 노드  [arms_sim]
   → attach → 플러그인이 "attached" 라고 답하는 걸 확인 → 위치 재확인.
 
 Gazebo 쪽 이름 (assets/worlds/arms_sitl.sdf 의 arms_launcher 와 일치해야 함)
-  /arms_sim/launcher/az_cmd      gz.msgs.Double   방위 관절 목표 [rad]
-  /arms_sim/launcher/elev_cmd    gz.msgs.Double   앙각 관절 목표 [rad] (= 90°−E)
   /arms_sim/launcher/detach      gz.msgs.Empty    분리
   /arms_sim/launcher/attach      gz.msgs.Empty    재장착
   /arms_sim/launcher/state       gz.msgs.StringMsg "attached"/"detached" (플러그인 출력)
@@ -63,13 +60,11 @@ from arms_sim import launcher_geometry as G
 _GZ_IMPORT_ERR = ""
 try:
     from gz.transport13 import Node as _GzNode
-    from gz.msgs10.double_pb2 import Double as _GzDouble
     from gz.msgs10.empty_pb2 import Empty as _GzEmpty
     from gz.msgs10.stringmsg_pb2 import StringMsg as _GzString
     from gz.msgs10.pose_pb2 import Pose as _GzPose
     from gz.msgs10.boolean_pb2 import Boolean as _GzBool
     from gz.msgs10.pose_v_pb2 import Pose_V as _GzPoseV
-    from gz.msgs10.model_pb2 import Model as _GzModel
     _gz_node = _GzNode()
     _GZ_OK = True
 except Exception as _e:
@@ -79,22 +74,13 @@ except Exception as _e:
 
 WORLD = "arms_sitl"
 DRONE = "arms_drone_0"
-T_AZ = "/arms_sim/launcher/az_cmd"
-T_EL = "/arms_sim/launcher/elev_cmd"
 T_DETACH = "/arms_sim/launcher/detach"
 T_ATTACH = "/arms_sim/launcher/attach"
 T_STATE = "/arms_sim/launcher/state"
-T_JOINTS = "/arms_sim/launcher/joint_state"   # gz.msgs.Model (JointStatePublisher)
 T_POSES = f"/world/{WORLD}/dynamic_pose/info"
+TUBE_MODEL = "arms_launcher_tube"
 
 POSE_TOL_M = 0.03   # 재장전 위치 확인 허용오차 [m]
-
-
-def _step_toward(cur, target, max_step):
-    d = target - cur
-    if abs(d) <= max_step:
-        return target
-    return cur + math.copysign(max_step, d)
 
 
 class Launcher(Node):
@@ -102,7 +88,6 @@ class Launcher(Node):
         super().__init__("arms_launcher")
         self.declare_parameter("elevation_deg", G.ELEV_SPAWN_DEG)
         self.declare_parameter("azimuth_deg", G.AZ_SPAWN_DEG)
-        self.declare_parameter("slew_dps", 60.0)          # 조준 회전 속도 [deg/s]
         self.declare_parameter("rate_hz", 50.0)
         # 수동 모드 발사 조건. 스로틀 축 -1(최저) … 0(스틱 중앙 = Stabilized 호버) … +1(최대).
         #   호버 미만에서 놓으면 2m 높이에서 그냥 떨어진다 → 호버 이상을 잠깐 유지해야 분리.
@@ -113,7 +98,7 @@ class Launcher(Node):
 
         self._lock = threading.Lock()
         self._reload_lock = threading.Lock()
-        self._el = G.ELEV_SPAWN_DEG       # 현재 명령 중인(슬루 적용된) 각도
+        self._el = G.ELEV_SPAWN_DEG
         self._az = G.AZ_SPAWN_DEG
         self._attached = False            # 플러그인이 확인해준(또는 폴백) 장착 여부
         self._rig_ready = False           # 최초 장착 완료(이후부터 사용자 각도 적용)
@@ -129,9 +114,8 @@ class Launcher(Node):
         self._throttle = -1.0
         self._throttle_hi_since = None
         self._launched_at = None          # (elev, az) 발사 순간 각도
-        self._actual = None               # (elev, az) 관절에서 읽은 실제 각도 [deg]
-        self._sag_since = None            # 목표와 실제가 크게 벌어진 시점 (처짐 경고용)
-        self._sag_warned = False
+        self._angle_generation = 0
+        self._angle_worker_running = False
 
         self.add_on_set_parameters_callback(self._on_set_params)
 
@@ -146,12 +130,9 @@ class Launcher(Node):
                 f"gz 파이썬 바인딩 없음 → 발사기 비활성(재장전 서비스도 안 만든다). "
                 f"원인: {_GZ_IMPORT_ERR}")
         else:
-            self._gz_az = _gz_node.advertise(T_AZ, _GzDouble)
-            self._gz_el = _gz_node.advertise(T_EL, _GzDouble)
             self._gz_detach = _gz_node.advertise(T_DETACH, _GzEmpty)
             self._gz_attach = _gz_node.advertise(T_ATTACH, _GzEmpty)
             _gz_node.subscribe(_GzString, T_STATE, self._on_plugin_state)
-            _gz_node.subscribe(_GzModel, T_JOINTS, self._on_joints)
             self._poses_on()
             # 서비스는 gz 가 될 때만 만든다 → RESET 쪽이 '서비스 없음'으로 정확히 실패한다.
             self.create_service(Trigger, "sim/launcher/reload", self._srv_reload)
@@ -162,7 +143,7 @@ class Launcher(Node):
         self.create_timer(0.25, self._publish_status)
         self.get_logger().info(
             f"launcher ready: 피벗 높이 {G.PIVOT_Z:.2f}m, 피벗→무게중심 {G.CG_DIST:.3f}m. "
-            f"드론이 튜브에 물리면 패널 각도를 적용한다.")
+            f"각도 변경은 pose 재배치로 즉시 적용한다.")
 
     # ── 드론 포즈 구독 (필요할 때만 켠다: 순수 파이썬 protobuf 파싱이 무겁다) ──
     def _poses_on(self):
@@ -185,6 +166,8 @@ class Launcher(Node):
 
     # ── 파라미터 ──────────────────────────────────────────────────────────
     def _on_set_params(self, params):
+        target_el, target_az = self._el, self._az
+        angle_changed = False
         for p in params:
             if p.name == "elevation_deg":
                 v = float(p.value)
@@ -192,12 +175,23 @@ class Launcher(Node):
                     return SetParametersResult(
                         successful=False,
                         reason=f"앙각은 {G.ELEV_MIN_DEG:.0f}~{G.ELEV_MAX_DEG:.0f}° (받은 값 {v})")
+                target_el, angle_changed = v, True
             elif p.name == "azimuth_deg":
                 v = float(p.value)
                 if not (G.AZ_MIN_DEG <= v <= G.AZ_MAX_DEG):
                     return SetParametersResult(
                         successful=False,
                         reason=f"방위는 {G.AZ_MIN_DEG:.0f}~{G.AZ_MAX_DEG:.0f}° (받은 값 {v})")
+                target_az, angle_changed = v, True
+        if angle_changed:
+            with self._lock:
+                if self._armed:
+                    return SetParametersResult(
+                        successful=False,
+                        reason="ARM 상태에서는 발사기 각도를 바꿀 수 없다")
+                self._el, self._az = target_el, target_az
+                self._angle_generation += 1
+            self._start_angle_worker()
         return SetParametersResult(successful=True)
 
     # ── 입력 ──────────────────────────────────────────────────────────────
@@ -216,22 +210,21 @@ class Launcher(Node):
 
     def _on_plugin_state(self, msg):
         s = msg.data.strip().lower()
+        apply_angles = False
         with self._lock:
             self._plugin_state = s
             if s == "attached":
                 self._attached = True
                 if not self._rig_ready:
                     self._rig_ready = True
-                    self.get_logger().info("드론 장착 확인(플러그인) → 패널 각도 적용 시작")
+                    self.get_logger().info("드론 장착 확인(플러그인) → 패널 각도 적용 가능")
+                    apply_angles = (self._el, self._az) != (
+                        G.ELEV_SPAWN_DEG, G.AZ_SPAWN_DEG)
             elif s == "detached":
                 self._attached = False
         self._state_evt.set()
-
-    def _on_joints(self, msg):
-        q = {j.name: j.axis1.position for j in msg.joint}
-        if "elev_joint" in q and "az_joint" in q:
-            with self._lock:
-                self._actual = (90.0 - math.degrees(q["elev_joint"]), math.degrees(q["az_joint"]))
+        if apply_angles:
+            self._start_angle_worker()
 
     def _on_poses(self, msg):
         for p in msg.pose:
@@ -247,6 +240,7 @@ class Launcher(Node):
     def _tick(self):
         if not _GZ_OK:
             return
+        apply_angles = False
         with self._lock:
             if (not self._rig_ready and self._plugin_state is None
                     and self._drone_seen_t is not None
@@ -256,28 +250,14 @@ class Launcher(Node):
                 self._attached = True
                 self.get_logger().warn(
                     "플러그인 장착 상태 토픽이 안 옴 → 드론 출현 후 시간 경과로 장착 간주")
+                apply_angles = (self._el, self._az) != (
+                    G.ELEV_SPAWN_DEG, G.AZ_SPAWN_DEG)
             ready = self._rig_ready
             attached = self._attached
         if ready and not self._reload_lock.locked():
             self._poses_off()   # 장착 끝 — 재장전 때만 다시 켠다
-
-        if ready:
-            tgt_el = float(self.get_parameter("elevation_deg").value)
-            tgt_az = float(self.get_parameter("azimuth_deg").value)
-        else:
-            tgt_el, tgt_az = G.ELEV_SPAWN_DEG, G.AZ_SPAWN_DEG   # 물리기 전엔 스폰 자세 유지
-
-        step = float(self.get_parameter("slew_dps").value) * self._dt
-        self._el = _step_toward(self._el, tgt_el, step)
-        self._az = _step_toward(self._az, tgt_az, step)
-
-        q_az, q_el = G.joint_targets(self._el, self._az)
-        m = _GzDouble()
-        m.data = q_az
-        self._gz_az.publish(m)
-        m = _GzDouble()
-        m.data = q_el
-        self._gz_el.publish(m)
+        if apply_angles:
+            self._start_angle_worker()
 
         # 수동 발사: ARM + 수동모드 + 스로틀 호버 이상을 hold_sec 동안 유지
         hi = (self._armed and self._manual
@@ -291,28 +271,37 @@ class Launcher(Node):
               >= float(self.get_parameter("manual_release_hold_sec").value)):
             self._release("수동: ARM + 스로틀 호버 이상 유지")
 
-        self._check_sag()
         self._publish_markers()
 
-    def _check_sag(self):
-        """명령 각도와 실제 관절 각도가 5° 넘게 1초 이상 벌어지면 한 번 경고 (처짐 진단)."""
+    def _start_angle_worker(self):
+        """패널 드래그 중 들어온 여러 각도 요청은 최신 값만 재장전한다."""
         with self._lock:
-            act = self._actual
-        if act is None:
-            return
-        gap = max(abs(act[0] - self._el), abs(act[1] - self._az))
-        now = time.monotonic()
-        if gap < 5.0:
-            self._sag_since = None
-            self._sag_warned = False
-            return
-        if self._sag_since is None:
-            self._sag_since = now
-        elif now - self._sag_since > 1.0 and not self._sag_warned:
-            self._sag_warned = True
-            self.get_logger().warn(
-                f"발사기 각도가 명령을 못 따라감: 명령 앙각 {self._el:.1f}° / 실제 {act[0]:.1f}°, "
-                f"명령 방위 {self._az:.1f}° / 실제 {act[1]:.1f}° — 관절 PID(SDF) 확인")
+            if self._angle_worker_running:
+                return
+            self._angle_worker_running = True
+        threading.Thread(target=self._apply_angle_updates, daemon=True).start()
+
+    def _apply_angle_updates(self):
+        try:
+            while rclpy.ok():
+                # 슬라이더의 elevation/azimuth 두 파라미터가 연달아 들어오는 것을 합친다.
+                time.sleep(0.05)
+                with self._lock:
+                    generation = self._angle_generation
+                    ready, armed = self._rig_ready, self._armed
+                if not ready:
+                    return
+                if armed:
+                    return
+                ok, msg = self._do_reload()
+                (self.get_logger().info if ok else self.get_logger().error)(
+                    f"발사기 각도 적용: {msg}")
+                with self._lock:
+                    if generation == self._angle_generation:
+                        return
+        finally:
+            with self._lock:
+                self._angle_worker_running = False
 
     # ── 발사 ──────────────────────────────────────────────────────────────
     def _release(self, why):
@@ -367,9 +356,9 @@ class Launcher(Node):
     def _pose_near(self, target, since, timeout):
         return self._pose_check(target, since, timeout) == "near"
 
-    def _set_pose(self, target, quat):
+    def _set_pose(self, name, target, quat):
         req = _GzPose()
-        req.name = DRONE
+        req.name = name
         req.position.x, req.position.y, req.position.z = target
         req.orientation.x, req.orientation.y, req.orientation.z, req.orientation.w = quat
         # blocking 버전: 실제로 적용된 뒤 돌려준다. 없으면(구버전) 비차단으로 폴백.
@@ -395,7 +384,13 @@ class Launcher(Node):
             quat = G.drone_orientation(el, az)
             feedback = self._plugin_state is not None
 
-            # 0) 이미 제자리에 물려 있으면 끝
+            # 시각용 발사관은 물리 결합과 무관하므로 먼저 즉시 돌린다. 수직 상태에서
+            # 방위만 바뀌어 드론 위치가 같을 때도 이 호출이 필요하다.
+            pivot = (G.PIVOT_X, G.PIVOT_Y, G.PIVOT_Z)
+            if not self._set_pose(TUBE_MODEL, pivot, quat):
+                return False, "발사관 visual set_pose 서비스 실패"
+
+            # 0) 이미 제자리에 물려 있으면 드론 재장전은 불필요하다.
             if self._attached and self._pose_near(target, time.monotonic(), 0.5):
                 return True, f"이미 장착 상태 (앙각 {el:.0f}°, 방위 {az:.0f}°)"
 
@@ -409,9 +404,10 @@ class Launcher(Node):
             else:
                 time.sleep(0.1)
 
-            # 2) 순간이동 → 실제로 그 자리에 왔는지 포즈로 확인
+            # 2) 드론을 같은 발사 자세로 즉시 배치한다. 발사관은 static visual 모델이라
+            #    관절 토크나 PID가 전혀 없다.
             t0 = time.monotonic()
-            if not self._set_pose(target, quat):
+            if not self._set_pose(DRONE, target, quat):
                 return False, "set_pose 서비스 실패"
             if not self._pose_near(target, t0, 1.5):
                 return False, "set_pose 후 드론이 목표 위치에 안 옴"
@@ -444,14 +440,12 @@ class Launcher(Node):
     def _publish_status(self):
         with self._lock:
             attached, ready, launched = self._attached, self._rig_ready, self._launched_at
-            act = self._actual
-        real = f" (실제 {act[0]:.1f}°)" if act is not None else ""
         if self._reload_lock.locked():
             text = "재장전 중…"
         elif not ready:
             text = "대기: 드론 장착 전"
         elif attached:
-            text = f"장전됨 · 앙각 {self._el:.0f}°{real} 방위 {self._az:.0f}°"
+            text = f"장전됨 · 앙각 {self._el:.0f}° 방위 {self._az:.0f}°"
         elif launched:
             text = f"발사됨 · 앙각 {launched[0]:.0f}° 방위 {launched[1]:.0f}°"
         else:
