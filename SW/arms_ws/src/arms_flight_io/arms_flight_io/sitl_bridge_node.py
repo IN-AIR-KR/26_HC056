@@ -35,8 +35,9 @@ ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed 
 # disarm only while landed; this explicitly requests an in-flight motor cut.
 FORCE_DISARM_MAGIC = 21196.0
 # 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
-# PX4 는 1Hz 로 heartbeat 을 보내므로 3s 면 오탐 없이 충분히 빠르다.
-HB_TIMEOUT_SEC = 3.0
+# PX4 는 1Hz 로 heartbeat 을 보낸다. 2s는 한 heartbeat 유실은 허용하면서
+# 재기동/단절 상태를 기존 3s보다 빠르게 UI·control에 전달한다.
+HB_TIMEOUT_SEC = 2.0
 GPS_RAW_INT_MESSAGE_ID = 24
 GPS_STREAM_INTERVAL_US = 200_000  # 5 Hz: UI 표시에는 충분하고 MAVLink 부하는 작다.
 ATTITUDE_MESSAGE_ID = 30
