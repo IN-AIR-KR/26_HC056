@@ -1,4 +1,4 @@
-# ibvs_viewer — IBVS 비행 로그 웹뷰어
+# ARMS Flight Analyzer
 
 `auto_save:=true` 로 녹화한 `~/arms_flight_logs_ibvs/<일시>/` 기록의 비행 텔레메트리와
 `/arms/ibvs_debug`를 브라우저에서 uPlot 그래프로 본다.
@@ -8,8 +8,8 @@
 ## 실행
 
 ```bash
-pip install -r SW/scripts/ibvs_viewer/requirements.txt
-python3 SW/scripts/ibvs_viewer/server.py
+pip install -r SW/scripts/flight_analyzer/requirements.txt
+python3 SW/scripts/flight_analyzer/server.py
 ```
 
 - 브라우저가 열리면 **데이터 폴더를 선택**한다(기본 제안 `~/arms_flight_logs_ibvs`).

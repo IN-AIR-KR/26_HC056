@@ -488,25 +488,6 @@ ros2 run rqt_image_view rqt_image_view /arms/ui_view
 > ⚠️ 라이브 스택(UI 노드)이 돌고 있으면 재생과 같은 토픽에 섞인다. 스택을 끄거나, 재생 시
 > `--remap /arms/ui_image/compressed:=/pb/ui_image/compressed` 로 토픽명을 바꿔 충돌을 피한다.
 
-#### 3) bag 시각화 (mp4 + CSV + 그래프)
-
-`SW/scripts/bag_visualize/bag_visualize.py` 마스터 스크립트 하나로 CSV 변환 + 오버뷰
-그래프 + mp4 영상까지 한 번에 만든다(결과는 `<bag>_viz/`).
-
-```bash
-python3 SW/scripts/bag_visualize/bag_visualize.py ui_rec
-#  → ui_rec_viz/{csv/*.csv, target_plane.png, attitude_cmd.png, ui_rec.mp4}
-```
-
-- **target_plane.png**: 화면(정규화 좌표) 상 표적 위치 — detection_raw vs KF 적용값.
-- **attitude_cmd.png**: roll/pitch/yaw 자세(수신) + 제어명령(송신) 6개 시계열.
-- 영상만 원하면 `--no-csv --no-plots`, 그래프만 원하면 `--no-video`.
-
-개별 스크립트(`bag_to_csv.py` / `plot_overview.py` / `bag_to_mp4.py`)도 따로 실행 가능.
-storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
-필요: `ffmpeg`(영상), `matplotlib`·`pandas`(그래프). 자세한 옵션은
-`SW/scripts/bag_visualize/README.md` 참고.
-
 #### 4) 비행 자동 저장 모드 (`auto_save:=true`, 실기체 / SITL)
 
 실기체 비행 중 로그(영상+검출 raw+CRSF 송·수신+상태)를 **자동으로** 녹화한다.
@@ -536,10 +517,10 @@ mp4 변환하거나 재생하면 된다(스크립트엔 `<일시>/bag` 경로를
 IBVS 디버그(`/arms/ibvs_debug`)는 웹뷰어로 보면 편하다(ROS 불필요, 그래프 호버/줌 연동):
 
 ```bash
-python3 SW/scripts/ibvs_viewer/server.py --data ~/arms_flight_logs_ibvs
+python3 SW/scripts/flight_analyzer/server.py --data ~/arms_flight_logs_ibvs
 ```
 
-자세한 사용법은 `SW/scripts/ibvs_viewer/README.md`.
+자세한 사용법은 `SW/scripts/flight_analyzer/README.md`.
 
 ### 정상 상태 전이 흐름
 

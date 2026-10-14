@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ROS 없이 rosbag2(sqlite3) 를 읽는 헬퍼 — ibvs_viewer 전용.
+"""ROS 없이 rosbag2(sqlite3) 를 읽는 헬퍼 — flight_analyzer 전용.
 
 rosbag2_py 대신 sqlite3 로 직접 열고, 역직렬화는 순수 파이썬 `rosbags` 로 한다.
 → 맥/노트북(ROS 미설치)에서도 젯슨에서 가져온 bag 을 바로 볼 수 있다.

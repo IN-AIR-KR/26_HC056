@@ -832,7 +832,7 @@ rosbag 녹화를 시작하며 ARM을 내리면 정상 마감한다. 녹화기가
   `debug`, `cv_debug`, `auto_save`를 기록한다.
 - `control_params_source`, `control_params_copy`: 설정 원본 경로와 폴더 안 복사본 이름
 - `record_topics`: 그 비행에서 `ros2 bag record`에 전달한 전체 토픽 목록
-- `balloon` (선택): `ibvs_viewer`에서 입력한 표적 풍선의 `latitude_deg`, `longitude_deg`,
+- `balloon` (선택): `flight_analyzer`에서 입력한 표적 풍선의 `latitude_deg`, `longitude_deg`,
   `altitude_m`. 비행 기록 생성 시에는 없고, 사후 3D 비행 뷰에서 **풍선 저장**을 누르면 추가된다.
 
 `git_commit`은 커밋 SHA만 보관한다. 커밋되지 않은 작업 트리 변경이나 실기체 전용

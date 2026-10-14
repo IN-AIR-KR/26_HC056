@@ -5,10 +5,10 @@ auto_save 로 녹화한 ~/arms_flight_logs_ibvs/<일시>/ 기록들을 브라우
 ROS 없이 동작한다(sqlite3 + rosbags 로 직접 읽음) → 노트북에 bag 폴더만 복사해 와도 된다.
 
 사용:
-    pip install -r SW/scripts/ibvs_viewer/requirements.txt
-    python3 SW/scripts/ibvs_viewer/server.py                  # 브라우저에서 데이터 폴더 선택
-    python3 SW/scripts/ibvs_viewer/server.py --data ~/arms_flight_logs_ibvs
-    python3 SW/scripts/ibvs_viewer/server.py --host 0.0.0.0   # 젯슨에서 띄우고 노트북으로 접속
+    pip install -r SW/scripts/flight_analyzer/requirements.txt
+    python3 SW/scripts/flight_analyzer/server.py                  # 브라우저에서 데이터 폴더 선택
+    python3 SW/scripts/flight_analyzer/server.py --data ~/arms_flight_logs_ibvs
+    python3 SW/scripts/flight_analyzer/server.py --host 0.0.0.0   # 젯슨에서 띄우고 노트북으로 접속
 """
 import argparse
 import json
@@ -194,7 +194,7 @@ def _export_mp4(record: Path, topic: str) -> Path:
     span = times[-1] - times[0] if len(times) > 1 else 0.0
     fps = (len(times) - 1) / span if span > 1e-6 else 15.0
     fps = min(max(fps, 1.0), 120.0)
-    fd, name = tempfile.mkstemp(prefix="ibvs_viewer_", suffix=".mp4")
+    fd, name = tempfile.mkstemp(prefix="flight_analyzer_", suffix=".mp4")
     os.close(fd)
     output = Path(name)
     command = [

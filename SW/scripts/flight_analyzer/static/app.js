@@ -280,11 +280,11 @@ let stateSegs = [];        // [{t0, t1, state}]
 let syncing = false;       // 줌 전파 재진입 방지
 let records = [];
 let currentId = null;
-let customPanels = loadLS("ibvs_viewer.custom", []);
-let showHelp = loadLS("ibvs_viewer.help", true);   // 필터 칩의 수식 표시
-let layout = loadLS("ibvs_viewer.layout", "graphs");  // "graphs" | "split"(영상 + 그래프)
-let vmode = loadLS("ibvs_viewer.vmode", "play");      // "play"(영상 재생) | "follow"(그래프 커서 따라감)
-let sidebarCollapsed = loadLS("ibvs_viewer.sidebar_collapsed", false);
+let customPanels = loadLS("flight_analyzer.custom", []);
+let showHelp = loadLS("flight_analyzer.help", true);   // 필터 칩의 수식 표시
+let layout = loadLS("flight_analyzer.layout", "graphs");  // "graphs" | "split"(영상 + 그래프)
+let vmode = loadLS("flight_analyzer.vmode", "play");      // "play"(영상 재생) | "follow"(그래프 커서 따라감)
+let sidebarCollapsed = loadLS("flight_analyzer.sidebar_collapsed", false);
 // 영상 재생 상태
 const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false, lastTs: 0, lastCursor: 0, topic: null };
 
@@ -470,7 +470,7 @@ function stateAt(t) {
 const S3 = { renderer: null, scene: null, camera: null, drone: null, balloon: null,
   path: null, origin: null, gps: null, resize: null, target: null,
   radius: 30, theta: 0, phi: 1.1, pointer: null,
-  focus: loadLS("ibvs_viewer.scene_focus", "drone") };
+  focus: loadLS("flight_analyzer.scene_focus", "drone") };
 const deg = (v) => (v || 0) * Math.PI / 180;
 
 function nearestAt(d, field, t) {
@@ -520,7 +520,7 @@ function updateSceneFocusControls() {
 }
 function setSceneFocus(focus) {
   S3.focus = focus === "origin" ? "origin" : "drone";
-  saveLS("ibvs_viewer.scene_focus", S3.focus);
+  saveLS("flight_analyzer.scene_focus", S3.focus);
   updateSceneFocusControls();
   if (!window.THREE || !S3.target) return;
   if (S3.focus === "origin") S3.target.set(0, 0, 0);
@@ -738,7 +738,7 @@ function makePanel(p) {
     x.textContent = "삭제";
     x.onclick = () => {
       customPanels.splice(p.custom, 1);
-      saveLS("ibvs_viewer.custom", customPanels);
+      saveLS("flight_analyzer.custom", customPanels);
       renderPanels();
     };
     head.appendChild(x);
@@ -798,7 +798,7 @@ function makeHelp(p, { specs, multiTopic }) {
 }
 
 /* 선 표시 여부 — 패널·필드별로 브라우저에 기억. 기본은 패널 정의의 show(없으면 켬). */
-const showKey = (p, s) => `ibvs_viewer.show.${p.title}.${s.t || T}.${s.f}`;
+const showKey = (p, s) => `flight_analyzer.show.${p.title}.${s.t || T}.${s.f}`;
 function seriesShown(p, s) { return loadLS(showKey(p, s), s.show ?? true); }
 
 /* 수식표 체크박스 ↔ 차트 선 표시 연동 (범례 클릭으로 바꿔도 체크박스가 따라간다). */
@@ -983,7 +983,7 @@ function addCustom() {
   }
   if (!series.length) return;
   customPanels.push({ title: "Custom: " + series.map((s) => s.f).join(", "), series });
-  saveLS("ibvs_viewer.custom", customPanels);
+  saveLS("flight_analyzer.custom", customPanels);
   $("custom-input").value = "";
   renderPanels();
   $("ibvs-panels").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1121,14 +1121,14 @@ function applySidebar() {
 function bind() {
   $("btn-sidebar").onclick = () => {
     sidebarCollapsed = !sidebarCollapsed;
-    saveLS("ibvs_viewer.sidebar_collapsed", sidebarCollapsed);
+    saveLS("flight_analyzer.sidebar_collapsed", sidebarCollapsed);
     applySidebar();
   };
   document.querySelectorAll("#layout button").forEach((b) => b.onclick = () => {
-    layout = b.dataset.l; saveLS("ibvs_viewer.layout", layout); applyLayout();
+    layout = b.dataset.l; saveLS("flight_analyzer.layout", layout); applyLayout();
   });
   document.querySelectorAll("#vmode button").forEach((b) => b.onclick = () => {
-    vmode = b.dataset.m; saveLS("ibvs_viewer.vmode", vmode); applyLayout();
+    vmode = b.dataset.m; saveLS("flight_analyzer.vmode", vmode); applyLayout();
     if (vmode === "play") {
       if (videoOn()) showFrameAt(V.t);
       else updateScene(V.t);
@@ -1161,7 +1161,7 @@ function bind() {
     document.body.classList.toggle("hide-help", !showHelp);
     $("btn-help").textContent = showHelp ? "수식 숨기기" : "수식 보기";
   };
-  $("btn-help").onclick = () => { showHelp = !showHelp; saveLS("ibvs_viewer.help", showHelp); applyHelp(); };
+  $("btn-help").onclick = () => { showHelp = !showHelp; saveLS("flight_analyzer.help", showHelp); applyHelp(); };
   applyHelp();
   applySidebar();
   $("btn-custom").onclick = addCustom;

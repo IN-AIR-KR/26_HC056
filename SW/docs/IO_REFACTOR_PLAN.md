@@ -420,7 +420,7 @@ SITL에서 확인한다. 실기체 launch에는 sim node와 sim topic이 없어�
 
 - recorder의 녹화 목록과 manifest에 최종 토픽 목록·`topic_schema_version`·namespace를
   기록한다.
-- `scripts/ibvs_viewer`의 bag reader, graph binding, 3D telemetry binding, UI 라벨을 최종
+- `scripts/flight_analyzer`의 bag reader, graph binding, 3D telemetry binding, UI 라벨을 최종
   계약으로 전환한다.
 - `DESIGN.md`, SETUP 문서, launch 설명의 토픽 표와 mermaid를 최종 구조로 갱신한다.
 - 구형 bag 지원을 넣지 않고, schema version이 맞지 않는 bag은 명확히 거부한다.

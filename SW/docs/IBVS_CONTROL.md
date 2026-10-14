@@ -7,7 +7,7 @@
 (SITL 기준) + [`hw_overrides.yaml`](../arms_ws/src/arms_control/config/hw_overrides.yaml) (실기체 덮어쓰기).
 
 각 단계 값은 비행 중 `/arms/ibvs_debug` (`arms_msgs/IbvsDebug`) 로 전부 발행되고, auto_save 로
-녹화한 기록은 [`SW/scripts/ibvs_viewer`](../scripts/ibvs_viewer/README.md) 에서 그래프로 볼 수 있다.
+녹화한 기록은 [`SW/scripts/flight_analyzer`](../scripts/flight_analyzer/README.md) 에서 그래프로 볼 수 있다.
 아래 각 절의 **📈** 는 그 값이 뷰어의 어느 필드인지 표시한 것이고, 그래프별로 선이 무엇이고
 각 필드의 수식은 [11. 뷰어 그래프별 필드 수식](#11-뷰어-그래프별-필드-수식) 에 정리했다.
 
@@ -407,7 +407,7 @@ $$
 
 ## 11. 뷰어 그래프별 필드 수식
 
-`ibvs_viewer` 패널 순서 그대로다. 범례 이름 = 필드명. ⚙ = 기록에 없는 중간값을 뷰어가
+`flight_analyzer` 패널 순서 그대로다. 범례 이름 = 필드명. ⚙ = 기록에 없는 중간값을 뷰어가
 기록된 필드로 계산한 것(구 기록에도 나옴). 기호: `B = barrier`, `N = √(1+x_n²+y_n²)`,
 `ldx/ldy = los_rate_x/y`.
 
