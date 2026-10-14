@@ -49,6 +49,9 @@ def generate_launch_description():
     hw_config = control_dir / "hw_overrides.yaml"
     io_config = Path(get_package_share_directory("arms_flight_io")) / "config" / "io_params.yaml"
     ui_config = Path(get_package_share_directory("arms_ui")) / "config" / "ui_params.yaml"
+    recorder_config = (
+        Path(get_package_share_directory("arms_logging")) / "config" / "flight_recorder_params.yaml"
+    )
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
@@ -170,11 +173,11 @@ def generate_launch_description():
         # 비행 로그 녹화기 (auto_save:=true 일 때만). ARM 스위치 ON~OFF 동안
         #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3) 저장(kill 무관).
         Node(
-            package="arms_ui",
+            package="arms_logging",
             executable="flight_recorder",
             namespace="arms", name="flight_recorder",
             output="screen",
-            parameters=[str(ui_config), {
+            parameters=[str(recorder_config), {
                 "manifest.control_params_path": str(control_config),
                 "manifest.arg_crsf_port": ParameterValue(LaunchConfiguration("crsf_port"), value_type=str),
                 "manifest.arg_start_detection": ParameterValue(LaunchConfiguration("start_detection"), value_type=str),

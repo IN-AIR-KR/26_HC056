@@ -20,6 +20,7 @@ SW/
 │       ├── arms_video/         # 영상 수신
 │       ├── arms_detection/     # YOLO 객체 인식 (Docker)
 │       ├── arms_control/       # 상태 머신 + PID + CRSF 출력
+│       ├── arms_logging/       # rosbag 비행 기록 및 실험 manifest 저장
 │       ├── arms_command/       # 조종 입력 (실기체 C++ HW / SITL 가상 조종기)
 │       ├── arms_sim/           # SITL 전용: PX4 SITL 런치 + Gazebo 자산 + 표적 심판(referee) + 튜닝 콘솔(panel)
 │       │   ├── launch/         #   px4_sitl.launch.py (PX4+Gazebo 기동/정리/파라미터)

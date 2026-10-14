@@ -19,7 +19,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - arms_ui_node            (OpenCV 영상 오버레이)
   - sitl_viz + rviz2        (3D 궤적/기체/표적, 기본 기동; rviz:=false 로 생략) [arms_sim]
   - plotjuggler             (5초 뒤)
-  - flight_recorder         (auto_save:=true 일 때만. ~/arms_flight_logs_ibvs/<일시>_sitl/) [arms_ui]
+  - flight_recorder         (auto_save:=true 일 때만. ~/arms_flight_logs_ibvs/<일시>_sitl/) [arms_logging]
 
 스택 노드들은 PX4 부팅을 기다리지 않는다 — sitl_bridge 는 heartbeat 올 때까지 재접속,
 referee 는 gz 준비 전 실패를 무시, 카메라 브리지는 gz 토픽이 생기면 붙는다.
@@ -144,6 +144,9 @@ def generate_launch_description():
     )
     io_config = Path(get_package_share_directory("arms_flight_io")) / "config" / "io_params.yaml"
     ui_config = Path(get_package_share_directory("arms_ui")) / "config" / "ui_params.yaml"
+    recorder_config = (
+        Path(get_package_share_directory("arms_logging")) / "config" / "flight_recorder_params.yaml"
+    )
     sim_config = Path(get_package_share_directory("arms_sim")) / "config" / "sim_params.yaml"
     bringup_cfg = Path(get_package_share_directory("arms_bringup")) / "config"
     pj_layout = bringup_cfg / "sitl_debug.xml"
@@ -267,9 +270,9 @@ def generate_launch_description():
         # 비행 로그 녹화기 (auto_save:=true 일 때만). 실기체와 같은 노드·같은 조건
         #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 화면 영상도 같이 저장.
         Node(
-            package="arms_ui", executable="flight_recorder",
+            package="arms_logging", executable="flight_recorder",
             namespace="arms", name="flight_recorder", output="screen",
-            parameters=[str(ui_config), {
+            parameters=[str(recorder_config), {
                 "tag": "sitl",
                 "record_topics": [
                     "/arms/ui/image/compressed",

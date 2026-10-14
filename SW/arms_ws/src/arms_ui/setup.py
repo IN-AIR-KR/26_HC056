@@ -23,7 +23,6 @@ setup(
     entry_points={
         "console_scripts": [
             "arms_ui_node = arms_ui.arms_ui_node:main",
-            "flight_recorder = arms_ui.flight_recorder:main",
         ],
     },
 )

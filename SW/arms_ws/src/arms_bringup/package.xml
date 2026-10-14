@@ -10,6 +10,7 @@
   <exec_depend>arms_detection</exec_depend>
   <exec_depend>arms_video</exec_depend>
   <exec_depend>arms_ui</exec_depend>
+  <exec_depend>arms_logging</exec_depend>
   <exec_depend>arms_operator</exec_depend>
   <exec_depend>arms_flight_io</exec_depend>
   <exec_depend>arms_sim</exec_depend>
