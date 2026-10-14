@@ -65,11 +65,7 @@ body {
 .title-block { flex: 1; min-width: 0; }
 #rec-title { font-size: 17px; margin: 0; font-family: var(--mono); }
 #rec-meta { font-size: 12px; }
-#readout {
-  font-size: 12px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 6px; padding: 4px 10px; min-width: 190px; white-space: nowrap;
-}
-#readout:empty { display: none; }
+#v-download { text-decoration: none; }
 #state-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 0 0; font-size: 12px; }
 .section-title { font-size: 14px; margin: 18px 0 0; color: var(--fg); }
 #state-legend span { display: inline-flex; align-items: center; gap: 5px; }

@@ -894,8 +894,6 @@ function makeChart(p, { data, specs, multiTopic }, el) {
         const { left, idx } = u.cursor;
         if (left == null || left < 0 || idx == null) return;
         const t = u.posToVal(left, "x");
-        const st = stateAt(t);
-        $("readout").textContent = `t = ${t.toFixed(3)} s${st ? "  ·  " + st : ""}`;
         if (vmode === "follow") {
           if (videoOn()) showFrameAt(t);
           else updateScene(t);
@@ -1137,7 +1135,6 @@ function bind() {
   $("btn-change-root").onclick = () => openPicker($("root-path").textContent);
   $("btn-refresh").onclick = () => loadRecords();
   $("rec-filter").oninput = renderRecords;
-  $("btn-reset").onclick = resetZoom;
   const applyHelp = () => {
     document.body.classList.toggle("hide-help", !showHelp);
     $("btn-help").textContent = showHelp ? "수식 숨기기" : "수식 보기";
