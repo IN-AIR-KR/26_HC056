@@ -138,11 +138,11 @@ const GENERAL_PANELS = [
     ] },
   { title: "Operator input", note: "sticks and AUTO/MANUAL / ARM / RTL switch inputs",
     series: [
-      { t: CMD, f: "axes_0", label: "yaw" }, { t: CMD, f: "axes_1", label: "throttle" },
-      { t: CMD, f: "axes_2", label: "roll" }, { t: CMD, f: "axes_3", label: "pitch" },
-      { t: CMD, f: "buttons_2", label: "mode (0=auto, 1=manual)", step: true },
-      { t: CMD, f: "buttons_1", label: "arm switch", step: true },
-      { t: CMD, f: "buttons_4", label: "RTL switch", step: true },
+      { t: CMD, f: "yaw", label: "yaw" }, { t: CMD, f: "throttle", label: "throttle" },
+      { t: CMD, f: "roll", label: "roll" }, { t: CMD, f: "pitch", label: "pitch" },
+      { t: CMD, f: "manual_mode", label: "mode (0=auto, 1=manual)", step: true },
+      { t: CMD, f: "arm_switch", label: "arm switch", step: true },
+      { t: CMD, f: "rtl_switch", label: "RTL switch", step: true },
     ] },
   { title: "Control output", note: "final command before CRSF normalization",
     series: [
@@ -154,6 +154,10 @@ const GENERAL_PANELS = [
       { t: A, f: "roll_deg", label: "roll [deg]" }, { t: A, f: "pitch_deg", label: "pitch [deg]" },
       { t: A, f: "yaw_deg", label: "yaw [deg]" },
     ] },
+  { title: "GPS position", note: "latitude / longitude",
+    series: [
+      { t: G, f: "latitude_deg", label: "latitude" }, { t: G, f: "longitude_deg", label: "longitude", scale: "y2" },
+    ] },
   { title: "GPS motion", note: "altitude / ground speed / course",
     series: [
       { t: G, f: "altitude_m", label: "altitude [m]" },
@@ -163,10 +167,6 @@ const GENERAL_PANELS = [
   { title: "GPS satellites", note: "visible satellite count",
     series: [
       { t: G, f: "satellites", label: "satellites", step: true },
-    ] },
-  { title: "GPS position", note: "latitude / longitude",
-    series: [
-      { t: G, f: "latitude_deg", label: "latitude" }, { t: G, f: "longitude_deg", label: "longitude", scale: "y2" },
     ] },
   { title: "Battery", note: "pack voltage / current / remaining",
     series: [
