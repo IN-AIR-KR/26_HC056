@@ -535,13 +535,18 @@ class ArmsControlNode : public rclcpp::Node {
             //   (예: auto+SEARCH=ARM 상태에서 manual 로 바꾸면 CH5 가 곧바로 arm).
             //   모드가 바뀌면 래치를 걸어, DISARM 으로 내렸다가 다시 올려야만 arm 되게 한다.
             //
-            //   ★ 예외: TRACK(자동 요격 비행 중)에서 수동으로 넘길 땐 "날던 채로 인계"다.
-            //     래치·pre-arm idle 검사를 건너뛰고 무장을 그대로 유지한다(공중 disarm=낙하 방지).
-            //     TRACK 은 ARM 스위치가 이미 위(auto 에서 내리면 SEARCH OFF→IDLE)라 joy_arm_=true 보장.
-            if (new_manual && sm_->state() == State::TRACK) {
+            //   ★ 예외: 실제로 무장한 자동 비행(SEARCH/LOCK/TRACK/RTL)에서 수동으로
+            //     넘길 땐 "날던 채로 인계"다. 래치·pre-arm idle 검사를 건너뛰고 무장을
+            //     그대로 유지한다(공중 disarm=낙하 방지). 미무장 상태에는 적용하지 않는다.
+            const State prior_state = sm_->state();
+            const bool auto_handover_state =
+                prior_state == State::SEARCH || prior_state == State::LOCK ||
+                prior_state == State::TRACK || prior_state == State::RTL;
+            if (new_manual && auto_handover_state && last_ch5_armed_) {
               manual_armed_ = true;
               require_arm_reset_ = false;
-              RCLCPP_INFO(get_logger(), "Mode: MANUAL (Angle) — TRACK 중 인계, 무장 유지");
+              RCLCPP_INFO(get_logger(), "Mode: MANUAL (Angle) — %s 중 인계, 무장 유지",
+                          to_string(prior_state).c_str());
             } else {
               require_arm_reset_ = true;
               RCLCPP_INFO(get_logger(), "Mode: %s (ARM 재토글 필요)",
