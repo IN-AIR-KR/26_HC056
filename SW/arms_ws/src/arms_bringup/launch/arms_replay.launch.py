@@ -159,7 +159,6 @@ def generate_launch_description():
             parameters=[
                 str(control_config),
                 # 자동 track 비활성 (LOCK 이 자동으로 TRACK 안 감 → LAUNCH 버튼 눌러야 TRACK).
-                #   control_params(SITL 기준)는 true 라 여기서 실기체처럼 false 로 덮는다.
                 {"mission.sitl_auto_launch": False},
             ],
         ),

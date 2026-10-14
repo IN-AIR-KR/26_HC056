@@ -17,7 +17,6 @@
     mission:
       # 실기체는 자동 발진 금지. LOCK 이 걸려도 스스로 TRACK 으로 넘어가지 않고,
       # 사람이 조종기 LAUNCH(buttons[3]) 를 눌러야 추격이 시작된다.
-      # control_params.yaml 은 SITL 편의를 위해 true 다.
       sitl_auto_launch: false
       # 원거리 획득(absdiff후보→YOLO 확대검증, 낮은  conf)이 실제 LOCK 되도록
       # 임계값을 낮춘다. 전체프레임 YOLO 는 ARMS_CONF(0.5)로 걸러지므로 근거리

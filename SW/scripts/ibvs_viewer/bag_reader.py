@@ -21,7 +21,10 @@ MSG_DIR = Path(__file__).resolve().parents[2] / "arms_ws" / "src" / "arms_msgs" 
 # 영상은 그래프 대상이 아니고 무거우므로 역직렬화하지 않는다(프레임 색인만 만든다).
 SKIP_TYPES = {"sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image"}
 VIDEO_TYPE = "sensor_msgs/msg/CompressedImage"
-VIDEO_TOPIC = "/arms/ui/image/compressed"   # 우선 사용할 화면 영상 토픽
+# UI 합성 영상을 기본 재생으로 유지한다. 전송률은 원본과 UI를 각각 계산한다.
+RAW_VIDEO_TOPIC = "/arms/camera/image_raw/compressed"
+UI_VIDEO_TOPIC = "/arms/ui/image/compressed"
+VIDEO_TOPIC = UI_VIDEO_TOPIC
 # 평탄화에서 버릴 필드 (시각은 bag 수신시각으로 통일, MultiArray layout 은 잡음).
 SKIP_FIELDS = {"header", "layout"}
 MAX_ARRAY = 16

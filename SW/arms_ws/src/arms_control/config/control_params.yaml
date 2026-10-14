@@ -37,10 +37,9 @@
 
       # ── 자동 발진 ─────────────────────────────────────────────────────
       # 락 되면 사람이 LAUNCH 를 누르지 않아도 auto_launch_delay_sec 뒤에 스스로
-      # TRACK 으로 넘어간다. 표적이 '접근할 때' 요격하려는 것(꽁무니 추격 방지).
-      #   SITL 전용. 실기체는 hw_overrides.yaml 이 false 로 덮어쓴다 — 한동안
-      #   그 주석만 있고 실제 오버라이드가 없어서 실기체도 true 였다.
-      sitl_auto_launch: true
+      # LOCK 뒤 TRACK 전이는 운용자가 LAUNCH로 명시적으로 요청한다.
+      # SITL과 실기체 모두 기본 비활성.
+      sitl_auto_launch: false
       auto_launch_delay_sec: 0.5
       # ── 종말 RTL 소스 ───────────────────────────────────────────────
       # 서로 독립적인 두 스위치다. 이름의 sitl/실기체는 "누가 쓰나"의 관례일 뿐,

@@ -175,7 +175,7 @@ def _write_manifest(record: Path, data: dict):
 
 def _mp4_name(record: Path, topic: str) -> str:
     """다운로드 파일명. 토픽별 UI/원본 영상을 구분한다."""
-    source = "ui" if topic == bag_reader.VIDEO_TOPIC else "raw"
+    source = "raw" if topic == bag_reader.RAW_VIDEO_TOPIC else "ui"
     return f"{record.name}_{source}.mp4"
 
 

@@ -36,8 +36,10 @@ python3 SW/scripts/ibvs_viewer/server.py
   - `gain_barrier`, `aim_gain`, `aim_term_*`, `*_share_*` 는 기록된 필드로 뷰어가 계산한 중간값
     (게인 곱한 값 · 항별 비중). 구 기록에도 나온다.
 - **화면 영상 + 3D 뷰**: 우상단 `Graphs` / `Video + Graphs` 로 전환. `Video + Graphs` 는 왼쪽에
-  녹화된 영상과 3D 비행 뷰, 오른쪽에 그래프가 나온다. 영상 소스는 UI 영상과 원본
-  (`/arms/ui_image/compressed`, `/arms/image_raw/compressed`) 중 기록된 것을 고를 수 있다.
+  녹화된 영상과 3D 비행 뷰, 오른쪽에 그래프가 나온다. 기본 영상은 UI overlay이고,
+  UI overlay와 원본(`/arms/ui/image/compressed`, `/arms/camera/image_raw/compressed`) 중
+  기록된 것을 고를 수 있다. Stream rate의 video는 원본 카메라, UI overlay는 합성 화면의
+  각각의 기록 수신율이다.
   3D 뷰는 첫 GPS 위치를 원점으로 한 ENU 좌표(X=동, Y=상, Z=북)에서 GPS 경로와
   `/arms/attitude`의 roll/pitch/yaw 자세를 함께 표시한다. 그래프 호버와 영상 재생 시각에 동기화되며,
   3D 화면을 마우스로 드래그하면 시점을 회전하고, 휠/트랙패드 스크롤로 확대·축소할 수 있다.

@@ -92,7 +92,8 @@ const FIELD_INFO = {
   pitch_deg: "CRSF 텔레메트리 pitch [deg]",
   yaw_deg: "CRSF 텔레메트리 yaw [deg]",
   satellites: "GPS 수신 위성 수",
-  video_hz: "1초 이동 윈도우의 compressed video 수신율 [Hz]",
+  video_hz: "1초 이동 윈도우의 원본 카메라 compressed 영상 수신율 [Hz]",
+  ui_hz: "1초 이동 윈도우의 UI overlay compressed 영상 수신율 [Hz]",
   detection_hz: "1초 이동 윈도우의 detection 메시지 수신율 [Hz]",
   control_hz: "1초 이동 윈도우의 control debug 메시지 수신율 [Hz]",
 };
@@ -114,9 +115,10 @@ const DERIVED = {
 
 // ---------------------------------------------------------------- 일반 비행 정보 (IBVS 세부 그래프보다 위에 배치)
 const GENERAL_PANELS = [
-  { title: "Stream rate", note: "1.0 s moving message rate · video / detection / control",
+  { title: "Stream rate", note: "1.0 s moving message rate · raw video / UI / detection / control",
     series: [
-      { t: RATE, f: "video_hz", label: "video [Hz]" },
+      { t: RATE, f: "video_hz", label: "video (raw) [Hz]" },
+      { t: RATE, f: "ui_hz", label: "UI overlay [Hz]" },
       { t: RATE, f: "detection_hz", label: "detection [Hz]" },
       { t: RATE, f: "control_hz", label: "control [Hz]" },
     ] },
@@ -675,7 +677,10 @@ function rollingRate(times, grid) {
   return out;
 }
 
-function buildStreamRates(videoTopic = rec?.video?.topic) {
+const RAW_VIDEO_TOPIC = "/arms/camera/image_raw/compressed";
+const UI_VIDEO_TOPIC = "/arms/ui/image/compressed";
+
+function buildStreamRates() {
   if (!rec) return;
   const duration = rec.duration || 0;
   const grid = [];
@@ -684,7 +689,8 @@ function buildStreamRates(videoTopic = rec?.video?.topic) {
   const detection = rec.topics[D] || rec.topics[DR];
   const control = rec.topics[C] || rec.topics[T];
   const fields = {
-    video_hz: rollingRate(rec.videos?.[videoTopic]?.t, grid),
+    video_hz: rollingRate(rec.videos?.[RAW_VIDEO_TOPIC]?.t, grid),
+    ui_hz: rollingRate(rec.videos?.[UI_VIDEO_TOPIC]?.t, grid),
     detection_hz: rollingRate(detection?.t, grid),
     control_hz: rollingRate(control?.t, grid),
   };
