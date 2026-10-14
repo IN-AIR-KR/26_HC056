@@ -9,11 +9,13 @@ arms_operator 노드 담당). 여기서 하는 일은 전부 파라미터/서비
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET → Gazebo world reset + PX4 SITL 재시작 (Gazebo 프로세스는 유지)
 
+파라미터 쓰기는 ParamBus 하나로 순서대로 처리하고, 매번 노드에서 다시 읽어
+표시한다(패널 표시 = 노드 실제 값). 결과는 상단 상태줄에 ✓/✗ 로 뜬다.
+
 실행: ros2 run arms_sim panel
 """
 
 import queue
-import subprocess
 import threading
 import time
 import tkinter as tk
@@ -21,10 +23,14 @@ import tkinter as tk
 import rclpy
 from rclpy.node import Node
 from arms_msgs.msg import MissionState
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import GetParameters, SetParameters
+from std_msgs.msg import Empty, String
 from std_srvs.srv import Trigger
 
 CTRL_NODE    = "/arms/arms_control_node"
 REFEREE_NODE = "/arms/balloon_referee"
+LAUNCHER_NODE = "/arms/arms_launcher"   # 견착 발사기 (arms_sim/launcher.py)
 
 WORLD = "arms_sitl"
 DRONE = "arms_drone_0"
@@ -37,10 +43,6 @@ STATE_COLOR = {
     "TRACK":  "#d0021b",
     "RTL":    "#2979ff",
 }
-
-def _bg(fn):
-    threading.Thread(target=fn, daemon=True).start()
-
 
 def group(parent, title):
     """제목 달린 묶음 상자. tkinter 의 기본 그룹 위젯이 LabelFrame 이다.
@@ -58,37 +60,191 @@ def group(parent, title):
     return f
 
 
+# ---------------------------------------------------------------------------
+# 파라미터 버스 — 패널 → 노드 쓰기/읽기를 한 줄로 세운다
+# ---------------------------------------------------------------------------
+#
+# 예전 방식의 문제 (2026-10-11 실제로 겪음):
+#   버튼/슬라이더마다 스레드를 새로 띄워 `ros2 param set` CLI 를 병렬 실행했고
+#   결과는 DEVNULL 로 버렸다. 그래서
+#     1) 순서 보장이 없다: 유도 방식을 0→1→2 로 빠르게 누르면 "set 2" 가 먼저
+#        끝나고 "set 1" 이 나중에 끝나 노드엔 1(PN)이 남는다.
+#     2) 성공 확인이 없다: 버튼은 누르는 즉시 IBVS 로 바뀌어 보이는데 노드는 PN.
+#     3) CLI 는 호출마다 수 초 걸려(노트북 부하 시 더) 위 레이스가 잘 터진다.
+#   → 패널은 IBVS 를 보여주는데 제어기는 PN 으로 비행했다.
+#
+# 지금 방식:
+#   - CLI 대신 노드의 파라미터 서비스(get/set_parameters)를 패널 노드가 직접 부른다.
+#   - 쓰기는 작업 큐 하나 + 워커 스레드 하나로 '누른 순서대로' 한 번에 하나씩.
+#   - 매 쓰기마다: 현재 타입 조회 → 그 타입으로 변환해 set → 결과 확인 → 다시 읽기.
+#   - 다시 읽은 값(=노드의 진짜 값)으로 위젯을 갱신하고 성공/실패를 상태줄에 띄운다.
+
+_SVC_TIMEOUT = 3.0   # 서비스 대기/응답 한도 [s]
+
+
+def _pv_to_str(pv):
+    """ParameterValue → 위젯 반영용 문자열 (예전 CLI 출력과 같은 꼴)."""
+    t = pv.type
+    if t == ParameterType.PARAMETER_BOOL:
+        return "True" if pv.bool_value else "False"
+    if t == ParameterType.PARAMETER_INTEGER:
+        return str(pv.integer_value)
+    if t == ParameterType.PARAMETER_DOUBLE:
+        return str(pv.double_value)
+    if t == ParameterType.PARAMETER_STRING:
+        return pv.string_value
+    return None
+
+
+def _to_pv(value, ptype):
+    """value 를 노드에 선언된 타입(ptype)에 맞춘 ParameterValue 로 만든다.
+
+    타입이 틀리면 노드가 set 을 거부한다(예: int 파라미터에 2.0). 그래서
+    보내기 전에 현재 값의 타입을 읽어와 거기에 맞춘다.
+    """
+    pv = ParameterValue(type=ptype)
+    if ptype == ParameterType.PARAMETER_BOOL:
+        pv.bool_value = (value if isinstance(value, bool)
+                         else str(value).strip().lower() in ("true", "1", "yes", "on"))
+    elif ptype == ParameterType.PARAMETER_INTEGER:
+        pv.integer_value = int(round(float(value)))
+    elif ptype == ParameterType.PARAMETER_DOUBLE:
+        pv.double_value = float(value)
+    elif ptype == ParameterType.PARAMETER_STRING:
+        pv.string_value = str(value)
+    else:
+        raise ValueError(f"지원하지 않는 파라미터 타입 {ptype}")
+    return pv
+
+
+class ParamBus:
+    """노드 파라미터를 순서대로·확인하며 쓰고, 읽어온 진짜 값을 돌려준다.
+
+    on_result(node, name, ok, value_str, msg, more_pending) 는 워커 스레드에서
+    호출된다 — 위젯은 호출측이 메인 스레드로 넘겨서 건드릴 것.
+      value_str    : 쓰기 후 다시 읽은 노드의 실제 값 (못 읽으면 None)
+      more_pending : 같은 파라미터에 대한 쓰기가 큐에 더 남았는지. True 면 중간값이니
+                     위젯을 되돌리지 말 것(연타 시 표시가 출렁이지 않게).
+    """
+
+    def __init__(self, node, target_nodes, on_result):
+        self._node = node
+        self._on_result = on_result
+        # 클라이언트는 메인 스레드에서 미리 만든다(실행 중 노드에 추가하지 않게).
+        self._get = {n: node.create_client(GetParameters, f"{n}/get_parameters")
+                     for n in target_nodes}
+        self._set = {n: node.create_client(SetParameters, f"{n}/set_parameters")
+                     for n in target_nodes}
+        self._call_lock = threading.Lock()   # 시작 시 pull 워커와 쓰기 워커가 겹치지 않게
+        # 쓰기 큐는 '키' 단위로 합친다(coalesce): 같은 파라미터에 값이 연달아 오면
+        # 아직 안 보낸 옛 값은 버리고 마지막 값만 보낸다. 슬라이더를 드래그해도 큐가
+        # 밀리지 않고, 연타해도 최종값 = 마지막 입력이 보장된다.
+        self._q = queue.Queue()              # 처리 대기 키 (처음 들어온 순서)
+        self._latest = {}                    # (node, name) → 아직 안 보낸 최신 값
+        self._latest_lock = threading.Lock()
+        self._types = {}                     # (node, name) → 선언 타입 캐시
+        threading.Thread(target=self._run, daemon=True).start()
+
+    # ---- 공개 API ----------------------------------------------------------
+    def set(self, node, name, value):
+        """쓰기 예약(비차단). 하나씩 순서대로 처리되고, 같은 키는 마지막 값만 남는다."""
+        key = (node, name)
+        with self._latest_lock:
+            queued = key in self._latest
+            self._latest[key] = value
+        if not queued:
+            self._q.put(key)
+
+    def get(self, node, name):
+        """노드의 현재 값을 ParameterValue 로 읽는다(차단). 실패 시 None."""
+        client = self._get.get(node)
+        if client is None:
+            return None
+        req = GetParameters.Request()
+        req.names = [name]
+        res = self._call(client, req)
+        if res is None or not res.values:
+            return None
+        pv = res.values[0]
+        if pv.type == ParameterType.PARAMETER_NOT_SET:
+            return None
+        return pv
+
+    def get_str(self, node, name):
+        pv = self.get(node, name)
+        return None if pv is None else _pv_to_str(pv)
+
+    # ---- 내부 --------------------------------------------------------------
+    def _call(self, client, req):
+        with self._call_lock:
+            if not client.wait_for_service(timeout_sec=_SVC_TIMEOUT):
+                return None
+            fut = client.call_async(req)
+            deadline = time.monotonic() + _SVC_TIMEOUT
+            while not fut.done():               # 응답은 rclpy.spin 스레드가 채운다
+                if time.monotonic() > deadline:
+                    try:
+                        client.remove_pending_request(fut)
+                    except Exception:
+                        pass
+                    return None
+                time.sleep(0.005)
+            try:
+                return fut.result()
+            except Exception:
+                return None
+
+    def _run(self):
+        while True:
+            key = self._q.get()
+            node, name = key
+            with self._latest_lock:
+                value = self._latest.pop(key)
+            ok, msg = False, ""
+            try:
+                ptype = self._types.get(key)
+                if ptype is None:
+                    cur = self.get(node, name)
+                    ptype = None if cur is None else cur.type
+                    if ptype is not None:
+                        self._types[key] = ptype
+                if ptype is None:
+                    msg = "노드 응답 없음 또는 파라미터 없음"
+                else:
+                    req = SetParameters.Request()
+                    req.parameters = [Parameter(name=name, value=_to_pv(value, ptype))]
+                    res = self._call(self._set[node], req)
+                    if res is None or not res.results:
+                        msg = "set 응답 없음(타임아웃)"
+                        self._types.pop(key, None)    # 노드 재기동 등 → 다음엔 다시 조회
+                    elif not res.results[0].successful:
+                        msg = res.results[0].reason or "노드가 거부"
+                        self._types.pop(key, None)
+                    else:
+                        ok = True
+            except (ValueError, TypeError) as e:
+                msg = f"값 변환 실패: {value!r} ({e})"
+            # 성공이든 실패든 노드의 '진짜 값'을 다시 읽어 돌려준다.
+            back = self.get_str(node, name)
+            with self._latest_lock:
+                more = key in self._latest           # 처리하는 사이 새 값이 들어왔나
+            try:
+                self._on_result(node, name, ok, back, msg, more)
+            except Exception as e:
+                print(f"[panel] 결과 처리 실패: {e}")
+
+
+_BUS = None   # PanelGUI 가 만든다. 아래 두 함수는 기존 호출부 호환용 래퍼.
+
+
 def ros_param_set(name, value):
-    _bg(lambda: subprocess.run(
-        ["ros2", "param", "set", CTRL_NODE, name, str(value)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    """arms_control_node 파라미터 쓰기 (순차·확인)."""
+    _BUS.set(CTRL_NODE, name, value)
 
 
 def ros_param_set_node(node, name, value):
-    _bg(lambda: subprocess.run(
-        ["ros2", "param", "set", node, name, str(value)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-
-
-def ros_param_get(node, name, timeout=4.0):
-    """노드에서 파라미터 값을 읽어 문자열로 돌려준다. 실패하면 None.
-
-    출력 형식이 "Double value is: 455.0" 같은 꼴이라 접두어를 떼어낸다.
-    (--hide-type 은 배포판마다 있는지 달라서 의존하지 않는다.)
-    """
-    try:
-        r = subprocess.run(["ros2", "param", "get", node, name],
-                           capture_output=True, text=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if r.returncode != 0:
-        return None
-    out = r.stdout.strip()
-    if " value is: " in out:
-        out = out.split(" value is: ", 1)[1]
-    elif " values are: " in out:
-        out = out.split(" values are: ", 1)[1]
-    return out.strip() or None
+    """임의 노드 파라미터 쓰기 (순차·확인)."""
+    _BUS.set(node, name, value)
 
 
 class PanelNode(Node):
@@ -98,7 +254,9 @@ class PanelNode(Node):
         super().__init__("arms_panel_node")
         self.q = q
         self.create_subscription(MissionState, "mission/state", self._cb_state, 10)
+        self.create_subscription(String, "sim/launcher/status", self._cb_state, 10)
         self.reset_client = self.create_client(Trigger, "sim/reset")
+        self.reload_pub = self.create_publisher(Empty, "sim/launcher/reload_manual", 10)
 
     def _cb_state(self, msg):
         self.q.put(msg)
@@ -119,6 +277,13 @@ class PanelGUI:
         self._pullables = []
         self._applyq = queue.Queue()      # 워커 → 메인 루프 (_poll 이 비운다)
         self._reset_in_progress = False
+
+        # 파라미터 쓰기/읽기 버스 (순차 + 결과 확인 + 다시 읽기)
+        global _BUS
+        self._bus = ParamBus(
+            node, [CTRL_NODE, REFEREE_NODE, LAUNCHER_NODE],
+            on_result=lambda *r: self._applyq.put((self._on_param_result, r)))
+        _BUS = self._bus
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
@@ -145,7 +310,12 @@ class PanelGUI:
             font=("Arial", 10, "bold"), bg="#b71c1c", fg="white",
             activebackground="#e53935", command=self.reset_episode)
         self.reset_btn.pack(pady=(7, 0))
-        # LAUNCH/arm/RTL/mode 는 가상 조종기(arms_operator)로 이동 — 입력 발행자는
+        # 파라미터 적용 결과 상태줄 — 노드가 실제로 받아들였는지(다시 읽은 값)를 보여준다.
+        self.param_lbl = tk.Label(top, text="파라미터: 노드에서 읽는 중…",
+                                  fg="#dddddd", bg="#1e1e1e", font=("Consolas", 10),
+                                  wraplength=560, justify="center")
+        self.param_lbl.pack(pady=(6, 0))
+        # LAUNCH/arm/RTL/mode는 가상 조종기(arms_operator) 소관 — operator/input 발행자는
         # 조종기 하나뿐이어야 한다(두 노드가 동시에 쏘면 레이스). 여긴 튜닝/심판만.
 
         # ── 2열 레이아웃 ────────────────────────────────────────────────────
@@ -172,6 +342,9 @@ class PanelGUI:
         self.roll_btn.grid(row=0, column=0, padx=3)
         self.pitch_btn = tk.Button(sfrm, text="Pitch sign: +", width=13, command=self.flip_pitch)
         self.pitch_btn.grid(row=0, column=1, padx=3)
+        # 부호도 노드 값을 거울처럼 보여준다(예전엔 패널 시작값 + 고정이라 노드가 - 여도 + 로 보였다).
+        self._track(CTRL_NODE, "control.roll_sign", self._show_roll_sign)
+        self._track(CTRL_NODE, "control.pitch_sign", self._show_pitch_sign)
 
         def make_pid_group(parent, title, defaults, params):
             """(P, I, D) 입력 행 + 적용 버튼. returns (ep, ei, ed) Entry widgets."""
@@ -233,6 +406,72 @@ class PanelGUI:
                       "control.track_throttle", float(self.thr_entry.get()))
                   ).grid(row=0, column=1)
 
+        # ── [발사기] launcher ───────────────────────────────────────────────
+        #   슬라이더를 드래그하는 동안 실시간으로 노드에 보낸다(같은 값은 합쳐짐).
+        #   발사기 노드가 일정 속도로 따라 돌리므로 드론·카메라 화면이 부드럽게 움직인다.
+        g_lch = group(left, "견착 발사기  ·  launcher")
+        self.lch_status = tk.Label(g_lch, text="발사기: 노드 대기 중…", fg="white",
+                                   bg="#455a64", font=("Arial", 10, "bold"), width=30)
+        self.lch_status.pack(pady=(0, 4), ipady=3)
+        self._lch_drag = set()   # 지금 드래그 중인 슬라이더 (그동안 노드 값으로 되돌리지 않음)
+        self._lch_sent = {}      # pname → (마지막으로 보낸 값, 보낸 시각)
+
+        def lch_slider(label, lo, hi, init, pname):
+            sc = tk.Scale(g_lch, from_=lo, to=hi, resolution=1, orient="horizontal",
+                          length=220, bg="#1e1e1e", fg="white", label=label,
+                          highlightthickness=0, troughcolor="#444")
+            sc.set(init)
+            sc.pack(pady=(2, 0))
+
+            def send_now():
+                v = float(sc.get())
+                self._lch_sent[pname] = (v, time.monotonic())
+                ros_param_set_node(LAUNCHER_NODE, pname, v)
+
+            def send(_e=None):
+                # 위젯 바인딩이 Scale 클래스 바인딩보다 먼저 돌아서 지금 읽으면 한 박자
+                # 늦은 값이다 → 슬라이더가 값을 갱신한 '다음'(idle)에 읽어서 보낸다.
+                sc.after_idle(send_now)
+
+            def press(_e):
+                self._lch_drag.add(pname)
+
+            def release(_e):
+                self._lch_drag.discard(pname)
+                send()
+
+            sc.bind("<ButtonPress-1>", press)
+            sc.bind("<B1-Motion>", send)
+            sc.bind("<ButtonRelease-1>", release)
+
+            def show(v):
+                if pname in self._lch_drag:
+                    return
+                sent = self._lch_sent.get(pname)
+                # 방금 보낸 값과 다른 '옛 결과'가 늦게 도착하면 무시(슬라이더가 튕겨 돌아가지 않게).
+                if sent and abs(float(v) - sent[0]) > 0.5 and time.monotonic() - sent[1] < 1.5:
+                    return
+                sc.set(float(v))
+            self._track(LAUNCHER_NODE, pname, show)
+            return sc
+
+        self.lch_elev = lch_slider("앙각 [deg]  (90=수직, 0=수평)", 0, 90, 90, "elevation_deg")
+        self.lch_az = lch_slider("방위 [deg]  (0=+X, 반시계 +)", -180, 180, 0, "azimuth_deg")
+
+        prow = tk.Frame(g_lch, bg="#1e1e1e")
+        prow.pack(pady=(4, 0))
+        for deg in (90, 60, 50, 40, 30):
+            tk.Button(prow, text=f"{deg}°", width=4, bg="#37474f", fg="white",
+                      relief="flat",
+                      command=lambda d=deg: (
+                          self.lch_elev.set(d),
+                          self._lch_sent.__setitem__("elevation_deg", (float(d), time.monotonic())),
+                          ros_param_set_node(LAUNCHER_NODE, "elevation_deg", float(d)))
+                      ).pack(side="left", padx=2)
+        tk.Button(g_lch, text="재장전 (DISARM 상태에서만)", bg="#5d4037", fg="white",
+                  relief="flat", command=lambda: self.node.reload_pub.publish(Empty())
+                  ).pack(pady=(6, 0), fill="x")
+
         # ── [표적] referee ──────────────────────────────────────────────────
         g_tgt = group(right, "표적  ·  referee")
 
@@ -242,6 +481,7 @@ class PanelGUI:
                                     font=("Arial", 10, "bold"), bg="#8d6e63", fg="white",
                                     command=self.toggle_target)
         self.target_btn.pack(pady=(0, 6))
+        self._track(REFEREE_NODE, "target", self._show_target)
 
         bbtn = tk.Frame(g_tgt, bg="#1e1e1e")
         bbtn.pack(pady=2)
@@ -258,6 +498,7 @@ class PanelGUI:
                                        font=("Arial", 10, "bold"), width=26)
         self.ball_state_lbl.pack(pady=(2, 6), ipady=4)
         self._refresh_ball_btns()
+        self._track(REFEREE_NODE, "enabled", self._show_enabled)
 
         self.alt = tk.Scale(g_tgt, from_=5, to=100, resolution=1, orient="horizontal",
                             length=180, bg="#1e1e1e", fg="white", label="타겟 고도 [m]",
@@ -321,6 +562,40 @@ class PanelGUI:
         self.pn_center.bind("<ButtonRelease-1>",
                             lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
 
+        self.ibvs_gain = tk.Scale(g_guid, from_=0.0, to=300.0, resolution=5.0, orient="horizontal",
+                                  length=180, bg="#1e1e1e", fg="white",
+                                  label="IBVS 배리어항 세기 (ibvs_gain, IBVS 일때)",
+                                  highlightthickness=0, troughcolor="#444")
+        self.ibvs_gain.set(50.0)
+        self.ibvs_gain.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.ibvs_gain",
+                    lambda v: self.ibvs_gain.set(float(v)))
+        self.ibvs_gain.bind("<ButtonRelease-1>",
+                            lambda e: ros_param_set("control.ibvs_gain", float(self.ibvs_gain.get())))
+
+        self.ibvs_center = tk.Scale(g_guid, from_=0.0, to=150.0, resolution=1.0, orient="horizontal",
+                                    length=180, bg="#1e1e1e", fg="white",
+                                    label="IBVS 중앙유지 (ibvs_center_gain, IBVS 일때)",
+                                    highlightthickness=0, troughcolor="#444")
+        self.ibvs_center.set(35.0)
+        self.ibvs_center.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.ibvs_center_gain",
+                    lambda v: self.ibvs_center.set(float(v)))
+        self.ibvs_center.bind("<ButtonRelease-1>",
+                              lambda e: ros_param_set("control.ibvs_center_gain", float(self.ibvs_center.get())))
+
+        self.ibvs_los_rate = tk.Scale(g_guid, from_=0.0, to=200.0, resolution=1.0, orient="horizontal",
+                                      length=180, bg="#1e1e1e", fg="white",
+                                      label="IBVS 리드항 (ibvs_los_rate_gain, IBVS 일때)",
+                                      highlightthickness=0, troughcolor="#444")
+        self.ibvs_los_rate.set(10.0)
+        self.ibvs_los_rate.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.ibvs_los_rate_gain",
+                    lambda v: self.ibvs_los_rate.set(float(v)))
+        self.ibvs_los_rate.bind(
+            "<ButtonRelease-1>",
+            lambda e: ros_param_set("control.ibvs_los_rate_gain", float(self.ibvs_los_rate.get())))
+
         # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수
         # 있는 노브였다), 발사 τ 는 control_params.yaml 에서 잡는다.
@@ -352,7 +627,7 @@ class PanelGUI:
                     break
                 still = []
                 for node, param, apply_fn in pending:
-                    raw = ros_param_get(node, param)
+                    raw = self._bus.get_str(node, param)
                     if raw is None:
                         still.append((node, param, apply_fn))
                         continue
@@ -361,10 +636,37 @@ class PanelGUI:
                 if pending:
                     time.sleep(1.0)
             if pending:
-                names = ", ".join(f"{n}{p}" for n, p, _ in pending[:3])
-                print(f"[panel] 파라미터를 못 읽음 (노드 미기동?): {names}"
-                      f"{' 외 %d개' % (len(pending) - 3) if len(pending) > 3 else ''}")
+                names = ", ".join(f"{n}/{p}" for n, p, _ in pending[:3])
+                more = f" 외 {len(pending) - 3}개" if len(pending) > 3 else ""
+                text = f"⚠ 노드에서 못 읽음 (표시값 신뢰 X): {names}{more}"
+                print(f"[panel] {text}")
+                self._applyq.put((self._show_param_status, (text, "#ff8a65")))
+            else:
+                self._applyq.put((self._show_param_status,
+                                  ("파라미터: 노드 값과 동기화됨", "#81c784")))
         threading.Thread(target=worker, daemon=True).start()
+
+    # ---- 파라미터 쓰기 결과 (메인 스레드) ---------------------------------
+    def _show_param_status(self, arg):
+        text, color = arg
+        self.param_lbl.config(text=text, fg=color)
+
+    def _on_param_result(self, r):
+        """ParamBus 결과: 노드에서 다시 읽은 '진짜 값'으로 위젯을 맞춘다."""
+        node, name, ok, value, msg, more_pending = r
+        short = (name.split(".")[-1] if node == CTRL_NODE
+                 else f"launcher.{name}" if node == LAUNCHER_NODE
+                 else f"referee.{name}")
+        if value is not None and not more_pending:
+            for n, p, fn in self._pullables:
+                if n == node and p == name:
+                    self._safe_apply(fn, value)
+        if ok:
+            self._show_param_status((f"✓ {short} = {value}", "#81c784"))
+        else:
+            self._show_param_status(
+                (f"✗ {short} 적용 실패: {msg}  (노드 현재값: {value})", "#ff5252"))
+            print(f"[panel] {node} {name} 적용 실패: {msg} (현재값 {value})")
 
     @staticmethod
     def _safe_apply(apply_fn, raw):
@@ -373,51 +675,77 @@ class PanelGUI:
         except (ValueError, TypeError) as e:
             print(f"[panel] 파라미터 반영 실패: {raw!r} ({e})")
 
+    # 버튼 동작 원칙: 누르면 '의도' 를 즉시 표시(… 표시)하고 큐에 쓰기를 넣는다.
+    #   쓰기가 끝나면 _on_param_result 가 노드에서 다시 읽은 값으로 덮어쓴다
+    #   = 최종 표시는 항상 노드의 실제 값.
     def flip_roll(self):
         self.roll_sign *= -1.0
         ros_param_set("control.roll_sign", self.roll_sign)
-        self.roll_btn.config(text=f"Roll sign: {'+' if self.roll_sign > 0 else '-'}")
+        self.roll_btn.config(text=f"Roll sign: {'+' if self.roll_sign > 0 else '-'} …")
 
     def flip_pitch(self):
         self.pitch_sign *= -1.0
         ros_param_set("control.pitch_sign", self.pitch_sign)
+        self.pitch_btn.config(text=f"Pitch sign: {'+' if self.pitch_sign > 0 else '-'} …")
+
+    def _show_roll_sign(self, v):
+        self.roll_sign = 1.0 if float(v) > 0 else -1.0
+        self.roll_btn.config(text=f"Roll sign: {'+' if self.roll_sign > 0 else '-'}")
+
+    def _show_pitch_sign(self, v):
+        self.pitch_sign = 1.0 if float(v) > 0 else -1.0
         self.pitch_btn.config(text=f"Pitch sign: {'+' if self.pitch_sign > 0 else '-'}")
 
     # ---- 표적 종류 전환 (풍선 ↔ 드론) → referee 'target' 파라미터 ----
     def toggle_target(self):
         self.target_is_drone = not self.target_is_drone
         if self.target_is_drone:
-            self.target_btn.config(text="종류: 드론", bg="#37474f")
+            self.target_btn.config(text="종류: 드론 …", bg="#37474f")
             ros_param_set_node(REFEREE_NODE, "target", "drone")
         else:
-            self.target_btn.config(text="종류: 풍선", bg="#8d6e63")
+            self.target_btn.config(text="종류: 풍선 …", bg="#8d6e63")
             ros_param_set_node(REFEREE_NODE, "target", "balloon")
 
-    # ---- 유도 방식 전환 (기본 추적 ↔ PN) ----
-    def _set_guidance(self, mode):
-        """버튼 표시만 갱신 (노드로 쓰지 않는다 — 읽어온 값 반영용)."""
-        self._guidance_mode = 1 if mode == 1 else 0
-        if self._guidance_mode == 1:
-            self.guid_btn.config(text="방식: PN(비례항법)", bg="#6a1b9a")
+    def _show_target(self, v):
+        self.target_is_drone = (str(v).strip().lower() == "drone")
+        if self.target_is_drone:
+            self.target_btn.config(text="종류: 드론", bg="#37474f")
         else:
-            self.guid_btn.config(text="방식: 기본 추적", bg="#37474f")
+            self.target_btn.config(text="종류: 풍선", bg="#8d6e63")
+
+    def _show_enabled(self, v):
+        self.ball_flying = str(v).strip().lower() in ("true", "1")
+        self._refresh_ball_btns()
+
+    # ---- 유도 방식 전환 (기본 추적 → PN → IBVS → ...) ----
+    _GUID_LABELS = {
+        0: ("방식: 기본 추적",      "#37474f"),
+        1: ("방식: PN(비례항법)",   "#6a1b9a"),
+        2: ("방식: IBVS(공선유도)", "#00695c"),
+    }
+
+    def _apply_guid_label(self, pending=False):
+        text, color = self._GUID_LABELS.get(self._guidance_mode, self._GUID_LABELS[0])
+        self.guid_btn.config(text=text + (" …" if pending else ""), bg=color)
+
+    def _set_guidance(self, mode):
+        """버튼 표시만 갱신 (노드로 쓰지 않는다 — 노드에서 읽어온 값 반영용)."""
+        self._guidance_mode = mode if mode in self._GUID_LABELS else 0
+        self._apply_guid_label()
 
     def toggle_guidance(self):
-        self._guidance_mode = 1 if self._guidance_mode == 0 else 0
+        self._guidance_mode = (self._guidance_mode + 1) % 3
         ros_param_set("control.guidance_mode", self._guidance_mode)
-        if self._guidance_mode == 1:
-            self.guid_btn.config(text="방식: PN(비례항법)", bg="#6a1b9a")
-        else:
-            self.guid_btn.config(text="방식: 기본 추적", bg="#37474f")
+        self._apply_guid_label(pending=True)   # 노드 확인 전까지 '…' 표시
 
     def ball_start(self):
         # enabled=true → referee 가 정지했던 자리(t)에서 재개
-        ros_param_set_node(REFEREE_NODE, "enabled", "true")
+        ros_param_set_node(REFEREE_NODE, "enabled", True)
         self.ball_flying = True
         self._refresh_ball_btns()
 
     def ball_stop(self):
-        ros_param_set_node(REFEREE_NODE, "enabled", "false")
+        ros_param_set_node(REFEREE_NODE, "enabled", False)
         self.ball_flying = False
         self._refresh_ball_btns()
 
@@ -473,7 +801,13 @@ class PanelGUI:
         try:
             while True:
                 msg = self.q.get_nowait()
-                if isinstance(msg, MissionState):
+                if isinstance(msg, String):
+                    launched = msg.data.startswith("발사됨") or msg.data.startswith("분리됨")
+                    self.lch_status.config(
+                        text=msg.data,
+                        bg="#b71c1c" if launched else
+                           ("#2e7d32" if msg.data.startswith("장전됨") else "#455a64"))
+                elif isinstance(msg, MissionState):
                     color = STATE_COLOR.get(msg.state, "#888888")
                     self.state_lbl.config(text=msg.state or "—", bg=color)
                     self.info_lbl.config(
