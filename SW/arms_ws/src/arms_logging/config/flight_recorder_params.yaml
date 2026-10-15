@@ -2,7 +2,6 @@
   ros__parameters:
     record_topics:
       - /arms/ui/image/compressed
-      - /arms/camera/image_raw/compressed
       - /arms/perception/detections_raw
       - /arms/perception/detections
       - /arms/perception/status
@@ -20,6 +19,7 @@
     save_dir: ~/arms_flight_logs_ibvs
     storage: sqlite3
     tag: ''
+    record_raw_video: false
     manifest:
       control_params_path: ''
       arg_px4: ''
@@ -28,6 +28,7 @@
       arg_detection: ''
       arg_det_model: ''
       arg_auto_save: ''
+      arg_record_raw_video: ''
       arg_crsf_port: ''
       arg_start_detection: ''
       arg_model: ''

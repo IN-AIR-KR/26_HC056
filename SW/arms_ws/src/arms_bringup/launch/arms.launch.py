@@ -16,7 +16,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
                             IncludeLaunchDescription, LogInfo)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
@@ -83,6 +83,8 @@ def generate_launch_description():
                               description="비행 로그 녹화. true 면 ARM 스위치 ON~"
                                           "OFF 까지 영상(UI)+검출 raw+CRSF 송·수신+상태를 "
                                           "~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3)으로 저장(kill 되어도 유지)."),
+        DeclareLaunchArgument("record_raw_video", default_value="false",
+                              description="원본 camera/image_raw compressed 영상을 rosbag에 저장할지"),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
@@ -156,8 +158,7 @@ def generate_launch_description():
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
-        # 원본 카메라 영상을 녹화할 때만 compressed transport로 만든다. UI가 덧그려지기 전
-        # 프레임이라 검출/제어 재현용 원본으로 남는다.
+        # Docker 검출 또는 원본 영상 녹화가 필요할 때만 raw→JPEG 변환을 띄운다.
         Node(
             package="image_transport",
             executable="republish",
@@ -168,7 +169,11 @@ def generate_launch_description():
                 ("out/compressed", "camera/image_raw/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 80}],
-            condition=IfCondition(LaunchConfiguration("auto_save")),
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration("start_detection"), "' == 'true' or ('",
+                LaunchConfiguration("auto_save"), "' == 'true' and '",
+                LaunchConfiguration("record_raw_video"), "' == 'true')",
+            ])),
         ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). ARM 스위치 ON~OFF 동안
         #   영상(UI)+검출 raw+CRSF 송·수신+상태를 ~/arms_flight_logs_ibvs/<일시>/ 에 bag(sqlite3) 저장(kill 무관).
@@ -186,6 +191,8 @@ def generate_launch_description():
                 "manifest.arg_debug": ParameterValue(LaunchConfiguration("debug"), value_type=str),
                 "manifest.arg_cv_debug": ParameterValue(LaunchConfiguration("cv_debug"), value_type=str),
                 "manifest.arg_auto_save": ParameterValue(LaunchConfiguration("auto_save"), value_type=str),
+                "record_raw_video": ParameterValue(LaunchConfiguration("record_raw_video"), value_type=bool),
+                "manifest.arg_record_raw_video": ParameterValue(LaunchConfiguration("record_raw_video"), value_type=str),
             }],
             condition=IfCondition(LaunchConfiguration("auto_save")),
         ),

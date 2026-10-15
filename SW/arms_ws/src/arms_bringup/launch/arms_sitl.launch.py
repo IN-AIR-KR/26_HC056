@@ -18,7 +18,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - launcher                (견착 발사기: 각도 조절·분리 발사·재장전)    [arms_sim]
   - arms_ui_node            (OpenCV 영상 오버레이)
   - sitl_viz + rviz2        (3D 궤적/기체/표적, 기본 기동; rviz:=false 로 생략) [arms_sim]
-  - plotjuggler             (5초 뒤)
+  - plotjuggler             (plotjuggler:=true 일 때, 5초 뒤)
   - flight_recorder         (auto_save:=true 일 때만. ~/arms_flight_logs_ibvs/<일시>_sitl/) [arms_logging]
 
 스택 노드들은 PX4 부팅을 기다리지 않는다 — sitl_bridge 는 heartbeat 올 때까지 재접속,
@@ -35,7 +35,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess, IncludeLaunch
                             LogInfo, OpaqueFunction, TimerAction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -182,6 +182,10 @@ def generate_launch_description():
                               description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "
                                           "~/arms_flight_logs_ibvs/<일시>_sitl/ "
                                           "에 bag(sqlite3) 저장(UI 화면 영상 포함)."),
+        DeclareLaunchArgument("record_raw_video", default_value="false",
+                              description="원본 camera/image_raw compressed 영상을 rosbag에 저장할지"),
+        DeclareLaunchArgument("plotjuggler", default_value="false",
+                              description="PlotJuggler 디버그 창을 기동할지"),
 
         # PX4 SITL + Gazebo — 시뮬레이터 쪽은 전부 arms_sim 담당
         IncludeLaunchDescription(
@@ -254,8 +258,7 @@ def generate_launch_description():
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
         ),
-        # 원본 카메라 영상도 녹화 때만 JPEG compressed로 만든다. UI 오버레이 전 프레임이라
-        # 추후 검출/유도 재현에 쓴다.
+        # Docker 검출 또는 원본 영상 녹화가 필요할 때만 raw→JPEG 변환을 띄운다.
         Node(
             package="image_transport", executable="republish",
             namespace="arms", name="raw_image_republish",
@@ -265,7 +268,11 @@ def generate_launch_description():
                 ("out/compressed", "camera/image_raw/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 80}],
-            condition=IfCondition(LaunchConfiguration("auto_save")),
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration("detection"), "' == 'docker' or ('",
+                LaunchConfiguration("auto_save"), "' == 'true' and '",
+                LaunchConfiguration("record_raw_video"), "' == 'true')",
+            ])),
         ),
         # 비행 로그 녹화기 (auto_save:=true 일 때만). 실기체와 같은 노드·같은 조건
         #   (가상 조종기 ARM 스위치 ON → 시작, OFF → 저장). UI 화면 영상도 같이 저장.
@@ -276,7 +283,6 @@ def generate_launch_description():
                 "tag": "sitl",
                 "record_topics": [
                     "/arms/ui/image/compressed",
-                    "/arms/camera/image_raw/compressed",
                     "/arms/perception/detections_raw",
                     "/arms/perception/detections",
                     "/arms/perception/status",
@@ -299,6 +305,8 @@ def generate_launch_description():
                 "manifest.arg_detection": ParameterValue(LaunchConfiguration("detection"), value_type=str),
                 "manifest.arg_det_model": ParameterValue(LaunchConfiguration("det_model"), value_type=str),
                 "manifest.arg_auto_save": ParameterValue(LaunchConfiguration("auto_save"), value_type=str),
+                "record_raw_video": ParameterValue(LaunchConfiguration("record_raw_video"), value_type=bool),
+                "manifest.arg_record_raw_video": ParameterValue(LaunchConfiguration("record_raw_video"), value_type=str),
             }],
             condition=IfCondition(LaunchConfiguration("auto_save")),
         ),
@@ -320,7 +328,7 @@ def generate_launch_description():
 
     # PlotJuggler — 노드 startup 후 5초 지연해서 실행
     actions.append(TimerAction(period=5.0, actions=[
-        ExecuteProcess(cmd=pj_cmd, output="screen"),
+        ExecuteProcess(cmd=pj_cmd, output="screen", condition=IfCondition(LaunchConfiguration("plotjuggler"))),
     ]))
 
     return LaunchDescription(actions)

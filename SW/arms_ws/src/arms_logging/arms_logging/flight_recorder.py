@@ -27,6 +27,8 @@ from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from arms_msgs.msg import OperatorInput
 
+RAW_CAMERA_TOPIC = "/arms/camera/image_raw/compressed"
+
 
 class FlightRecorder(Node):
     def require_parameter(self, name, parameter_type):
@@ -52,14 +54,17 @@ class FlightRecorder(Node):
         self.require_parameter("storage", Parameter.Type.STRING)
         # 폴더명 접미사 (<일시>_<tag>). 실기체 기록과 구분용 — SITL 런치는 "sitl".
         self.require_parameter("tag", Parameter.Type.STRING)
+        self.require_parameter("record_raw_video", Parameter.Type.BOOL)
         # 런치가 실제로 해석한 인자와 사용한 제어 설정의 원본 경로. 비행 시작 시
         # manifest.json 및 control_params.yaml 사본으로 남긴다.
         self.require_parameter("manifest.control_params_path", Parameter.Type.STRING)
         for name in (
-                "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save",
+                "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save", "record_raw_video",
                 "crsf_port", "start_detection", "model", "fullscreen", "debug", "cv_debug"):
             self.require_parameter(f"manifest.arg_{name}", Parameter.Type.STRING)
         self._topics = list(self.get_parameter("record_topics").value)
+        if bool(self.get_parameter("record_raw_video").value) and RAW_CAMERA_TOPIC not in self._topics:
+            self._topics.append(RAW_CAMERA_TOPIC)
         self._save_dir = os.path.expanduser(self.get_parameter("save_dir").value)
         os.makedirs(self._save_dir, exist_ok=True)
 
@@ -143,7 +148,7 @@ class FlightRecorder(Node):
         """각 비행 폴더에 재현에 필요한 실행 메타데이터와 제어 설정을 저장한다."""
         args = {}
         for name in (
-                "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save",
+                "px4", "px4_dir", "rviz", "detection", "det_model", "auto_save", "record_raw_video",
                 "crsf_port", "start_detection", "model", "fullscreen", "debug", "cv_debug"):
             value = str(self.get_parameter(f"manifest.arg_{name}").value)
             if value:
