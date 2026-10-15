@@ -6,7 +6,7 @@
 /arms/arms_crsf_io_node:
   ros__parameters:
     port: "/dev/ttyUSB0"
-    baud: 400000
+    baud: 115200
     send_rate_hz: 50.0
     telemetry_timeout_sec: 2.0
     battery:
