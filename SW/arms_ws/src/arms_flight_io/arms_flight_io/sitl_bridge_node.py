@@ -256,6 +256,12 @@ class ArmsSITLCommNode(Node):
         status.vehicle_telemetry_connected = status.transport_connected
         status.last_rx_age_ms = 0xffffffff if not math.isfinite(age) else min(int(age * 1000), 0xffffffff)
         status.last_vehicle_telemetry_age_ms = status.last_rx_age_ms
+        # UART 전용 계측값은 SITL/MAVLink에 해당하지 않는다. 0으로 보이는 것을
+        # 방지해 로그 분석기에서 이 선을 표시하지 않도록 NaN으로 둔다.
+        status.tx_uart_write_hz = float('nan')
+        status.rx_uart_valid_frame_hz = float('nan')
+        status.rx_uart_byte_rate = float('nan')
+        status.rx_uart_crc_error_hz = float('nan')
         status.fault_reason = "" if status.transport_connected else "PX4 heartbeat timeout"
         self._status_pub.publish(status)
 

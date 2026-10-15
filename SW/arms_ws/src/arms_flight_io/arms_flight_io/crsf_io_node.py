@@ -7,6 +7,7 @@ layout and normalizes received telemetry into ``vehicle/*``.
 """
 import math
 import time
+from collections import deque
 
 import rclpy
 from rclpy.node import Node
@@ -82,6 +83,12 @@ class CrsfIoNode(Node):
         self._last_vehicle = 0.0
         self._cells = 0
         self._telem = CrsfTelemetry()
+        # UART 경계 계측값. ROS publish 수가 아니라 serial write/read 결과만 센다.
+        # status 주기마다 최근 1초 창으로 환산해 실제 I/O 처리율을 내보낸다.
+        self._tx_write_times = deque()
+        self._rx_valid_times = deque()
+        self._rx_crc_error_times = deque()
+        self._rx_byte_samples = deque()
 
         self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
         # Track A preserves the established telemetry/logging API.  Only the
@@ -125,7 +132,11 @@ class CrsfIoNode(Node):
         channels[5] = CRSF_MAX if cmd.manual_mode else CRSF_MIN
         channels[6] = CRSF_MAX if cmd.rtl_request else CRSF_MIN
         try:
-            self._ser.write(_packed_channels(channels))
+            packet = _packed_channels(channels)
+            written = self._ser.write(packet)
+            if written != len(packet):
+                raise IOError(f"short CRSF write: {written}/{len(packet)} bytes")
+            self._tx_write_times.append(time.monotonic())
             if self._tx_pub.get_subscription_count():
                 out = Int16MultiArray()
                 out.data = channels
@@ -140,7 +151,9 @@ class CrsfIoNode(Node):
         try:
             waiting = self._ser.in_waiting
             if waiting:
-                self._rx.extend(self._ser.read(waiting))
+                data = self._ser.read(waiting)
+                self._rx.extend(data)
+                self._rx_byte_samples.append((time.monotonic(), len(data)))
         except Exception as exc:
             self.get_logger().warn(f"CRSF RX failed: {exc}", throttle_duration_sec=2.0)
             self._ser = None
@@ -156,8 +169,11 @@ class CrsfIoNode(Node):
             frame = bytes(self._rx[:total])
             del self._rx[:total]
             if _crc(frame[2:-1]) != frame[-1]:
+                self._rx_crc_error_times.append(time.monotonic())
                 continue
-            self._last_any = time.monotonic()
+            received_at = time.monotonic()
+            self._last_any = received_at
+            self._rx_valid_times.append(received_at)
             self._handle(frame[2], frame[3:-1])
 
     @staticmethod
@@ -217,14 +233,25 @@ class CrsfIoNode(Node):
         self._rx_pub.publish(self._telem)
 
     def _publish_status(self):
-        age = time.monotonic() - self._last_any if self._last_any else float("inf")
-        vage = time.monotonic() - self._last_vehicle if self._last_vehicle else float("inf")
+        now = time.monotonic()
+        age = now - self._last_any if self._last_any else float("inf")
+        vage = now - self._last_vehicle if self._last_vehicle else float("inf")
         def ms(value):
             return 0xFFFFFFFF if not math.isfinite(value) else min(int(value * 1000), 0xFFFFFFFF)
+        def rate(samples):
+            while samples and samples[0] <= now - 1.0:
+                samples.popleft()
+            return float(len(samples))
+        while self._rx_byte_samples and self._rx_byte_samples[0][0] <= now - 1.0:
+            self._rx_byte_samples.popleft()
         msg = IoStatus(); msg.header.stamp = self.get_clock().now().to_msg(); msg.source = "crsf"
         msg.transport_connected, msg.vehicle_telemetry_connected = age < self._timeout, vage < self._timeout
         msg.last_rx_age_ms = ms(age)
         msg.last_vehicle_telemetry_age_ms = ms(vage)
+        msg.tx_uart_write_hz = rate(self._tx_write_times)
+        msg.rx_uart_valid_frame_hz = rate(self._rx_valid_times)
+        msg.rx_uart_byte_rate = float(sum(size for _, size in self._rx_byte_samples))
+        msg.rx_uart_crc_error_hz = rate(self._rx_crc_error_times)
         msg.fault_reason = "" if msg.transport_connected else "CRSF telemetry timeout"
         self._status_pub.publish(msg)
 
