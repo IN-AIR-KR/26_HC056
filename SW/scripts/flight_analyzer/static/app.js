@@ -96,6 +96,8 @@ const FIELD_INFO = {
   ui_hz: "1초 이동 윈도우의 UI overlay compressed 영상 수신율 [Hz]",
   detection_hz: "1초 이동 윈도우의 detection 메시지 수신율 [Hz]",
   control_hz: "1초 이동 윈도우의 control debug 메시지 수신율 [Hz]",
+  crsf_tx_hz: "1초 이동 윈도우의 CRSF 송신 채널 프레임율 [Hz]",
+  crsf_rx_hz: "1초 이동 윈도우의 유효 CRSF telemetry 프레임 수신율 [Hz]",
 };
 
 // 기록에 없는 중간값은 기록된 필드로 계산한다(구 기록에도 적용). 입력 중 null 이면 null.
@@ -121,6 +123,8 @@ const GENERAL_PANELS = [
       { t: RATE, f: "ui_hz", label: "UI overlay [Hz]" },
       { t: RATE, f: "detection_hz", label: "detection [Hz]" },
       { t: RATE, f: "control_hz", label: "control [Hz]" },
+      { t: RATE, f: "crsf_tx_hz", label: "CRSF TX [Hz]" },
+      { t: RATE, f: "crsf_rx_hz", label: "CRSF RX [Hz]" },
     ] },
   { title: "Detection", note: "raw / filtered target count and selected target confidence",
     series: [
@@ -693,6 +697,8 @@ function buildStreamRates() {
     ui_hz: rollingRate(rec.videos?.[UI_VIDEO_TOPIC]?.t, grid),
     detection_hz: rollingRate(detection?.t, grid),
     control_hz: rollingRate(control?.t, grid),
+    crsf_tx_hz: rollingRate(rec.topics[TX]?.t, grid),
+    crsf_rx_hz: rollingRate(rec.topics[R]?.t, grid),
   };
   // 없는 스트림은 null 열로 남겨 패널에 존재하지 않는 선으로 표시한다.
   for (const [name, values] of Object.entries(fields)) {
