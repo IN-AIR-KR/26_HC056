@@ -16,6 +16,11 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # ROS_NAMESPACE 는 ROS 1 환경변수다 — rclpy 가 읽지 않는다. 아래 command 의
+      # `-r __ns:=/$ROS_NAMESPACE` 로 명시 적용해야 노드가 /arms 에 뜬다.
+      # 네임스페이스가 비면 (1) detection.yaml 의 `/arms/arms_detection_node:` 키와
+      # 매칭되지 않아 파라미터가 전부 무시되고(기동 거부), (2) 상대 토픽명
+      # (camera/image_raw, perception/detections)이 /arms 없이 루트에 붙는다.
       - ROS_NAMESPACE=${ROS_NAMESPACE:-arms}
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
       # Force UDP-only FastDDS transport. SHM transport fails between container
@@ -54,7 +59,7 @@ services:
     command:
       - bash
       - -c
-      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args --params-file /params/detection.yaml $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
+      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args -r __ns:=/$$ROS_NAMESPACE --params-file /params/detection.yaml $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
     # 모델 로드·cold-start 실패는 설정/환경 오류다. 재시작 루프가 UI health를
     # 잠깐 online으로 보이게 하지 않도록, 수정 후 명시적으로 다시 기동한다.
     restart: "no"
