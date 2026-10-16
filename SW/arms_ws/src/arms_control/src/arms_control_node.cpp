@@ -573,7 +573,10 @@ class ArmsControlNode : public rclcpp::Node {
         "io/status", 10,
         [this](arms_msgs::msg::IoStatus::SharedPtr msg) {
           io_status_received_ = true;
+          // 안전 RTL은 Jetson↔flight I/O transport 단절을 기준으로 한다.
           io_fault_ = !msg->transport_connected;
+          // UI의 TELM 표시는 기체에서 실제 telemetry가 들어오는지를 뜻한다.
+          vehicle_telemetry_connected_ = msg->vehicle_telemetry_connected;
         });
 
     // 심판(referee)의 직격 통지. SITL에서 실제 접촉이 확인되면 TRACK을 RTL로 전이한다.
@@ -1347,7 +1350,8 @@ class ArmsControlNode : public rclcpp::Node {
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = manual_out;         // UI 효과음/표시용 (FC에 전달한 실제 모드)
     msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
-    msg.io_connected = io_status_received_ && !io_fault_;
+    // UI/효과음용: UART가 열려 있는지보다 기체 telemetry가 실제 수신되는지가 중요하다.
+    msg.io_connected = io_status_received_ && vehicle_telemetry_connected_;
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----
@@ -1452,6 +1456,7 @@ class ArmsControlNode : public rclcpp::Node {
   double operator_input_timeout_sec_{0.3};
   bool io_status_received_{false};
   bool io_fault_{false};
+  bool vehicle_telemetry_connected_{false};
   std::array<int, 5> prev_btn_{};
   // ARM 재토글 안전장치: true 면 ARM 스위치가 올라가 있어도 arm 안 됨.
   //   부팅 시 true(스위치 이미 올라가 있어도 즉시 arm 방지), 모드 전환 시 true,
