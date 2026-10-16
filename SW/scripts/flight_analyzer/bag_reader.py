@@ -48,15 +48,33 @@ def typestore():
     return _typestore
 
 
-def find_db3(record: Path) -> list:
-    """기록 폴더 안(<일시>/bag/ 까지 2단계)의 .db3 파일들 (분할 순서대로)."""
-    if record.is_file():
-        return [record] if record.suffix == ".db3" else []
+def _is_rosbag_db(db: Path) -> bool:
+    """rosbag2 sqlite DB인지 확인한다. 다른 .db3(예: PX4 parameter DB)는 제외한다."""
     try:
-        out = sorted(record.glob("*.db3")) or sorted(record.glob("*/*.db3"))
+        con = _connect(db)
+        tables = {
+            row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        con.close()
+        return {"topics", "messages"}.issubset(tables)
+    except sqlite3.Error:
+        return False
+
+
+def find_db3(record: Path) -> list:
+    """기록 폴더 안의 rosbag2 SQLite DB들만 찾는다.
+
+    최상단의 PX4/기타 `.db3`가 `bag/` 아래 rosbag을 가리는 일이 없도록 두 위치를
+    모두 검사하고, rosbag 필수 테이블(topics/messages)로 파일 종류를 판별한다.
+    """
+    if record.is_file():
+        return [record] if record.suffix == ".db3" and _is_rosbag_db(record) else []
+    try:
+        out = sorted({*record.glob("*.db3"), *record.glob("*/*.db3")})
     except OSError:
         return []
-    return [p for p in out if p.is_file()]
+    return [p for p in out if p.is_file() and _is_rosbag_db(p)]
 
 
 def is_record(d: Path, max_subdirs: int = 8) -> bool:
