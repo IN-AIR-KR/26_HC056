@@ -6,8 +6,7 @@ ROS 없이 동작한다(sqlite3 + rosbags 로 직접 읽음) → 노트북에 ba
 
 사용:
     pip install -r SW/scripts/flight_analyzer/requirements.txt
-    python3 SW/scripts/flight_analyzer/server.py                  # 브라우저에서 데이터 폴더 선택
-    python3 SW/scripts/flight_analyzer/server.py --data ~/arms_flight_logs_ibvs
+    python3 SW/scripts/flight_analyzer/server.py                  # .env의 로그 폴더를 연다
     python3 SW/scripts/flight_analyzer/server.py --host 0.0.0.0   # 젯슨에서 띄우고 노트북으로 접속
 """
 import argparse
@@ -27,12 +26,37 @@ from flask import Flask, Response, abort, jsonify, request, send_file, send_from
 import bag_reader
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_DIR = Path("~/arms_flight_logs_ibvs").expanduser()
+ENV_PATH = HERE / ".env"
+LOG_ROOT_ENV = "FLIGHT_ANALYZER_LOG_ROOT"
 
 app = Flask(__name__, static_folder=None)
-state = {"root": None}                 # 현재 데이터 폴더 (None = 아직 선택 안 함)
+state = {"root": None}
 _cache = OrderedDict()                 # (경로, mtime, 크기) → 로드 결과. 최근 4개만 유지
 _cache_lock = threading.Lock()
+
+
+def _load_env() -> None:
+    """Read this script's small, tracked .env without requiring python-dotenv."""
+    if not ENV_PATH.is_file():
+        return
+    for raw in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+def _configured_root() -> Path:
+    value = os.environ.get(LOG_ROOT_ENV, "").strip()
+    if not value:
+        raise RuntimeError(f"{ENV_PATH}에 {LOG_ROOT_ENV}=<로그 폴더>를 설정하세요")
+    root = Path(value).expanduser()
+    if not root.is_dir():
+        raise RuntimeError(f"로그 폴더가 아님: {root}")
+    return root.resolve()
 
 
 def _root() -> Path:
@@ -89,42 +113,6 @@ def static_files(name):
 
 
 # ---------------------------------------------------------------- api
-@app.get("/api/root")
-def get_root():
-    return jsonify({
-        "root": str(state["root"]) if state["root"] else None,
-        "default": str(DEFAULT_DIR),
-    })
-
-
-@app.post("/api/root")
-def set_root():
-    p = Path(str((request.get_json(silent=True) or {}).get("path", ""))).expanduser()
-    if not p.is_dir():
-        return jsonify({"error": f"폴더가 아님: {p}"}), 400
-    state["root"] = p.resolve()
-    return jsonify({"root": str(state["root"])})
-
-
-@app.get("/api/browse")
-def browse():
-    """폴더 선택 화면용: 하위 폴더 목록 (+ 각 폴더가 기록 몇 개를 담고 있는지)."""
-    p = Path(request.args.get("path") or DEFAULT_DIR).expanduser()
-    if not p.is_dir():
-        p = Path.home()
-    p = p.resolve()
-    dirs = []
-    try:
-        for d in sorted(p.iterdir(), key=lambda x: x.name.lower()):
-            if d.is_dir() and not d.name.startswith("."):
-                dirs.append({"name": d.name, "path": str(d),
-                             "is_record": bag_reader.is_record(d)})
-    except PermissionError:
-        pass
-    return jsonify({"path": str(p), "parent": str(p.parent) if p.parent != p else None,
-                    "dirs": dirs})
-
-
 @app.get("/api/records")
 def records():
     root = _root()
@@ -294,22 +282,20 @@ def save_balloon():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", default="",
-                    help="데이터 폴더 (생략하면 브라우저에서 선택)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5050)
     ap.add_argument("--no-browser", action="store_true", help="브라우저 자동 열기 끔")
     args = ap.parse_args()
 
-    if args.data:
-        p = Path(args.data).expanduser()
-        if not p.is_dir():
-            ap.error(f"폴더가 아님: {p}")
-        state["root"] = p.resolve()
+    _load_env()
+    try:
+        state["root"] = _configured_root()
+    except RuntimeError as exc:
+        ap.error(str(exc))
 
     bag_reader.typestore()   # arms_msgs .msg 등록 오류를 기동 시점에 바로 드러낸다
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}/"
-    print(f"IBVS 뷰어: {url}  (데이터 폴더: {state['root'] or '브라우저에서 선택'})")
+    print(f"ARMS Flight Analyzer: {url}  (로그 폴더: {state['root']})")
     if not args.no_browser and not os.environ.get("SSH_CONNECTION"):
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     app.run(host=args.host, port=args.port, threaded=True)

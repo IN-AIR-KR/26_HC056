@@ -12,17 +12,18 @@ pip install -r SW/scripts/flight_analyzer/requirements.txt
 python3 SW/scripts/flight_analyzer/server.py
 ```
 
-- 브라우저가 열리면 **데이터 폴더를 선택**한다(기본 제안 `~/arms_flight_logs_ibvs`).
-  `--data <폴더>` 로 주면 선택 화면을 건너뛴다.
+- 로그 폴더는 이 디렉터리의 tracked `.env`에서 정한다.
+  `FLIGHT_ANALYZER_LOG_ROOT=~/arms_flight_logs_ibvs` 값을 환경에 맞게 바꾼 뒤 실행한다.
+  경로가 없거나 폴더가 아니면 서버는 시작하지 않고 오류를 낸다.
 - 젯슨에서 띄우고 노트북으로 볼 때: `--host 0.0.0.0` → `http://<젯슨IP>:5050/`
   (SSH 세션이면 브라우저 자동 열기는 생략된다).
 - 포트 변경 `--port`, 자동 열기 끄기 `--no-browser`.
 
 ## 화면
 
-- **사이드바**: 데이터 폴더 안의 기록 목록(최신순). 시작시각 · 길이 · 크기 · ibvs_debug 개수.
-  `ibvs_debug 없음` 은 IbvsDebug 추가 전 녹화분. "변경"으로 폴더를 바꾼다. 상단 `☰` 버튼으로
-  접거나 펼칠 수 있으며, 선택 상태는 브라우저에 저장된다.
+- **사이드바**: `.env`의 데이터 폴더 안 기록 목록(최신순). 시작시각 · 길이 · 크기 · ibvs_debug 개수.
+  `ibvs_debug 없음` 은 IbvsDebug 추가 전 녹화분. 상단 `☰` 버튼으로 접거나 펼칠 수 있으며,
+  선택 상태는 브라우저에 저장된다.
 - **그래프**: 먼저 검출 수/신뢰도·검출 지연, 미션/표적 오차, 최종 제어 출력, GPS 위치·속도,
   배터리, 기체 자세·CRSF 링크, 조종 입력, FC 송신 채널을 표시한다. 그 아래에는 `IbvsDebug.msg`의 계산 단계
   (①오차 → ②LOS각속도 → ③z1/배리어 → ④항별 기여 → ⑤스케줄링 → ⑥명령 vs 자세 → ⑦추력)

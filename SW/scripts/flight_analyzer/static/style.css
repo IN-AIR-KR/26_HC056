@@ -37,11 +37,6 @@ body.sidebar-collapsed #app { grid-template-columns: 0 1fr; }
 body.sidebar-collapsed #sidebar { overflow: hidden; border-right: 0; }
 .side-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--border); }
 .brand { font-weight: 700; font-size: 15px; margin-bottom: 8px; }
-.root-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
-#root-path {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  direction: rtl; text-align: left; color: var(--muted); font-size: 12px;
-}
 .side-tools { display: flex; gap: 6px; }
 .side-tools input { flex: 1; min-width: 0; }
 #rec-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
@@ -129,33 +124,6 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .btn.small { padding: 4px 8px; font-size: 12px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn:disabled { opacity: .5; cursor: default; }
-
-/* ---------------- folder picker ---------------- */
-.overlay {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 50;
-  display: flex; align-items: center; justify-content: center; padding: 16px;
-}
-.overlay[hidden] { display: none; }
-.dialog {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  width: min(640px, 100%); max-height: 85vh; display: flex; flex-direction: column; padding: 18px;
-}
-.dialog h2 { margin: 0 0 4px; font-size: 16px; }
-.dialog p { margin: 0 0 12px; }
-.picker-path { display: flex; gap: 6px; }
-.picker-path input { flex: 1; min-width: 0; }
-#pk-info { font-size: 12px; margin: 8px 0 4px; }
-#pk-list {
-  list-style: none; margin: 0; padding: 4px; overflow-y: auto; flex: 1; min-height: 160px;
-  border: 1px solid var(--border); border-radius: 6px;
-}
-#pk-list li { padding: 5px 8px; border-radius: 4px; cursor: pointer; display: flex; gap: 8px; }
-#pk-list li:hover { background: var(--bg); }
-#pk-list .badge {
-  margin-left: auto; font-size: 11px; color: var(--accent);
-  border: 1px solid var(--accent); border-radius: 10px; padding: 0 7px;
-}
-.dialog-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 @media (max-width: 760px) {
   #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; }

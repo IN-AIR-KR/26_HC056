@@ -323,51 +323,9 @@ function fmtVal(v) {
 }
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 
-// ---------------------------------------------------------------- 폴더 선택
-async function openPicker(start) {
-  $("picker").hidden = false;
-  $("pk-cancel").hidden = !$("root-path").textContent;
-  await browse(start);
-}
-async function browse(path) {
-  let j;
-  try {
-    j = await api("/api/browse?path=" + encodeURIComponent(path || ""));
-  } catch (e) { $("pk-info").textContent = e.message; return; }
-  $("pk-path").value = j.path;
-  $("pk-up").disabled = !j.parent;
-  $("pk-up").onclick = () => browse(j.parent);
-  const nRec = j.dirs.filter((d) => d.is_record).length;
-  $("pk-info").textContent = nRec
-    ? `이 폴더에 기록 ${nRec}개 — "이 폴더 사용" 을 누르세요.`
-    : "하위 폴더를 눌러 이동하세요.";
-  const ul = $("pk-list");
-  ul.innerHTML = "";
-  if (!j.dirs.length) ul.innerHTML = '<li class="muted">(하위 폴더 없음)</li>';
-  for (const d of j.dirs) {
-    const li = document.createElement("li");
-    li.innerHTML = `<span>📁</span><span class="mono"></span>${d.is_record ? '<span class="badge">기록</span>' : ""}`;
-    li.children[1].textContent = d.name;
-    li.onclick = () => browse(d.path);
-    ul.appendChild(li);
-  }
-}
-async function useFolder() {
-  try {
-    await api("/api/root", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: $("pk-path").value }),
-    });
-  } catch (e) { $("pk-info").textContent = e.message; return; }
-  $("picker").hidden = true;
-  await loadRecords();
-}
-
 // ---------------------------------------------------------------- 기록 목록
 async function loadRecords() {
   const j = await api("/api/records");
-  $("root-path").textContent = j.root;
-  $("root-path").title = j.root;
   records = j.records;
   renderRecords();
   const want = decodeURIComponent(location.hash.slice(1));
@@ -1166,7 +1124,6 @@ function bind() {
   });
   applyLayout();
   resetVideo();
-  $("btn-change-root").onclick = () => openPicker($("root-path").textContent);
   $("btn-refresh").onclick = () => loadRecords();
   $("rec-filter").oninput = renderRecords;
   const applyHelp = () => {
@@ -1178,10 +1135,6 @@ function bind() {
   applySidebar();
   $("btn-custom").onclick = addCustom;
   $("custom-input").onkeydown = (e) => { if (e.key === "Enter") addCustom(); };
-  $("pk-go").onclick = () => browse($("pk-path").value);
-  $("pk-path").onkeydown = (e) => { if (e.key === "Enter") browse($("pk-path").value); };
-  $("pk-use").onclick = useFolder;
-  $("pk-cancel").onclick = () => { $("picker").hidden = true; };
   window.addEventListener("hashchange", () => {
     const id = decodeURIComponent(location.hash.slice(1));
     if (id && id !== currentId && records.some((r) => r.id === id)) openRecord(id);
@@ -1198,7 +1151,5 @@ function bind() {
 
 (async function init() {
   bind();
-  const j = await api("/api/root");
-  if (!j.root) openPicker(j.default);   // 시작 시 데이터 폴더 선택
-  else loadRecords();
+  loadRecords();
 })();

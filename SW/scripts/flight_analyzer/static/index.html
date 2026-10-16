@@ -14,10 +14,6 @@
   <aside id="sidebar">
     <div class="side-head">
       <div class="brand">ARMS Flight Analyzer</div>
-      <div class="root-row">
-        <span id="root-path" class="mono" title=""></span>
-        <button id="btn-change-root" class="btn small">변경</button>
-      </div>
       <div class="side-tools">
         <input id="rec-filter" type="search" placeholder="기록 검색">
         <button id="btn-refresh" class="btn small" title="목록 새로고침">↻</button>
@@ -99,24 +95,6 @@
       </div>
     </div>
   </main>
-</div>
-
-<div id="picker" class="overlay" hidden>
-  <div class="dialog">
-    <h2>데이터 폴더 선택</h2>
-    <p class="muted">auto_save 기록들이 들어 있는 폴더(예: <span class="mono">~/arms_flight_logs_ibvs</span>)를 고르세요.</p>
-    <div class="picker-path">
-      <button id="pk-up" class="btn small" title="상위 폴더">↑</button>
-      <input id="pk-path" class="mono" spellcheck="false">
-      <button id="pk-go" class="btn small">이동</button>
-    </div>
-    <div id="pk-info" class="muted"></div>
-    <ul id="pk-list"></ul>
-    <div class="dialog-foot">
-      <button id="pk-cancel" class="btn">취소</button>
-      <button id="pk-use" class="btn primary">이 폴더 사용</button>
-    </div>
-  </div>
 </div>
 
 <script src="/static/app.js"></script>
