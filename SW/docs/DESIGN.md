@@ -192,7 +192,7 @@ stateDiagram-v2
     SEARCH --> LOCK
     LOCK --> SEARCH
     LOCK --> TRACK
-    TRACK --> RTL
+    TRACK --> IDLE
     RTL --> IDLE
 ```
 
@@ -208,7 +208,7 @@ stateDiagram-v2
     LOCK --> SEARCH : 타겟 소실 detection_timeout_sec
 
     LOCK --> TRACK : joy buttons[3] launch<br/>(또는 sitl_auto_launch 타이머)
-    TRACK --> RTL : 타겟 소실 detection_timeout_sec
+    TRACK --> IDLE : 타겟 소실 track_target_lost_timeout_sec<br/>FC 수동 모드로 인계
     TRACK --> RTL : 선택: looming τ < tau_rtl_sec + 정렬<br/>(looming_rtl_enabled)
     TRACK --> RTL : SITL hit 이벤트 (hit_rtl_via_referee)
 
@@ -590,7 +590,8 @@ arms_control_node
   |     evaluate detections → update state
   |     auto arm: effective_arm(ARM 스위치+재토글 래치) → IDLE → SEARCH
   |     launch button (joy buttons[3]) → LOCK→TRACK
-  |     RTL button (joy buttons[4]), 무장 중 command_lost, TRACK 타겟 소실 → RTL
+  |     RTL button (joy buttons[4]), 무장 중 command_lost → RTL
+  |     TRACK 타겟 소실 → IDLE + FC 수동 모드 인계 (GPS Rescue 미요청)
   |     선택: 비전 looming τ=bbox크기/팽창률 < tau_rtl_sec + 정렬 (TRACK) → RTL
   |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
   |
@@ -621,7 +622,7 @@ arms_control_node
 
 - 방아쇠(launch 버튼)가 아니라 **LOCK→TRACK 전이**가 OPEN 트리거다(SEARCH 에서 방아쇠를 눌러도
   안 풀림). SEARCH/LOCK/TRACK 은 auto 모드에서만 발생하므로 전이만으로 판정 가능.
-- LOCK→SEARCH(표적 소실)·TRACK→RTL 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
+- LOCK→SEARCH(표적 소실)·TRACK→IDLE(수동 인계) 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
 - 판정은 `control_loop` 말미에서 in-tick 전이(arm/disarm) 반영 후 최신 `sm_->state()` 로 한다.
 
 **하드웨어 (Jetson Orin Nano)**

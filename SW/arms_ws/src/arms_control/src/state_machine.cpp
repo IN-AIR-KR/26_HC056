@@ -163,8 +163,10 @@ void StateMachine::disarm()
 void StateMachine::on_detection_timeout()
 {
   if (state_ == State::TRACK) {
-    // 추적 중 표적을 timeout까지 놓치면 재수색하지 않고 안전하게 귀환한다.
-    transition(State::RTL);
+    // 추적 중 표적을 timeout까지 놓치면 재수색하거나 GPS Rescue로 넘기지 않는다.
+    // 유도를 정지하고 control node가 조종사 스틱을 FC에 직접 전달하도록 요청한다.
+    manual_handover_requested_ = true;
+    transition(State::IDLE);
     return;
   }
   if (state_ == State::SEARCH || state_ == State::LOCK) {

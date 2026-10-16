@@ -49,6 +49,12 @@ public:
   void disarm();
   void set_tau_rtl(double t)       { params_.tau_rtl_sec = t; }      // 런타임 τ 임계 조정
   void set_loom_s_min(double s)    { params_.loom_s_min = s; }       // 런타임 최소크기 게이트
+  /** TRACK target-loss 시 1회 발생하는 수동 조종 인계 요청을 가져온다. */
+  bool consume_manual_handover_request() {
+    const bool requested = manual_handover_requested_;
+    manual_handover_requested_ = false;
+    return requested;
+  }
 
   // ---------- accessors ----------
   State       state()               const { return state_; }
@@ -85,6 +91,8 @@ private:
 
   bool       last_detection_valid_{false};
   TimePoint  last_detection_time_;
+  // TRACK target-loss는 GPS Rescue가 아니라 조종사에게 즉시 수동 조종을 인계한다.
+  bool manual_handover_requested_{false};
 };
 
 }  // namespace arms_control
