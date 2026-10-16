@@ -16,7 +16,11 @@ from pathlib import Path
 
 import numpy as np
 
-MSG_DIR = Path(__file__).resolve().parents[2] / "arms_ws" / "src" / "arms_msgs" / "msg"
+_BUNDLED_MSG_DIR = Path(__file__).resolve().parent / "messages"
+_REPO_MSG_DIR = Path(__file__).resolve().parents[2] / "arms_ws" / "src" / "arms_msgs" / "msg"
+# The bundled definitions let this directory run by itself in Docker. Keep the
+# repo fallback for local development before the bundle is present.
+MSG_DIR = _BUNDLED_MSG_DIR if _BUNDLED_MSG_DIR.is_dir() else _REPO_MSG_DIR
 
 # 영상은 그래프 대상이 아니고 무거우므로 역직렬화하지 않는다(프레임 색인만 만든다).
 SKIP_TYPES = {"sensor_msgs/msg/CompressedImage", "sensor_msgs/msg/Image"}

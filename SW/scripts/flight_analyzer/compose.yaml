@@ -1,0 +1,11 @@
+services:
+  flight-analyzer:
+    build: .
+    image: arms-flight-analyzer:latest
+    container_name: arms-flight-analyzer
+    restart: unless-stopped
+    ports:
+      - "8030:8000"
+    volumes:
+      # Keep this writable: saving a balloon position updates manifest.json.
+      - ${HOME}/arms_flight_logs_ibvs:/logs

@@ -1,0 +1,11 @@
+std_msgs/Header header
+string state
+float32 lock_elapsed_sec
+float32 lock_duration_sec
+float32 error_x
+float32 error_y
+bool target_locked
+bool armed
+bool manual_mode
+bool prearm_blocked
+bool io_connected

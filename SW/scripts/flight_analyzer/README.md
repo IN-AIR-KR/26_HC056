@@ -19,6 +19,31 @@ python3 SW/scripts/flight_analyzer/server.py
   (SSH 세션이면 브라우저 자동 열기는 생략된다).
 - 포트 변경 `--port`, 자동 열기 끄기 `--no-browser`.
 
+### Docker 서버 배포
+
+`flight_analyzer` 폴더만 서버에 복사한 뒤 그 폴더에서 이미지를 만든다. Docker 이미지는 MP4
+다운로드용 `ffmpeg`와 `messages/`의 ARMS 메시지 정의를 함께 포함하므로 ROS나 전체 워크스페이스가
+필요 없다.
+
+```bash
+docker build -t arms-flight-analyzer .
+docker run -d --name arms-flight-analyzer --restart unless-stopped \
+  -p 8000:8000 \
+  -v /home/artemis-2/arms_flight_logs_ibvs:/logs \
+  arms-flight-analyzer
+```
+
+또는 기본 Compose 구성(컨테이너 이름 `arms-flight-analyzer`, 호스트 포트 `8030`)을 쓴다.
+
+```bash
+docker compose up -d --build
+```
+
+Compose는 서버 사용자의 `~/arms_flight_logs_ibvs`를 `/logs`로 mount한다. 브라우저에서는
+`http://<server-ip>:8030/`으로 접속한다. 컨테이너 내부 Analyzer는 `/logs`를 읽으므로, 서버의 로그
+경로가 다르면 [compose.yaml](compose.yaml)의 volume 왼쪽 경로만 수정하면 된다. 풍선 위치 저장이
+`manifest.json`을 수정하므로 볼륨은 읽기 전용(`:ro`)으로 mount하면 안 된다.
+
 ## 화면
 
 - **사이드바**: `.env`의 데이터 폴더 안 기록 목록(최신순). 시작시각 · 길이 · 크기 · ibvs_debug 개수.
@@ -58,7 +83,8 @@ python3 SW/scripts/flight_analyzer/server.py
 
 ## 참고
 
-- 커스텀 메시지는 레포의 `SW/arms_ws/src/arms_msgs/msg/*.msg` 로 해석한다. 녹화 이후 .msg
-  필드가 바뀌었다면 그 토픽은 "역직렬화 실패"로 표시되고 건너뛴다.
+- 커스텀 메시지는 `messages/*.msg`로 해석한다. 새 메시지 필드를 기록했다면 이 디렉터리도
+  `arms_msgs/msg`와 함께 갱신해야 한다. 메시지 정의가 녹화 당시와 다르면 해당 토픽은
+  "역직렬화 실패"로 표시되고 건너뛴다.
 - 영상은 프레임을 필요할 때 한 장씩 읽는다. MP4 다운로드는 클릭 시에만 `ffmpeg`로 변환한다.
 - uPlot과 3D 렌더러(Three.js)는 CDN(jsdelivr)에서 받는다 — 처음 열 때 인터넷이 필요하다.

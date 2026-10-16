@@ -1,0 +1,10 @@
+std_msgs/Header header
+float64 latitude_deg
+float64 longitude_deg
+float32 altitude_m
+float32 ground_speed_mps
+float32 ground_course_deg
+uint8 satellites
+uint8 mavlink_fix_type
+bool fix_type_inferred
+bool valid_fix

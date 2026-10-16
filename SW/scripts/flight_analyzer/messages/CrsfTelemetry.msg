@@ -1,0 +1,13 @@
+std_msgs/Header header
+float32 voltage_v
+float32 current_a
+int32 capacity_used_mah
+int32 battery_remaining_pct
+float32 roll_deg
+float32 pitch_deg
+float32 yaw_deg
+float32 vertical_speed_mps
+string flight_mode
+int32 uplink_rssi_dbm
+int32 uplink_lq
+int32 uplink_snr_db
