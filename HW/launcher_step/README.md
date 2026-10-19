@@ -23,8 +23,8 @@ A.R.M.S. 견착형 발사기의 3D CAD 파일(STEP)입니다.
 | `grip_cover.step` | 손잡이 덮개 |
 | `control_panel.step` | 조작 패널 |
 | `trigger.step` | 방아쇠 |
+| `trigger_pusher.step` | 방아쇠를 당기면 밀려나 발사 버튼을 눌러주는 연동 부품 |
 | `servo_cover.step` | 서보모터 덮개 |
 | `orin_nano_case_1.step` | Jetson Orin Nano 케이스 1 |
 | `orin_nano_case_2.step` | Jetson Orin Nano 케이스 2 |
 | `orin_nano_case_top.step` | Jetson Orin Nano 케이스 상판 |
-| `part_24.step` | (확인 필요) |
