@@ -17,7 +17,8 @@ A.R.M.S. 견착형 발사기의 3D CAD 파일(STEP)입니다.
 | `tail_latch_cover.step` | 테일 누름식 개폐부 덮개 |
 | `display_bracket.step` | 디스플레이 고정대 (본체 연결) |
 | `display_sunshade.step` | 디스플레이 차양막 |
-| `body_display_mount_ring.step` | 본체-디스플레이 연결링 |
+| `body_display_mount.step` | 본체-디스플레이 연결부 |
+| `display_bracket_ring.step` | 디스플레이 브라켓-본체 연결부에 끼우는 링 |
 | `grip.step` | 손잡이 |
 | `grip_cover.step` | 손잡이 덮개 |
 | `control_panel.step` | 조작 패널 |
@@ -26,5 +27,4 @@ A.R.M.S. 견착형 발사기의 3D CAD 파일(STEP)입니다.
 | `orin_nano_case_1.step` | Jetson Orin Nano 케이스 1 |
 | `orin_nano_case_2.step` | Jetson Orin Nano 케이스 2 |
 | `orin_nano_case_top.step` | Jetson Orin Nano 케이스 상판 |
-| `part_18.step` | (확인 필요) |
 | `part_24.step` | (확인 필요) |
