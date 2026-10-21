@@ -1,7 +1,7 @@
 # ARMS Flight Analyzer
 
 `auto_save:=true` 로 녹화한 `~/arms_flight_logs_ibvs/<일시>/` 기록의 비행 텔레메트리와
-`/arms/ibvs_debug`를 브라우저에서 uPlot 그래프로 본다.
+`/arms/control/diagnostics`를 브라우저에서 uPlot 그래프로 본다.
 **ROS 불필요** — sqlite3 로 bag 을 직접 열고 `rosbags`(순수 파이썬)로 역직렬화한다.
 젯슨에서 기록 폴더만 노트북으로 복사해 와서 봐도 된다.
 
@@ -46,21 +46,19 @@ Compose는 서버 사용자의 `~/arms_flight_logs_ibvs`를 `/logs`로 mount한�
 
 ## 화면
 
-- **사이드바**: `.env`의 데이터 폴더 안 기록 목록(최신순). 시작시각 · 길이 · 크기 · ibvs_debug 개수.
-  `ibvs_debug 없음` 은 IbvsDebug 추가 전 녹화분. 상단 `☰` 버튼으로 접거나 펼칠 수 있으며,
+- **사이드바**: `.env`의 데이터 폴더 안 기록 목록(최신순). 시작시각 · 길이 · 크기 · 상세 제어 로그 개수.
+  `control diagnostics 없음` 은 상세 제어 로그 추가 전 녹화분. 상단 `☰` 버튼으로 접거나 펼칠 수 있으며,
   선택 상태는 브라우저에 저장된다.
 - **그래프**: 먼저 검출 수/신뢰도·검출 지연, 미션/표적 오차, 최종 제어 출력, GPS 위치·속도,
-  배터리, 기체 자세·CRSF 링크, 조종 입력, FC 송신 채널을 표시한다. 그 아래에는 `IbvsDebug.msg`의 계산 단계
-  (①오차 → ②LOS각속도 → ③z1/배리어 → ④항별 기여 → ⑤스케줄링 → ⑥명령 vs 자세 → ⑦추력)
-  패널이 나온다. 녹화에 없는 토픽의 패널은 숨긴다. 배경색 = 상태(LOCK/TRACK/…).
+  배터리, 기체 자세·CRSF 링크, 조종 입력, FC 송신 채널을 표시한다. 그 아래에는 PID 제어의
+  오차·시간기반 lead·명령·스케줄링·추력 패널이 나온다. 녹화에 없는 토픽의 패널은 숨긴다.
+  배경색 = 상태(LOCK/TRACK/…).
   - 마우스 호버: 모든 그래프의 커서/범례 값이 같은 시각으로 연동된다. 상단에 t 와 상태 표시.
   - 드래그 = 구간 확대(전 그래프 동시), 더블클릭 = 전체 구간으로 복귀.
   - 범례 클릭 = 시리즈 켜기/끄기.
   - 범례 = 필드명. 칩에 필드별 수식이 나온다(상단 "수식 숨기기"로 수식만 끔). 범례 이름에
-    마우스를 올려도 수식이 뜬다. 같은 표가 `SW/docs/IBVS_CONTROL.md` 11절에 있다.
+    마우스를 올려도 수식이 뜬다.
   - 패널 위 **필터 칩**([체크박스][필드명][수식])을 눌러 선을 켜고 끈다(범례 클릭과 연동, 패널별로 브라우저에 기억).
-  - `gain_barrier`, `aim_gain`, `aim_term_*`, `*_share_*` 는 기록된 필드로 뷰어가 계산한 중간값
-    (게인 곱한 값 · 항별 비중). 구 기록에도 나온다.
 - **화면 영상 + 3D 뷰**: 우상단 `Graphs` / `Video + Graphs` 로 전환. `Video + Graphs` 는 왼쪽에
   녹화된 영상과 3D 비행 뷰, 오른쪽에 그래프가 나온다. 기본 영상은 UI overlay이고,
   UI overlay와 원본(`/arms/ui/image/compressed`, `/arms/camera/image_raw/compressed`) 중
@@ -79,7 +77,7 @@ Compose는 서버 사용자의 `~/arms_flight_logs_ibvs`를 `/logs`로 mount한�
     변환은 뷰어를 실행한 컴퓨터에서 이뤄지며 `ffmpeg`가 필요하다.
   - 영상 토픽이 없는 기록(SITL 구버전 녹화 등)은 영상 칸에 안내만 뜬다.
 - **패널 추가**(맨 아래): `토픽 필드` 를 쉼표로 여러 개 입력하면 새 패널이 생긴다
-  (예: `/arms/ibvs_debug barrier, /arms/crsf_rx roll_deg`). 토픽을 생략하면 ibvs_debug.
+  (예: `/arms/control/diagnostics err_dot_x, /arms/io/crsf/rx roll_deg`). 토픽을 생략하면 control diagnostics.
 
 ## 참고
 

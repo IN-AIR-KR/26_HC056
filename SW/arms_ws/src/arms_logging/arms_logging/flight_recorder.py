@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """비행 로그 녹화기 (auto_save:=true 일 때 arms.launch.py / arms_sitl.launch.py 가 기동).
 
-조종기 ARM 스위치를 올리면(DOWN→UP) record_topics(UI/원본 영상 + 검출 raw/필터/진단 + IBVS 디버그
+조종기 ARM 스위치를 올리면(DOWN→UP) record_topics(UI/원본 영상 + 검출 raw/필터/진단 + 상세 제어 로그
 + 제어·CRSF·GPS·배터리 + 상태/조종)를 rosbag 으로 녹화하기 시작하고, 내리면 멈추고 저장한다.
 모드(auto/manual)·상태머신·kill 과는 무관하게 ARM 스위치 하나로만 결정한다.
 저장 포맷은 sqlite3(항상 사용 가능). mcap 은 젯슨에 플러그인이 없어 쓰지 않는다.
@@ -44,7 +44,7 @@ class FlightRecorder(Node):
         super().__init__("flight_recorder")
         # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
         #   detections_raw = 칼만 적용 전 원시 측정값(추후 KF 튜닝 재현용).
-        #   ibvs_debug=유도 각 항(오차/LOS각속도/z1·배리어/항별 기여/스케줄링/명령·추력) 스냅샷.
+        #   diagnostics=PID 제어 오차·lead·스케줄링·명령·추력 스냅샷.
         #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
         #   battery=배터리 전용 토픽이다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.

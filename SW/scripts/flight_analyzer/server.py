@@ -94,7 +94,7 @@ def _records(root: Path) -> list:
                       if s["start_ns"] else None),
             "duration": s["duration"],
             "size": s["size"],
-            "ibvs_count": s["counts"].get("/arms/control/ibvs_debug", 0),
+            "control_count": s["counts"].get("/arms/control/diagnostics", 0),
             "counts": s["counts"],
         })
     out.sort(key=lambda r: r["name"], reverse=True)   # <YYYYmmdd_HHMMSS> → 최신이 위

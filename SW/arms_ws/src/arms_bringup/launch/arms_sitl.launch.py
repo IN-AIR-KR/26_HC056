@@ -286,7 +286,7 @@ def generate_launch_description():
                     "/arms/perception/detections_raw",
                     "/arms/perception/detections",
                     "/arms/perception/status",
-                    "/arms/control/ibvs_debug",
+                    "/arms/control/diagnostics",
                     "/arms/control/debug",
                     "/arms/io/crsf/tx",
                     "/arms/io/crsf/rx",

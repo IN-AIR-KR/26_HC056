@@ -509,12 +509,12 @@ ros2 launch arms_bringup arms.launch.py auto_save:=true
 기본값은 `false`(녹화 안 함). 저장된 bag(sqlite3, `<일시>/bag`)의 영상은 위 3) 방법으로
 mp4 변환하거나 재생하면 된다(스크립트엔 `<일시>/bag` 경로를 넘긴다). 녹화 토픽은 영상 `/arms/ui_image/compressed` 외에 `/arms/detections_raw`
 (칼만 전 원시 검출 — 추후 KF 튜닝용), `/arms/detections`, `/arms/detector_status`,
-`/arms/ibvs_debug`(IBVS 유도 각 항 스냅샷 — `arms_msgs/IbvsDebug`),
+`/arms/control/diagnostics`(PID 제어 상세 스냅샷 — `arms_msgs/ControlDebug`),
 `/arms/crsf_tx`(송신 채널), `/arms/crsf_rx`(수신 텔레메트리: 배터리/링크/자세),
 `/arms/mission_state`, `/arms/command` 이며, 목록은 `flight_recorder` 의 `record_topics`
 파라미터로 조정한다. 스택을 정상 종료하면 진행 중이던 bag 도 안전하게 마감된다.
 
-IBVS 디버그(`/arms/ibvs_debug`)는 웹뷰어로 보면 편하다(ROS 불필요, 그래프 호버/줌 연동):
+제어 진단(`/arms/control/diagnostics`)은 웹뷰어로 보면 편하다(ROS 불필요, 그래프 호버/줌 연동):
 
 ```bash
 python3 SW/scripts/flight_analyzer/server.py --data ~/arms_flight_logs_ibvs

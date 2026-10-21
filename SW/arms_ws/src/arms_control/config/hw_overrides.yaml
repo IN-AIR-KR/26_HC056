@@ -1,106 +1,47 @@
 # 실기체(Jetson) 전용 오버레이 — control_params.yaml 위에 얹힌다.
 #
-# 여기에는 "실기체가 SITL과 다른 것"만 적는다.
+# 여기에는 SITL 기준값과 실제로 다른 값만 적는다. 누락한 값은
+# control_params.yaml의 기준값을 사용한다.
 #
 # 로드 순서 (뒤가 이김):
-#   control.launch.py       control_params.yaml → 이 파일
-#   arms.launch.py          control_params.yaml → 이 파일
-#   *_sitl.launch.py        control_params.yaml 만  ← 이 파일 안 실림
+#   control.launch.py / arms.launch.py: control_params.yaml → 이 파일
+#   *_sitl.launch.py:                  control_params.yaml 만
 #
+# 카메라 캘리브레이션을 마치면 control.camera 아래에 calibrated, 이미지 크기,
+# fx/fy/cx/cy, distortion_model, distortion만 추가한다. 캘리브레이션 전에는
+# 기준 파일의 HFOV/aspect 근사를 그대로 사용한다.
+
 /arms/arms_control_node:
   ros__parameters:
-    # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
-    #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
-    servo:
-      enabled: false
 
+    # =====================================================================
+    # 실기체 미션 정책
+    # =====================================================================
     mission:
-      # 실기체는 자동 발진 금지. LOCK 이 걸려도 스스로 TRACK 으로 넘어가지 않고,
-      # 사람이 조종기 LAUNCH(buttons[3]) 를 눌러야 추격이 시작된다.
-      sitl_auto_launch: false
-      # 원거리 획득(absdiff후보→YOLO 확대검증, 낮은  conf)이 실제 LOCK 되도록
-      # 임계값을 낮춘다. 전체프레임 YOLO 는 ARMS_CONF(0.5)로 걸러지므로 근거리
-      # 헛-LOCK 은 그대로 억제된다. detection 의 acquire.verify_conf 이하로 둘 것.
+      # control은 detection 토픽에서 가장 높은 YOLO confidence를 다시 확인해 LOCK/TRACK에
+      # 사용할 유효 검출을 결정한다. 실내 실기체에서는 기준값보다 낮춘다.
       detection_confidence_threshold: 0.25
 
-      # 종말 RTL 소스 — 실기체는 둘 다 끈다.
-      #   hit_rtl_via_referee: 실기체엔 /arms/hit 발행자가 없다(심판=SITL 전용) → false.
-      #   looming_rtl_enabled: 자동 요격(비전 τ RTL)은 아직 검증 전이라 비활성 → false.
-      #     자동 종말을 쓸 때 여기서 true 로 바꾼다.
+      # 실기체에는 SITL 심판 접촉 토픽이 없으므로 이 종말 조건은 비활성화한다.
+      # 비전 τ 기반 종말 동작은 기준 파일에서 별도로 활성화할 수 있다.
       hit_rtl_via_referee: false
-      looming_rtl_enabled: false
 
+    # =====================================================================
+    # 실기체 PID — 비행 로그 기반으로 확정되면 근거를 함께 남긴다.
+    # =====================================================================
     control:
-      # ── IBVS 카메라 캘리브레이션 (mode 2, 실기체 미측정) ─────────────────
-      # 픽셀오차 → 각도(tan 단위 x_n, y_n) 환산에 쓴다. 틀리면 ibvs_gain/kb 가
-      # 전부 어긋난다. calibrated=true 면 ibvs_hfov_deg/ibvs_aspect 는 무시된다.
-      #
-      # ★ 지금은 calibrated=false = 캘리 미적용 → control_params.yaml 의
-      #   ibvs_hfov_deg/ibvs_aspect(Phoenix 2 SE V2 + 8mm, 43.6°, 720x480) 근사를 쓴다.
-      #   즉 체커보드 캘리 전에는 SITL 과 똑같이 동작한다. 아래 fx/fy 는 같은 근사의
-      #   핀홀 값(fx = 360/tan(21.8°) = 900)이라, 캘리 후 true 로 바꾸며 덮어쓰면 된다.
-      #
-      # 채우는 법 — 체커보드 캘리 결과(ost.yaml / camera_info)를 그대로 옮긴다:
-      #   ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 \
-      #       --ros-args -r image:=<카메라 토픽>
-      #   (FPV 광각이 plumb_bob 으로 가장자리가 안 맞으면 --fisheye-* 옵션으로
-      #    다시 돌리고 distortion_model 을 equidistant 로)
-      #   image_width/height  ← image_width, image_height
-      #   fx, fy, cx, cy      ← camera_matrix  [fx 0 cx; 0 fy cy; 0 0 1]
-      #   distortion_model    ← distortion_model
-      #   distortion          ← distortion_coefficients (plumb_bob 4~5개 / equidistant 4개)
-      # ※ 반드시 detection 노드가 받는 영상과 같은 화면(크롭/레터박스 없이 같은
-      #   종횡비)으로 캘리할 것. 해상도는 달라도 되지만 그땐 여기 적은 해상도 기준.
-      # ※ fx/fy/cx/cy/distortion 은 실수형이다. 정수로 떨어져도 360.0, 0.0 처럼
-      #   .0 을 붙일 것(안 붙이면 ROS 파라미터 타입 불일치로 노드가 기동 실패).
-      # ※ 기동 로그에 "카메라 캘리 적용: ..." 이 찍히는지 확인. 값이 잘못되면
-      #   "카메라 캘리 무효 → hfov 근사로 대체" ERROR 가 뜬다.
-      #
-      # 캘리와 별개로 비행 전 확인:
-      #   1) 광축이 정말 기체 +Z(수직 상방)인지. 기울게 달려 있으면 mode 2 의
-      #      전제(광축=추력축)가 깨져 조준점이 편향된다(캘리로는 안 잡힘).
-      #   2) 기체를 손으로 들고 롤/피치를 줘서 화면 속 표적이 예상대로
-      #      움직이는지(어긋나면 roll_sign/pitch_sign 으로 교정).
-      camera:
-        calibrated: false
-        image_width: 720
-        image_height: 480
-        fx: 900.0
-        fy: 900.0
-        cx: 360.0
-        cy: 240.0
-        distortion_model: "plumb_bob"
-        distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
-
-      # ── 실기체 PID (미측정) ──────────────────────────────────────────────
-      # 단위: 카메라 tan 이미지좌표 → 각속도[deg/s]. 각도 단계는 없다(ACRO 고정).
-      # 튜닝 순서: kp 를 낮은 값에서 조금씩 ↑ → 떨리면 30% ↓ → 그 다음 kd.
-      #   과조향/발진이면 kp 와 pn_nav_gain 을 먼저 내린다.
-      #
-      # 실기체 값이 확정되면 이 주석의 "미측정"을 지우고 근거(비행 날짜/로그)를 남길 것.
+      # 단위: tan 카메라 좌표 → ACRO 각속도[deg/s].
+      # 튜닝: kp를 낮은 값부터 올리고, 진동 시 낮춘 뒤 kd를 조절한다.
       roll_pid:
         kp: 300.0
-        ki: 0.0
         kd: 0.0
       pitch_pid:
         kp: 300.0
-        ki: 0.0
         kd: 0.0
 
-      # ── 추격 추력 (실기체 전용) ──────────────────────────────────────────
-      # TRACK 때 표적쪽으로 상승하는 세기. SITL(control_params)은 0.66 이지만 실기체는
-      # TWR·무게가 달라 따로 잡는다. hover_throttle(실기체 0.51) 위여야 상승한다.
-      #   첫 비행은 보수적으로(가볍게 상승) → 추격력 부족하면 ↑.
-      #   pursuit_center_boost=false 라 이 값이 곧 상수 추력이다.
-      track_throttle: 0.70
-      # 실기체 호버(재조준 시 최소 추력). SITL 기준값(0.32, 1.5kgf 모터 모델)과 기체가 달라
-      #   따로 둔다 — 예전 값 유지. 실측 호버 스로틀을 알면 그 값으로.
+      # 실제 기체의 호버·추격 추력은 SITL 물리 모델과 달라 별도로 둔다.
       hover_throttle: 0.51
+      track_throttle: 0.70
 
-      # ── 무장(arm) ─────────────────────────────────────────────────────
-      # 자동 모드: 스위치와 분리하고 상태머신 상태로 컨트롤 노드가 결정한다.
-      #   SEARCH/LOCK(throttle 0) 에서 미리 arm → TRACK 에서 throttle↑ 전에 무장
-      #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
-      # auto_arm_states: ["TRACK", "RTL"]
+      # 자동 모드에서 FC arm을 유지할 상태. 실험 목적에 따라 여기서 빠르게 바꾼다.
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "RTL"]
-

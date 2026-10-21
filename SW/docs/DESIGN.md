@@ -143,7 +143,7 @@ graph TD
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
 | `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>`/arms/ibvs_debug`<br/>`/arms/gps`<br/>`/arms/attitude`<br/>`/arms/battery`<br/>CRSF serial |
+| `arms_control_node`    | `/arms/perception/detections`<br/>`/arms/operator/input`<br/>`/arms/io/status`<br/>`/arms/sim/hit`<br/>`/arms/sim/reset_event` | `/arms/mission/state`<br/>`/arms/control/debug`<br/>`/arms/control/looming_debug`<br/>`/arms/control/diagnostics`<br/>`/arms/control/flight_command` |
 | `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)<br/>PX4 MAVLink (`GPS_RAW_INT`, `ATTITUDE`)                    | MAVLink RC_CHANNELS_OVERRIDE → PX4<br/>`/arms/gps` (SITL GPS)<br/>`/arms/attitude` (SITL 자세) |
 | `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/gps`<br/>`/arms/battery` | —                                                                                         |
 
@@ -155,7 +155,7 @@ graph TD
 | `arms_detection_node`  | `arms_detection` | HSV로 붉은 후보를 제안하고 ROI YOLO로 검증(+전체화면 fallback), KF로 평활한 단일 표적을 `/arms/detections`로 발행. **YOLO가 최종 판정자**(HSV 단독 발행 금지 → YOLO 없으면 검출 없음). GPU Docker | Docker (실기체/SITL) |
 | `arms_command_node`    | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·MODE/RTL/ARM/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지)             | 호스트 (SITL)                 |
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. 300 ms 동안 유효 패킷이 없으면 `command_lost` 이벤트를 함께 발행. fake_mode 지원 | 호스트 (실기체)               |
-| `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
+| `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·추력·시간기반 lead 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
 | `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
 | `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환·RTL 판단. ELRS 수신 CRSF GPS·Attitude·배터리 프레임을 각각 `/arms/gps`·`/arms/attitude`·`/arms/battery`로 발행하고, CRSF 제어 프레임을 시리얼로 직접 출력 | 호스트                        |
 | `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. PX4 `GPS_RAW_INT`와 `ATTITUDE`를 실기체 호환 `/arms/gps`·`/arms/attitude`로 변환한다. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL)                 |
@@ -479,7 +479,7 @@ CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`
 
 | 모드   | PX4 flight mode | CH1-4 소스                                                                 | CH5 arm                                | buttons[1] 역할 |
 | ------ | --------------- | -------------------------------------------------------------------------- | -------------------------------------- | --------------- |
-| auto   | **ACRO**        | 유도(기본 추적/PN) → **각속도**(roll/pitch), throttle=추격상승, yaw rate 0 | **상태머신 상태 기반** (스위치와 분리) | IDLE↔SEARCH     |
+| auto   | **ACRO**        | PID 추적 → **각속도**(roll/pitch), throttle=추격상승, yaw rate 0 | **상태머신 상태 기반** (스위치와 분리) | IDLE↔SEARCH     |
 | manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                                       | arm 스위치 (재토글 안전장치)           | ARM/DISARM      |
 
 > **자동 모드 = 스위치와 arm 분리**: 자동 모드에서 상태 스위치(buttons[1])는 미션 상태
@@ -532,16 +532,11 @@ manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 
 파이프라인 (매 control_rate_hz 틱):
 
-1. **LOS = 카메라 tan 이미지좌표 오차** (`filt_err_x/y`, LPF) → 중앙 데드존.
+1. **LOS = 카메라 tan 이미지좌표 오차** (`filt_err_x/y`, LPF) → 데드존과 수직 조준 오프셋.
    (예전의 자세보정 LOS는 **제거** — acro 전환으로 attitude 의존 삭제.)
-2. **alpha-beta 필터** (`pn_alpha`/`pn_beta`) 로 매끈한 LOS + **시선각속도(LOS rate)** 추정.
-3. **유도** (`control.guidance_mode`) — 출력은 **각속도[deg/s]** 다:
-   - **0 = 기본 추적 (기본값)**: `roll_pid`/`pitch_pid` PID(kp·ki·kd)로 LOS 오차
-     - 시간기반 리드(`lead_gain`) → 각속도 명령.
-   - **1 = 비례항법(PN)**: `각속도 = pn_nav_gain × 시선각속도 + pn_center_gain × LOS`.
-     시선각속도를 0으로 만들어 미래 충돌점을 앞질러 겨냥(빠른 표적에 유리). PID 미사용.
-
-   출력은 `±max_cmd_rate_dps`(227.5 deg/s) 로 제한한다.
+2. **PID 추적**: `roll_pid`/`pitch_pid`(kp·ki·kd)가 LOS 오차를 각속도[deg/s] 명령으로 바꾼다.
+   시간기반 리드(`lead_gain × err_dot`)를 PID 입력에 더하며, 출력은
+   `±max_cmd_rate_dps`(227.5 deg/s)로 제한한다.
 
 4. **스로틀(추격 궤적)**: 표적이 화면 중앙에 가까울수록(`center_q↑`) `hover_throttle`→`track_throttle`
    로 상승 → 표적을 향해 대각선 돌진.
@@ -579,7 +574,7 @@ arms_control_node
   |     /arms/mission_state   (MissionState, 30Hz)
   |     /arms/control_debug   (Vector3 — UI 화살표용. x,y = 각속도[deg/s], z = throttle)
   |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용, 구독 중에만 발행)
-  |     /arms/ibvs_debug      (IbvsDebug — IBVS 유도 각 항/스케줄링/명령·추력 스냅샷, 구독 중에만 발행)
+  |     /arms/control/diagnostics (ControlDebug — PID 제어 상세 스냅샷, 구독 중에만 발행)
   |     /arms/gps             (GpsTelemetry — CRSF GPS 위치·속도·고도·위성 수)
   |     /arms/battery         (BatteryTelemetry — CRSF 배터리 전압·전류·사용량·잔량)
   |
@@ -596,7 +591,7 @@ arms_control_node
   |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
   |
   +-- [유도·제어]  (TRACK 상태에서 활성)
-  |     화면 정규화 오차 → 카메라 tan 좌표 → alpha-beta 필터 → 유도(기본 추적=PID / PN)
+  |     화면 정규화 오차 → 카메라 tan 좌표 → LPF/오차미분 → PID + 시간기반 리드
   |       → 각속도[deg/s] → clamp(max_cmd_rate_dps) → ÷max_rate_dps → CH1/CH2
   |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
   |     스로틀: hover→track (center_q 기반 추격 상승) → CH3
@@ -800,7 +795,7 @@ rosbag 녹화를 시작하며 ARM을 내리면 정상 마감한다. 녹화기가
 | `/arms/detections_raw` | `arms_msgs/DetectionArray` | 칼만 필터 전 원시 검출 결과 |
 | `/arms/detections` | `arms_msgs/DetectionArray` | 필터/단일 표적 선택 후 제어에 들어간 검출 결과 |
 | `/arms/detector_status` | `std_msgs/Float32MultiArray` | HSV·YOLO 후보/승인 수와 검출기 진단 값 |
-| `/arms/ibvs_debug` | `arms_msgs/IbvsDebug` | LOS, LOS rate, 배리어 항, 스케줄링, 각속도·추력 등 IBVS 유도 내부 스냅샷 |
+| `/arms/control/diagnostics` | `arms_msgs/ControlDebug` | PID 제어의 오차·오차미분·스케줄링·각속도·추력 상세 스냅샷 |
 | `/arms/control_debug` | `geometry_msgs/Vector3` | 최종 제어 명령: `x=roll rate [deg/s]`, `y=pitch rate [deg/s]`, `z=thrust [0..1]` |
 | `/arms/crsf_tx` | `std_msgs/Int16MultiArray` | 실제 송신한 CRSF 채널 `[roll,pitch,throttle,yaw,arm,mode,rtl,ch8]` |
 | `/arms/crsf_rx` | `arms_msgs/CrsfTelemetry` | CRSF 수신 통합 스냅샷: 링크 상태·수직속도·FC 비행 모드 등 |

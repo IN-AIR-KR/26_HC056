@@ -1,7 +1,7 @@
-/* IBVS 로그 뷰어 — uPlot 차트, 커서/줌 연동, 기록 목록 사이드바. */
+/* Flight Analyzer — uPlot 차트, 커서/줌 연동, 기록 목록 사이드바. */
 "use strict";
 
-const T = "/arms/control/ibvs_debug";
+const T = "/arms/control/diagnostics";
 const R = "/arms/io/crsf/rx";
 const M = "/arms/mission/state";
 const C = "/arms/control/debug";
@@ -20,53 +20,22 @@ const RATE_STEP_SEC = 0.1;
 
 // ---------------------------------------------------------------- 필드 수식
 // 범례는 필드명 그대로. 수식은 패널 위 표와 범례 툴팁에 나온다.
-// 기호: B = barrier, N = √(1+x_n²+y_n²), ldx/ldy = los_rate_x/y.
-//   IBVS roll 명령 = [ ibvs_gain·B + ibvs_center_gain ] · x_n/N  +  ibvs_los_rate_gain · ldx
 const FIELD_INFO = {
   raw_err_x: "bbox_cx/W − 0.5   (±0.5 = 화면 끝)",
   raw_err_y: "bbox_cy/H − 0.5",
   filt_err_x: "LPF(tan(raw_err_x))   (α = error_lpf_alpha, tan image coordinate)",
   filt_err_y: "LPF(tan(raw_err_y))   (camera y tan coordinate)",
-  emag: "√(filt_err_x² + filt_err_y²)",
-  losf_x: "alpha-beta 위치 추정 (입력 filt_err_x)",
-  losf_y: "alpha-beta 위치 추정 (입력 filt_err_y)",
-  losf_x_dot: "alpha-beta 속도 추정 [tan/s], clamp ±3",
-  losf_y_dot: "alpha-beta 속도 추정 [tan/s], clamp ±3",
-  los_rate_x: "ldx = clamp(losf_x_dot, ±pn_los_clamp)",
-  los_rate_y: "ldy = clamp(losf_y_dot, ±pn_los_clamp)",
-  err_dot_x: "LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp   (mode 0 전용)",
-  err_dot_y: "LPF(Δfilt_err_y/dt), clamp ±err_dot_clamp   (mode 0 전용)",
-  x_n: "(u − cx)/fx, 왜곡 보정   (tan 좌표)",
-  y_n: "(v − cy)/fy, 왜곡 보정",
-  theta_deg: "acos(1/N)   [deg]   (전체 이탈각)",
+  emag: "√(deadzone(filt_err_x)² + deadzone(filt_err_y − aim_above_offset)²)",
+  err_dot_x: "LPF(Δfilt_err_x/dt), clamp ±err_dot_clamp",
+  err_dot_y: "LPF(Δfilt_err_y/dt), clamp ±err_dot_clamp",
+  x_n: "tan 단위 카메라 x 좌표",
+  y_n: "tan 단위 카메라 y 좌표",
   err_angle_x: "atan(x_n) · 180/π   [deg]   (좌우 오차각, + = 오른쪽)",
   err_angle_y: "atan(y_n) · 180/π   [deg]   (상하 오차각, + = 아래)",
-  z1_raw: "1 − 1/N   (= 1 − cos θ)",
-  z1: "min(z1_raw, 0.995·kb)",
-  kb: "ibvs_kb",
-  barrier: "B = z1 / (kb² − z1²)",
-  dir_x: "x_n / N",
-  dir_y: "y_n / N",
-  // ↓ 뷰어 계산값 (기록된 필드로 계산)
-  gain_barrier: "ibvs_gain · B   [deg/s]",
-  aim_gain: "ibvs_gain · B + ibvs_center_gain   [deg/s]   (= 대괄호 [ ])",
-  aim_term_x: "aim_gain · x_n/N = barrier_term_x + center_term_x   [deg/s]",
-  aim_term_y: "aim_gain · y_n/N = barrier_term_y + center_term_y   [deg/s]",
-  aim_share_x: "|aim_term_x| / (|aim_term_x| + |los_rate_term_x|) · 100   [%]",
-  lead_share_x: "|los_rate_term_x| / (|aim_term_x| + |los_rate_term_x|) · 100   [%]",
-  aim_share_y: "|aim_term_y| / (|aim_term_y| + |los_rate_term_y|) · 100   [%]",
-  lead_share_y: "|los_rate_term_y| / (|aim_term_y| + |los_rate_term_y|) · 100   [%]",
-  // ↑
-  barrier_term_x: "ibvs_gain · B · x_n/N   [deg/s]",
-  barrier_term_y: "ibvs_gain · B · y_n/N   [deg/s]",
-  center_term_x: "ibvs_center_gain · x_n/N   [deg/s]",
-  center_term_y: "ibvs_center_gain · y_n/N   [deg/s]",
-  los_rate_term_x: "ibvs_los_rate_gain · ldx   [deg/s]",
-  los_rate_term_y: "ibvs_los_rate_gain · ldy   [deg/s]",
-  guidance_x: "aim_term_x + los_rate_term_x   [deg/s]",
-  guidance_y: "aim_term_y + los_rate_term_y   [deg/s]",
-  roll_rate_cmd: "roll_sign · range_gain_scale · guidance_x   [deg/s]",
-  pitch_rate_cmd: "pitch_sign · range_gain_scale · guidance_y   [deg/s]",
+  guidance_x: "PID roll 출력 [deg/s] (부호 전)",
+  guidance_y: "PID pitch 출력 [deg/s] (부호 전)",
+  roll_rate_cmd: "roll_sign · PID 출력 · range_gain_scale   [deg/s]",
+  pitch_rate_cmd: "pitch_sign · PID 출력 · range_gain_scale   [deg/s]",
   roll_rate_out: "clamp(roll_rate_cmd, ±max_cmd_rate_dps)   [deg/s] = 송신값",
   pitch_rate_out: "clamp(pitch_rate_cmd, ±max_cmd_rate_dps)   [deg/s] = 송신값",
   closeness: "clamp((loom_size − near_size_start)/(near_size_full − near_size_start), 0, 1)",
@@ -82,12 +51,8 @@ const FIELD_INFO = {
   cmd_active: "state ∈ {TRACK, FIRE}",
   filter_active: "state ∈ {LOCK, TRACK, FIRE}",
   detection_held: "검출 끊김 → 마지막 오차 유지",
-  z1_clamped: "z1_raw > 0.995·kb",
   rate_saturated: "|rate_cmd| > max_cmd_rate_dps",
   manual_out: "수동 모드 or RTL (스틱 passthrough)",
-  ibvs_gain: "control.ibvs_gain",
-  ibvs_center_gain: "control.ibvs_center_gain",
-  ibvs_los_rate_gain: "control.ibvs_los_rate_gain",
   dt: "제어 틱 간격 [ms]",
   roll_deg: "CRSF 텔레메트리 roll [deg]",
   pitch_deg: "CRSF 텔레메트리 pitch [deg]",
@@ -101,22 +66,13 @@ const FIELD_INFO = {
   rx_uart_valid_frame_hz: "최근 1초 UART 수신·CRC 통과 CRSF 프레임율 [Hz]",
 };
 
-// 기록에 없는 중간값은 기록된 필드로 계산한다(구 기록에도 적용). 입력 중 null 이면 null.
-const share = (a, l) => { const s = Math.abs(a) + Math.abs(l); return s > 1e-9 ? 100 * Math.abs(a) / s : null; };
+// 기록에 없는 중간값은 기록된 필드로 계산한다. 입력 중 null 이면 null.
 const DERIVED = {
   err_angle_x: { deps: ["x_n"], fn: (x) => Math.atan(x) * 180 / Math.PI },
   err_angle_y: { deps: ["y_n"], fn: (y) => Math.atan(y) * 180 / Math.PI },
-  gain_barrier: { deps: ["ibvs_gain", "barrier"], fn: (g, b) => g * b },
-  aim_gain: { deps: ["ibvs_gain", "barrier", "ibvs_center_gain"], fn: (g, b, c) => g * b + c },
-  aim_term_x: { deps: ["barrier_term_x", "center_term_x"], fn: (b, c) => b + c },
-  aim_term_y: { deps: ["barrier_term_y", "center_term_y"], fn: (b, c) => b + c },
-  aim_share_x: { deps: ["barrier_term_x", "center_term_x", "los_rate_term_x"], fn: (b, c, l) => share(b + c, l) },
-  lead_share_x: { deps: ["barrier_term_x", "center_term_x", "los_rate_term_x"], fn: (b, c, l) => share(l, b + c) },
-  aim_share_y: { deps: ["barrier_term_y", "center_term_y", "los_rate_term_y"], fn: (b, c, l) => share(b + c, l) },
-  lead_share_y: { deps: ["barrier_term_y", "center_term_y", "los_rate_term_y"], fn: (b, c, l) => share(l, b + c) },
 };
 
-// ---------------------------------------------------------------- 일반 비행 정보 (IBVS 세부 그래프보다 위에 배치)
+// ---------------------------------------------------------------- 일반 비행 정보 (제어 세부 그래프보다 위에 배치)
 const GENERAL_PANELS = [
   { title: "Stream rate", note: "1.0 s message rate · CRSF is measured at the UART boundary",
     series: [
@@ -203,43 +159,10 @@ const PANELS = [
       { f: "raw_err_x", dash: [4, 3], width: 1 }, { f: "filt_err_x" },
       { f: "raw_err_y", dash: [4, 3], width: 1 }, { f: "filt_err_y" },
     ] },
-  { title: "Error angle", note: "[deg] · camera optical axis (filtered tan-coordinate control input)",
-    series: [{ f: "err_angle_x" }, { f: "err_angle_y" }, { f: "theta_deg", width: 2 }] },
-  { title: "LOS rate", note: "[tan/s]",
-    series: [
-      { f: "losf_x_dot" }, { f: "los_rate_x", dash: [4, 3] },
-      { f: "losf_y_dot" }, { f: "los_rate_y", dash: [4, 3] },
-      { f: "err_dot_x", width: 1, show: false }, { f: "err_dot_y", width: 1, show: false },
-    ] },
-  { title: "z1 / θ", note: "왼축 z1 · 오른축 θ[deg]",
-    series: [
-      { f: "z1_raw", dash: [4, 3], width: 1 }, { f: "z1" }, { f: "kb", dash: [2, 4], width: 1 },
-      { f: "theta_deg", scale: "y2" },
-    ] },
-  { title: "IBVS raw terms (before gain)", note: "왼축 x_n/N · ldx · 오른축 B",
-    series: [
-      { f: "dir_x" }, { f: "dir_y" }, { f: "los_rate_x" }, { f: "los_rate_y" },
-      { f: "barrier", scale: "y2", width: 2 },
-    ] },
-  { title: "Gained coefficients", note: "[deg/s] · x_n/N 에 곱해지는 값",
-    series: [{ f: "gain_barrier" }, { f: "aim_gain", width: 2 }, { f: "ibvs_center_gain", dash: [2, 4], width: 1 }] },
-  { title: "Roll term contributions", note: "[deg/s] · guidance_x = aim_term_x + los_rate_term_x",
-    series: [
-      { f: "aim_term_x", width: 2 }, { f: "los_rate_term_x", width: 2 },
-      { f: "barrier_term_x", width: 1, show: false }, { f: "center_term_x", width: 1, show: false },
-      { f: "guidance_x", width: 1.5, dash: [6, 3] }, { f: "roll_rate_out", width: 1 },
-    ] },
-  { title: "Pitch term contributions", note: "[deg/s] · guidance_y = aim_term_y + los_rate_term_y",
-    series: [
-      { f: "aim_term_y", width: 2 }, { f: "los_rate_term_y", width: 2 },
-      { f: "barrier_term_y", width: 1, show: false }, { f: "center_term_y", width: 1, show: false },
-      { f: "guidance_y", width: 1.5, dash: [6, 3] }, { f: "pitch_rate_out", width: 1 },
-    ] },
-  { title: "Term share", note: "[%] · aim + lead = 100 (TRACK 에서만)",
-    series: [
-      { f: "aim_share_x" }, { f: "lead_share_x", dash: [4, 3] },
-      { f: "aim_share_y" }, { f: "lead_share_y", dash: [4, 3] },
-    ] },
+  { title: "Error angle", note: "[deg] · filtered camera tan-coordinate control input",
+    series: [{ f: "err_angle_x" }, { f: "err_angle_y" }] },
+  { title: "Lead rate", note: "[tan/s] · LPF of filtered-error derivative used by time-based lead",
+    series: [{ f: "err_dot_x" }, { f: "err_dot_y" }] },
   { title: "Command vs attitude", note: "왼축 [deg/s] · 오른축 source-independent attitude [deg]",
     series: [
       { f: "roll_rate_cmd", dash: [4, 3], width: 1 }, { f: "roll_rate_out" },
@@ -259,13 +182,10 @@ const PANELS = [
   { title: "Thrust", note: "0~1",
     series: [{ f: "thrust", width: 2 }, { f: "throttle_up", dash: [4, 3] }, { f: "emag", width: 1 }] },
   { title: "Flags", note: "0/1", flags: true,
-    series: ["cmd_active", "filter_active", "detection_held", "z1_clamped", "rate_saturated", "manual_out"]
+    series: ["cmd_active", "filter_active", "detection_held", "rate_saturated", "manual_out"]
       .map((f, i) => ({ f, step: true, mul: 0.8, add: i })) },
-  { title: "Gains / dt", note: "왼축 게인 · 오른축 dt[ms]",
-    series: [
-      { f: "ibvs_gain" }, { f: "ibvs_center_gain" }, { f: "ibvs_los_rate_gain" },
-      { f: "dt", scale: "y2", mul: 1000, width: 1 },
-    ] },
+  { title: "Control loop", note: "dt [ms]",
+    series: [{ f: "dt", mul: 1000, width: 1 }] },
 ];
 
 const PALETTE = ["#60a5fa", "#f87171", "#4ade80", "#fbbf24", "#c084fc", "#22d3ee", "#f472b6", "#a3e635"];
@@ -342,7 +262,7 @@ function renderRecords() {
   }
   for (const r of list) {
     const li = document.createElement("li");
-    li.className = (r.id === currentId ? "active " : "") + (r.ibvs_count ? "" : "no-ibvs");
+    li.className = (r.id === currentId ? "active " : "") + (r.control_count ? "" : "no-control-debug");
     li.innerHTML = `<div class="rec-name"></div><div class="rec-sub"></div>`;
     li.children[0].textContent = r.name;
     const sub = li.children[1];
@@ -352,8 +272,8 @@ function renderRecords() {
     ].filter(Boolean);
     for (const p of parts) { const s = document.createElement("span"); s.textContent = p; sub.appendChild(s); }
     const s = document.createElement("span");
-    if (r.ibvs_count) s.textContent = `ibvs ${r.ibvs_count}`;
-    else { s.textContent = "ibvs_debug 없음"; s.className = "warn"; }
+    if (r.control_count) s.textContent = `control ${r.control_count}`;
+    else { s.textContent = "control diagnostics 없음"; s.className = "warn"; }
     sub.appendChild(s);
     li.onclick = () => openRecord(r.id);
     ul.appendChild(li);
@@ -379,7 +299,7 @@ async function openRecord(id) {
   if (currentId !== id) return;   // 로딩 중 다른 기록을 눌렀음
   const topics = Object.keys(rec.topics);
   $("rec-meta").textContent =
-    `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · ibvs_debug ${rec.topics[T]?.t.length ?? 0}개`;
+    `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · control diagnostics ${rec.topics[T]?.t.length ?? 0}개`;
   $("errors").innerHTML = "";
   for (const e of rec.errors || []) {
     const d = document.createElement("div");
@@ -388,7 +308,7 @@ async function openRecord(id) {
   }
   if (!rec.topics[T]) {
     const d = document.createElement("div");
-    d.textContent = "이 기록에는 /arms/ibvs_debug 가 없습니다 (IbvsDebug 추가 전 녹화). 다른 토픽은 아래 '패널 추가' 로 볼 수 있습니다.";
+    d.textContent = "이 기록에는 /arms/control/diagnostics 가 없습니다. 다른 토픽은 아래 '패널 추가'로 볼 수 있습니다.";
     $("errors").appendChild(d);
   }
   stateSegs = buildStateSegs();
@@ -674,12 +594,12 @@ function renderPanels() {
   destroyCharts();
   $("empty").hidden = true;
   const general = $("general-panels");
-  const ibvs = $("ibvs-panels");
+  const control = $("control-panels");
   general.innerHTML = "";
-  ibvs.innerHTML = "";
+  control.innerHTML = "";
   for (const p of GENERAL_PANELS) if (p.series.some((s) => fieldCol(s.t || T, s.f))) general.appendChild(makePanel(p));
   for (const p of [...PANELS, ...customPanels.map((p, i) => ({ ...p, custom: i }))]) {
-    ibvs.appendChild(makePanel(p));
+    control.appendChild(makePanel(p));
   }
 }
 
@@ -949,7 +869,7 @@ function addCustom() {
   saveLS("flight_analyzer.custom", customPanels);
   $("custom-input").value = "";
   renderPanels();
-  $("ibvs-panels").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
+  $("control-panels").lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 // ---------------------------------------------------------------- 화면 영상

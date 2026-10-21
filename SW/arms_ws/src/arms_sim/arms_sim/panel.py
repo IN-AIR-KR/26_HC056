@@ -5,7 +5,7 @@ panel.py — A.R.M.S. SITL 튜닝/심판 콘솔 (tkinter GUI)  [arms_sim]
 SITL 전용 개발 콘솔. 운용자 입력은 발행하지 않는다 (그건 가상 조종기 =
 arms_operator 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/RTL) — 읽기전용 구독
-  - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
+  - Roll/Pitch 부호, PID, τ, 추력, 시간기반 lead 등 → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET → Gazebo world reset + PX4 SITL 재시작 (Gazebo 프로세스는 유지)
 
@@ -66,14 +66,13 @@ def group(parent, title):
 # 파라미터 버스 — 패널 → 노드 쓰기/읽기를 한 줄로 세운다
 # ---------------------------------------------------------------------------
 #
-# 예전 방식의 문제 (2026-10-11 실제로 겪음):
+# 예전 방식의 문제:
 #   버튼/슬라이더마다 스레드를 새로 띄워 `ros2 param set` CLI 를 병렬 실행했고
 #   결과는 DEVNULL 로 버렸다. 그래서
-#     1) 순서 보장이 없다: 유도 방식을 0→1→2 로 빠르게 누르면 "set 2" 가 먼저
-#        끝나고 "set 1" 이 나중에 끝나 노드엔 1(PN)이 남는다.
-#     2) 성공 확인이 없다: 버튼은 누르는 즉시 IBVS 로 바뀌어 보이는데 노드는 PN.
+#     1) 순서 보장이 없다: 여러 튜닝값을 빠르게 바꾸면 이전 set 요청이 나중에
+#        끝나 노드에는 의도와 다른 값이 남는다.
+#     2) 성공 확인이 없다: 화면은 새 값을 보여도 노드 적용 실패를 알 수 없다.
 #     3) CLI 는 호출마다 수 초 걸려(노트북 부하 시 더) 위 레이스가 잘 터진다.
-#   → 패널은 IBVS 를 보여주는데 제어기는 PN 으로 비행했다.
 #
 # 지금 방식:
 #   - CLI 대신 노드의 파라미터 서비스(get/set_parameters)를 패널 노드가 직접 부른다.
@@ -564,19 +563,11 @@ class PanelGUI:
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
 
         # ── [유도] arms_control ─────────────────────────────────────────────
-        g_guid = group(right, "유도  ·  arms_control")
-        # 0=기본 추적(각속도 PID 추종), 1=PN(비례항법). 기본은 기본 추적.
-        self._guidance_mode = 0
-        self.guid_btn = tk.Button(g_guid, text="방식: 기본 추적", font=("Arial", 11, "bold"),
-                                  bg="#37474f", fg="white", activebackground="#546e7a",
-                                  command=self.toggle_guidance)
-        self.guid_btn.pack(pady=(0, 4), fill="x")
-        self._track(CTRL_NODE, "control.guidance_mode",
-                    lambda v: self._set_guidance(int(float(v))))
+        g_guid = group(right, "유도  ·  PID 추적")
 
         # 예측 조준(lead) — 움직이는 공의 미래 위치를 겨냥 (control.lead_gain)
         self.lead = tk.Scale(g_guid, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",
-                             length=180, bg="#1e1e1e", fg="white", label="예측 조준 lead (기본 추적)",
+                             length=180, bg="#1e1e1e", fg="white", label="예측 조준 lead",
                              highlightthickness=0, troughcolor="#444")
         self.lead.set(0.0)
         self.lead.pack(pady=(2, 0))
@@ -584,59 +575,6 @@ class PanelGUI:
                     lambda v: self.lead.set(float(v)))
         self.lead.bind("<ButtonRelease-1>",
                        lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
-
-        self.pn_nav = tk.Scale(g_guid, from_=0, to=525, resolution=5, orient="horizontal",
-                               length=180, bg="#1e1e1e", fg="white", label="PN 항법이득 (PN 일때)",
-                               highlightthickness=0, troughcolor="#444")
-        self.pn_nav.set(175)
-        self.pn_nav.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.pn_nav_gain",
-                    lambda v: self.pn_nav.set(float(v)))
-        self.pn_nav.bind("<ButtonRelease-1>",
-                         lambda e: ros_param_set("control.pn_nav_gain", float(self.pn_nav.get())))
-        self.pn_center = tk.Scale(g_guid, from_=0.0, to=350.0, resolution=0.5, orient="horizontal",
-                                  length=180, bg="#1e1e1e", fg="white", label="PN 중심유지 (PN 일때)",
-                                  highlightthickness=0, troughcolor="#444")
-        self.pn_center.set(52.5)
-        self.pn_center.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.pn_center_gain",
-                    lambda v: self.pn_center.set(float(v)))
-        self.pn_center.bind("<ButtonRelease-1>",
-                            lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
-
-        self.ibvs_gain = tk.Scale(g_guid, from_=0.0, to=300.0, resolution=5.0, orient="horizontal",
-                                  length=180, bg="#1e1e1e", fg="white",
-                                  label="IBVS 배리어항 세기 (ibvs_gain, IBVS 일때)",
-                                  highlightthickness=0, troughcolor="#444")
-        self.ibvs_gain.set(50.0)
-        self.ibvs_gain.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.ibvs_gain",
-                    lambda v: self.ibvs_gain.set(float(v)))
-        self.ibvs_gain.bind("<ButtonRelease-1>",
-                            lambda e: ros_param_set("control.ibvs_gain", float(self.ibvs_gain.get())))
-
-        self.ibvs_center = tk.Scale(g_guid, from_=0.0, to=150.0, resolution=1.0, orient="horizontal",
-                                    length=180, bg="#1e1e1e", fg="white",
-                                    label="IBVS 중앙유지 (ibvs_center_gain, IBVS 일때)",
-                                    highlightthickness=0, troughcolor="#444")
-        self.ibvs_center.set(35.0)
-        self.ibvs_center.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.ibvs_center_gain",
-                    lambda v: self.ibvs_center.set(float(v)))
-        self.ibvs_center.bind("<ButtonRelease-1>",
-                              lambda e: ros_param_set("control.ibvs_center_gain", float(self.ibvs_center.get())))
-
-        self.ibvs_los_rate = tk.Scale(g_guid, from_=0.0, to=200.0, resolution=1.0, orient="horizontal",
-                                      length=180, bg="#1e1e1e", fg="white",
-                                      label="IBVS 리드항 (ibvs_los_rate_gain, IBVS 일때)",
-                                      highlightthickness=0, troughcolor="#444")
-        self.ibvs_los_rate.set(10.0)
-        self.ibvs_los_rate.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.ibvs_los_rate_gain",
-                    lambda v: self.ibvs_los_rate.set(float(v)))
-        self.ibvs_los_rate.bind(
-            "<ButtonRelease-1>",
-            lambda e: ros_param_set("control.ibvs_los_rate_gain", float(self.ibvs_los_rate.get())))
 
         # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수
@@ -758,27 +696,6 @@ class PanelGUI:
     def _show_enabled(self, v):
         self.ball_flying = str(v).strip().lower() in ("true", "1")
         self._refresh_ball_btns()
-
-    # ---- 유도 방식 전환 (기본 추적 → PN → IBVS → ...) ----
-    _GUID_LABELS = {
-        0: ("방식: 기본 추적",      "#37474f"),
-        1: ("방식: PN(비례항법)",   "#6a1b9a"),
-        2: ("방식: IBVS(공선유도)", "#00695c"),
-    }
-
-    def _apply_guid_label(self, pending=False):
-        text, color = self._GUID_LABELS.get(self._guidance_mode, self._GUID_LABELS[0])
-        self.guid_btn.config(text=text + (" …" if pending else ""), bg=color)
-
-    def _set_guidance(self, mode):
-        """버튼 표시만 갱신 (노드로 쓰지 않는다 — 노드에서 읽어온 값 반영용)."""
-        self._guidance_mode = mode if mode in self._GUID_LABELS else 0
-        self._apply_guid_label()
-
-    def toggle_guidance(self):
-        self._guidance_mode = (self._guidance_mode + 1) % 3
-        ros_param_set("control.guidance_mode", self._guidance_mode)
-        self._apply_guid_label(pending=True)   # 노드 확인 전까지 '…' 표시
 
     def place_on_launcher_axis(self):
         """발사기 앙각/방위를 노드에서 읽어, 조준선(튜브 축)과 현재 고도가 만나는 점에 공을 놓는다.

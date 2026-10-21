@@ -168,7 +168,7 @@ arms_sim             # Gazebo referee, panel, sim_reset_manager
 | 구형 `/arms/command` (폐기) | `operator/input` | `arms_operator_hardware_node` | 조종자가 의도한 stick, arm, auto/manual, RTL 등 고수준 입력 |
 | 없음 | `control/flight_command` | `arms_control_node` | 정규화된 최종 비행 명령. CRSF I/O와 SITL bridge가 기체별 RC/AUX·MAVLink로 변환 |
 | `/arms/control_debug` | `control/debug` | `arms_control_node` | 제어 상태와 일반 디버그 값 |
-| `/arms/ibvs_debug` | `control/ibvs_debug` | `arms_control_node` | image error, LOS rate, bbox, thrust 등 IBVS 값 |
+| 없음 | `control/diagnostics` | `arms_control_node` | PID 제어의 image error, lead rate, bbox, thrust 등 상세 값 |
 | `/arms/debug_looming` | `control/looming_debug` | `arms_control_node` | looming 유도 디버그 값 |
 | `/arms/mission_state` | `mission/state` | `arms_control_node` | IDLE, SEARCH, LOCK, TRACK, RTL 등 |
 
@@ -393,7 +393,7 @@ Section 3의 as-is → to-be 이름만 launch 단위로 전환한다.
 
 #### B2. control·mission·debug 도메인
 
-- 남아 있는 `control/debug`, `control/ibvs_debug`, `control/looming_debug`,
+- 남아 있는 `control/debug`, `control/diagnostics`, `control/looming_debug`,
   `mission/state`를 전환한다. `control/flight_command`는 Track A에서 이미 전환되어 있다.
 - UI의 상태 표시와 PlotJuggler 레이아웃을 함께 갱신한다.
 
