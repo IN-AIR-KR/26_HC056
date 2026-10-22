@@ -511,6 +511,9 @@ function setGuide(line, points) {
   if (!line) return;
   line.geometry.setFromPoints(points);
   line.computeLineDistances();
+  // setFromPoints() 뒤 이전 bounding sphere가 남으면, 드론이 멀어졌을 때
+  // frustum culling이 보조선을 화면 밖으로 잘못 판정할 수 있다.
+  line.geometry.computeBoundingSphere();
 }
 function initScene() {
   const host = $("scene-canvas");
@@ -528,9 +531,18 @@ function initScene() {
   S3.helpers = new THREE.Group(); S3.helpers.visible = S3.helpersVisible; S3.scene.add(S3.helpers);
   const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.helpers.add(grid);
   const worldAxes = new THREE.AxesHelper(4); S3.helpers.add(worldAxes);
-  const guide = (color) => new THREE.Line(
-    new THREE.BufferGeometry(),
-    new THREE.LineDashedMaterial({ color, dashSize: 0.45, gapSize: 0.28 }));
+  const guide = (color) => {
+    const line = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({
+        color, dashSize: 0.22, gapSize: 0.12,
+        depthTest: false, depthWrite: false,
+      }));
+    // 격자·기체 뒤에 가려지거나 이전 위치의 bounding sphere로 잘리지 않게 한다.
+    line.frustumCulled = false;
+    line.renderOrder = 2;
+    return line;
+  };
   S3.guideGround = guide(0x60a5fa);
   S3.guideHeight = guide(0x94a3b8);
   S3.guideDirect = guide(0xfbbf24);
@@ -620,8 +632,10 @@ function updateScene(t) {
     $("scene-info").textContent = `t=${t.toFixed(2)}s · R ${a(roll)} P ${a(pitch)} Y ${a(yaw)}`;
     $("scene-metrics").textContent =
       `출발 위치 기준: X(E) ${pos.x.toFixed(1)} m · Y(N) ${pos.z.toFixed(1)} m · ΔU ${pos.y.toFixed(1)} m · 수평 ${horizontal.toFixed(1)} m · 직선 ${direct.toFixed(1)} m`;
-    const ground = new THREE.Vector3(pos.x, 0, pos.z);
-    setGuide(S3.guideGround, [new THREE.Vector3(), ground]);
+    // GridHelper와 동일 평면이면 z-fighting이 생기므로 아주 조금 띄운다.
+    const ground = new THREE.Vector3(pos.x, 0.02, pos.z);
+    const groundOrigin = new THREE.Vector3(0, 0.02, 0);
+    setGuide(S3.guideGround, [groundOrigin, ground]);
     setGuide(S3.guideHeight, [ground, pos.clone()]);
     setGuide(S3.guideDirect, [new THREE.Vector3(), pos.clone()]);
   } else {
