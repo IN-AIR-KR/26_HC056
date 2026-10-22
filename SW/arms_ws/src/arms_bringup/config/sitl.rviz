@@ -33,6 +33,16 @@ Visualization Manager:
         Durability Policy: Volatile
         Reliability Policy: Reliable
         History Policy: Keep Last
+    # PN 횡가속도 벡터. 별도 Display라 좌측 체크박스로 독립적으로 켜고 끌 수 있다.
+    - Class: rviz_default_plugins/Marker
+      Name: PN acceleration
+      Enabled: true
+      Topic:
+        Value: /arms/sim/viz/pn_acceleration
+        Depth: 1
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        History Policy: Keep Last
     - Class: rviz_default_plugins/Path
       Name: Drone path
       Enabled: true

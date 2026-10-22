@@ -10,9 +10,11 @@ ground truth 라서 SITL 전용이다 — 그래서 arms_ui(실기체·시뮬 �
   발행 : /arms/viz/drone_path       nav_msgs/Path   드론 궤적
   발행 : /arms/viz/target_path      nav_msgs/Path   표적 궤적
   발행 : /arms/viz/markers          visualization_msgs/MarkerArray  기체 메쉬 + 표적
+  발행 : /arms/sim/viz/pn_acceleration  visualization_msgs/Marker  PN 횡가속도 화살표
 
   구독 : gz /world/<world>/dynamic_pose/info   (in-process gz transport)
   구독 : /arms/reset                에피소드 경계 → 궤적 비움
+  구독 : /arms/control/pn_debug     PN 가속도(NED) → RViz ENU 화살표
 
 rviz Fixed Frame 은 map 으로 둔다.
 
@@ -41,12 +43,15 @@ from nav_msgs.msg import Path
 from std_msgs.msg import Empty
 from visualization_msgs.msg import Marker, MarkerArray
 from tf2_ros import TransformBroadcaster
+from arms_msgs.msg import PnDebug
 
 MODEL_BALLOON = "target_ball"
 MODEL_DRONE = "target_uav"
 # 이 z 아래로 내려간 모델은 '숨긴 것'으로 본다. referee 가 안 쓰는 표적을
 # HIDE_Z(-100) 지하로 치우는데, 그걸 그리면 지하로 내려가는 궤적이 생긴다.
 HIDDEN_Z = -50.0
+PN_MARKER_MAX_AGE_SEC = 0.5
+PN_MARKER_SCALE_M_PER_MPS2 = 1.0
 
 # 기체 메쉬는 model.sdf 의 visual 과 같은 보정을 줘야 자세가 맞는다:
 #   <pose>0 0 0 -1.5708 0 0.7854</pose>, <scale>0.001</scale>
@@ -127,6 +132,8 @@ class SitlViz(Node):
         self._target_path = []
         self._target_name = None    # 궤적이 어느 표적의 것인지 (바뀌면 비운다)
         self._drone_logged = False
+        self._pn_debug = None
+        self._pn_debug_received_sec = None
 
         self._mesh_uri = self._find_mesh()
 
@@ -134,7 +141,10 @@ class SitlViz(Node):
         self._pub_drone_path = self.create_publisher(Path, "sim/viz/drone_path", 1)
         self._pub_target_path = self.create_publisher(Path, "sim/viz/target_path", 1)
         self._pub_markers = self.create_publisher(MarkerArray, "sim/viz/markers", 1)
+        self._pub_pn_acceleration = self.create_publisher(
+            Marker, "sim/viz/pn_acceleration", 1)
         self.create_subscription(Empty, "sim/reset_event", self._on_reset, 10)
+        self.create_subscription(PnDebug, "control/pn_debug", self._on_pn_debug, 10)
 
         world = self.get_parameter("world").value
         if _GZ_OK:
@@ -175,6 +185,12 @@ class SitlViz(Node):
             self._target_path.clear()
         self.get_logger().info("실험 RESET: 궤적 비움")
 
+    def _on_pn_debug(self, msg):
+        """최근 PN 출력만 보관한다. RViz 발행은 pose와 맞추기 위해 타이머에서 한다."""
+        with self._lock:
+            self._pn_debug = msg
+            self._pn_debug_received_sec = self.get_clock().now().nanoseconds / 1e9
+
     def _on_poses(self, msg):
         """gz dynamic pose 콜백 — 최신 포즈만 담아둔다 (발행은 타이머가)."""
         drone = target = None
@@ -201,6 +217,8 @@ class SitlViz(Node):
         now = self.get_clock().now().to_msg()
         with self._lock:
             drone, target = self._drone, self._target
+            pn_debug = self._pn_debug
+            pn_received_sec = self._pn_debug_received_sec
             if target and target[0] != self._target_name:
                 # 표적 종류가 바뀌었다(풍선↔드론). 다른 물체이므로 궤적을 잇지 않는다.
                 self._target_name = target[0]
@@ -229,6 +247,8 @@ class SitlViz(Node):
             self._send_tf(now, target)
             markers.markers.append(self._target_marker(now, target))
         self._pub_markers.publish(markers)
+        self._pub_pn_acceleration.publish(
+            self._pn_acceleration_marker(now, drone, pn_debug, pn_received_sec))
         self._pub_drone_path.publish(self._path_msg(now, drone_pts))
         self._pub_target_path.publish(self._path_msg(now, target_pts))
 
@@ -318,6 +338,44 @@ class SitlViz(Node):
         m.points = [p0, p1]
         m.scale.x = 0.12          # LINE_STRIP 은 scale.x 가 선 두께
         m.color.r, m.color.g, m.color.b, m.color.a = 0.2, 1.0, 0.4, 0.8
+        return m
+
+    def _pn_acceleration_marker(self, stamp, drone, pn_debug, received_sec):
+        """PN 횡가속도 NED를 Gazebo/RViz ENU의 노란 화살표로 바꾼다.
+
+        PnDebug의 (north, east, down)을 RViz world의 (east, north, up)으로
+        변환한다. PN 출력이 유효하지 않거나 PID 모드로 돌아가 새 데이터가 끊기면
+        DELETE를 보내 이전 화살표가 남지 않게 한다.
+        """
+        m = self._base_marker(stamp, "pn_acceleration", 0)
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if (drone is None or pn_debug is None or received_sec is None or
+                now_sec - received_sec > PN_MARKER_MAX_AGE_SEC or
+                not pn_debug.valid or not pn_debug.command_active):
+            m.action = Marker.DELETE
+            return m
+
+        # NED(north, east, down) -> ENU(east, north, up)
+        ax = float(pn_debug.acceleration_pn_y)
+        ay = float(pn_debug.acceleration_pn_x)
+        az = -float(pn_debug.acceleration_pn_z)
+        magnitude = math.sqrt(ax * ax + ay * ay + az * az)
+        if not math.isfinite(magnitude) or magnitude < 1e-4:
+            m.action = Marker.DELETE
+            return m
+
+        _, pos, _ = drone
+        tail, tip = Point(), Point()
+        tail.x, tail.y, tail.z = pos
+        tip.x = tail.x + ax * PN_MARKER_SCALE_M_PER_MPS2
+        tip.y = tail.y + ay * PN_MARKER_SCALE_M_PER_MPS2
+        tip.z = tail.z + az * PN_MARKER_SCALE_M_PER_MPS2
+        m.type = Marker.ARROW
+        m.points = [tail, tip]
+        m.scale.x = 0.10  # shaft diameter
+        m.scale.y = 0.22  # head diameter
+        m.scale.z = 0.28  # head length
+        m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.82, 0.0, 1.0
         return m
 
     def _target_marker(self, stamp, entity):
