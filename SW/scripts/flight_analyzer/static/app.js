@@ -536,9 +536,9 @@ function initScene() {
       new THREE.BufferGeometry(),
       new THREE.LineDashedMaterial({
         color, dashSize: 0.22, gapSize: 0.12,
-        depthTest: false, depthWrite: false,
       }));
-    // 격자·기체 뒤에 가려지거나 이전 위치의 bounding sphere로 잘리지 않게 한다.
+    // 이전 위치의 bounding sphere 때문에 잘리지 않게 한다.
+    // 깊이 판정은 기본값(true)으로 유지해 풍선/드론 내부에는 선이 보이지 않는다.
     line.frustumCulled = false;
     line.renderOrder = 2;
     return line;
