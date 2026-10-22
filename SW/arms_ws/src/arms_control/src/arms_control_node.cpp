@@ -1188,7 +1188,10 @@ class ArmsControlNode : public rclcpp::Node {
     } else if (pn_attitude_mode) {
       const double angle_limit = std::max(max_angle_deg_, 1.0);
       flight_cmd.roll = std::clamp(roll_rate_cmd, -angle_limit, angle_limit) / angle_limit;
-      flight_cmd.pitch = std::clamp(pitch_rate_cmd, -angle_limit, angle_limit) / angle_limit;
+      // PN의 Euler pitch(FRD/NED)는 음수=기수 하강이다. 반면 FC의 manual
+      // pitch stick은 양수=스틱 전진=기수 하강이므로, normalized command
+      // 경계에서 부호를 한 번 반전한다. flight_io는 이 규약을 그대로 전달한다.
+      flight_cmd.pitch = -std::clamp(pitch_rate_cmd, -angle_limit, angle_limit) / angle_limit;
       flight_cmd.throttle = std::clamp(thrust, 0.0F, 1.0F);
       flight_cmd.yaw = 0.0F;
     } else {
