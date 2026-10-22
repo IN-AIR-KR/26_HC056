@@ -12,8 +12,10 @@
 #include <vector>
 
 #include "arms_control/pid_controller.hpp"
+#include "arms_control/pn_guidance.hpp"
 #include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
+#include "arms_msgs/msg/attitude_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/flight_command.hpp"
 #include "arms_msgs/msg/control_debug.hpp"
@@ -71,6 +73,18 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.control_rate_hz", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.deadzone", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.deriv_lpf_alpha", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    // 0=기존 PID rate guidance(ACRO), 1=관성 LOS-rate PN(Stabilized attitude).
+    declare_required_parameter("control.guidance_mode", rclcpp::ParameterType::PARAMETER_INTEGER);
+    declare_required_parameter("control.max_angle_deg", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.navigation_ratio", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.approach_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.target_diameter_m", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.closing_speed_alpha", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.kf_accel_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.kf_measurement_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.max_lateral_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.max_measurement_age_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.camera.r_bc", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
 
     declare_required_parameter("mission.sitl_auto_launch", rclcpp::ParameterType::PARAMETER_BOOL);
     // 종말 RTL 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
@@ -273,6 +287,32 @@ class ArmsControlNode : public rclcpp::Node {
     camera_aspect_ = get_parameter("control.camera.aspect").as_double();
     load_camera_params();
     update_camera_tan_scale();
+    guidance_mode_ = static_cast<int>(get_parameter("control.guidance_mode").as_int());
+    max_angle_deg_ = get_parameter("control.max_angle_deg").as_double();
+    pn_params_.navigation_ratio = get_parameter("control.pn.navigation_ratio").as_double();
+    pn_params_.approach_accel_mps2 = get_parameter("control.pn.approach_accel_mps2").as_double();
+    pn_params_.target_diameter_m = get_parameter("control.pn.target_diameter_m").as_double();
+    pn_params_.closing_speed_alpha = get_parameter("control.pn.closing_speed_alpha").as_double();
+    pn_params_.kf_accel_noise = get_parameter("control.pn.kf_accel_noise").as_double();
+    pn_params_.kf_measurement_noise = get_parameter("control.pn.kf_measurement_noise").as_double();
+    pn_params_.max_lateral_accel_mps2 =
+        get_parameter("control.pn.max_lateral_accel_mps2").as_double();
+    pn_measurement_age_sec_ = get_parameter("control.pn.max_measurement_age_sec").as_double();
+    pn_params_.max_throttle = track_throttle_;
+    pn_params_.hover_throttle = hover_throttle_;
+    pn_camera_.fx = cam_fx_;
+    pn_camera_.fy = cam_fy_;
+    pn_camera_.cx = cam_cx_;
+    pn_camera_.cy = cam_cy_;
+    pn_camera_.width = cam_width_;
+    pn_camera_.height = cam_height_;
+    const auto pn_r_bc = get_parameter("control.pn.camera.r_bc").as_double_array();
+    if (pn_r_bc.size() != pn_camera_.r_bc.v.size()) {
+      throw std::runtime_error("control.pn.camera.r_bc must contain exactly 9 values");
+    }
+    std::copy(pn_r_bc.begin(), pn_r_bc.end(), pn_camera_.r_bc.v.begin());
+    pn_guidance_.set_parameters(pn_params_);
+    pn_guidance_.set_camera(pn_camera_);
     near_size_start_ = get_parameter("control.near_size_start").as_double();
     near_size_full_ = get_parameter("control.near_size_full").as_double();
     min_gain_scale_ = get_parameter("control.min_gain_scale").as_double();
@@ -297,14 +337,18 @@ class ArmsControlNode : public rclcpp::Node {
           rcl_interfaces::msg::SetParametersResult res;
           res.successful = true;
           bool pid_changed = false;
+          bool pn_changed = false;
           for (const auto& p : params) {
             const std::string& n = p.get_name();
             if (n == "control.roll_sign")
               roll_sign_ = p.as_double();
             else if (n == "control.pitch_sign")
               pitch_sign_ = p.as_double();
-            else if (n == "control.track_throttle")
+            else if (n == "control.track_throttle") {
               track_throttle_ = p.as_double();
+              pn_params_.max_throttle = track_throttle_;
+              pn_changed = true;
+            }
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
             else if (n == "control.aim_above_offset")
@@ -315,8 +359,11 @@ class ArmsControlNode : public rclcpp::Node {
               deadzone_ = p.as_double();
             else if (n == "control.max_rate_dps")
               max_rate_dps_ = p.as_double();
-            else if (n == "control.hover_throttle")
+            else if (n == "control.hover_throttle") {
               hover_throttle_ = p.as_double();
+              pn_params_.hover_throttle = hover_throttle_;
+              pn_changed = true;
+            }
             else if (n == "control.pursuit_gate")
               pursuit_gate_ = p.as_double();
             else if (n == "control.pursuit_center_boost")
@@ -332,6 +379,26 @@ class ArmsControlNode : public rclcpp::Node {
             else if (n == "control.max_cmd_rate_dps") {
               max_cmd_rate_dps_ = p.as_double();
               pid_changed = true;   // PID 출력 한계도 이 값이라 같이 반영해야 한다
+            }
+            else if (n == "control.guidance_mode") {
+              guidance_mode_ = static_cast<int>(p.as_int());
+              pn_guidance_.reset();
+            } else if (n == "control.max_angle_deg") {
+              max_angle_deg_ = p.as_double();
+            } else if (n == "control.pn.navigation_ratio") {
+              pn_params_.navigation_ratio = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.approach_accel_mps2") {
+              pn_params_.approach_accel_mps2 = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.target_diameter_m") {
+              pn_params_.target_diameter_m = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.closing_speed_alpha") {
+              pn_params_.closing_speed_alpha = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.kf_accel_noise") {
+              pn_params_.kf_accel_noise = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.kf_measurement_noise") {
+              pn_params_.kf_measurement_noise = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.max_lateral_accel_mps2") {
+              pn_params_.max_lateral_accel_mps2 = p.as_double(); pn_changed = true;
             }
             else if (n == "control.gain_shaping")
               gain_shaping_ = p.as_bool();
@@ -392,6 +459,7 @@ class ArmsControlNode : public rclcpp::Node {
             pid_roll_->set_gains(rkp_, rki_, rkd_, max_cmd_rate_dps_);
             pid_pitch_->set_gains(pkp_, pki_, pkd_, max_cmd_rate_dps_);
           }
+          if (pn_changed) pn_guidance_.set_parameters(pn_params_);
           RCLCPP_INFO(get_logger(),
                       "param 적용: roll_sign=%.0f pitch_sign=%.0f rkp=%.1f "
                       "rkd=%.1f track_thr=%.2f",
@@ -420,6 +488,40 @@ class ArmsControlNode : public rclcpp::Node {
         [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
           sm_->on_detection(msg->detections);
           update_looming(msg);
+        });
+
+    // PN은 detector의 추적/KF 결과를 다시 미분하지 않도록 원시 bbox를 한 번만
+    // 필터링한다. DetectionArray header는 원본 이미지 촬영 시각을 유지한다.
+    sub_detections_raw_ = create_subscription<arms_msgs::msg::DetectionArray>(
+        "perception/detections_raw", best_effort_qos,
+        [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
+          if (msg->detections.empty()) return;
+          const auto best = std::max_element(
+              msg->detections.begin(), msg->detections.end(),
+              [](const auto &a, const auto &b) { return a.confidence < b.confidence; });
+          rclcpp::Time sample(msg->header.stamp, get_clock()->get_clock_type());
+          if (sample.nanoseconds() == 0) sample = now();
+          pn::Quaternion attitude;
+          if (!pn_attitudes_.interpolate(
+                  sample.seconds(), pn_measurement_age_sec_, attitude)) {
+            return;
+          }
+          pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
+                                        best->width, best->height, attitude);
+        });
+
+    // raw IMU/gyro는 직접 구독하지 않는다. SITL(PX4 MAVLink)과 실기체(CRSF)가
+    // 공통으로 제공하는 attitude estimate를 검출 시각에 보간해 관성 LOS를 만든다.
+    sub_attitude_ = create_subscription<arms_msgs::msg::AttitudeTelemetry>(
+        "vehicle/attitude", rclcpp::SensorDataQoS(),
+        [this](arms_msgs::msg::AttitudeTelemetry::SharedPtr msg) {
+          rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
+          if (stamp.nanoseconds() == 0) stamp = now();
+          pn_attitudes_.push(
+              stamp.seconds(), pn::Quaternion::from_euler(
+                                  msg->roll_deg * pn::kDegToRad,
+                                  msg->pitch_deg * pn::kDegToRad,
+                                  msg->yaw_deg * pn::kDegToRad));
         });
 
     sub_input_ = create_subscription<arms_msgs::msg::OperatorInput>(
@@ -517,6 +619,8 @@ class ArmsControlNode : public rclcpp::Node {
           err_dot_x_ = err_dot_y_ = 0.0;
           loom_s_ema_ = loom_rate_ema_ = 0.0;
           loom_init_ = false;
+          pn_guidance_.reset();
+          pn_attitudes_.clear();
           align_locked_ = false;
           auto_armed_ = manual_armed_ = false;
           lock_timer_started_ = auto_launched_ = false;
@@ -733,7 +837,7 @@ class ArmsControlNode : public rclcpp::Node {
     }
     State state = sm_->state();
 
-    // 유도 출력 = 각속도 명령[deg/s]. 각도가 아니다 (ACRO 고정, 자세 피드백 없음).
+    // PID는 각속도[deg/s](ACRO), PN은 목표 자세[deg](Stabilized)를 만든다.
     double roll_rate_cmd = 0.0;
     double pitch_rate_cmd = 0.0;
     float thrust = 0.f;
@@ -907,16 +1011,40 @@ class ArmsControlNode : public rclcpp::Node {
         }
       }
 
+      if (state == State::TRACK && guidance_mode_ == 1) {
+        // PN은 world NED의 desired thrust vector에서 만든 목표 자세를 사용한다.
+        // 계산에 필요한 attitude 또는 raw bbox가 오래되면 추력을 내지 않는다. PID 출력을
+        // Stabilized 입력으로 잘못 해석하는 fallback은 허용하지 않는다.
+        const auto &pn_out = pn_guidance_.output();
+        const bool fresh = pn_out.valid &&
+            (now_t.seconds() - pn_out.stamp_sec) >= 0.0 &&
+            (now_t.seconds() - pn_out.stamp_sec) <= pn_measurement_age_sec_;
+        if (fresh) {
+          const auto &desired = pn_out.attitude_desired_nb;
+          roll_rate_cmd = std::atan2(desired(2, 1), desired(2, 2)) * pn::kRadToDeg;
+          pitch_rate_cmd = std::asin(std::clamp(-desired(2, 0), -1.0, 1.0)) * pn::kRadToDeg;
+          thrust = static_cast<float>(pn_out.throttle);
+          idbg.guidance_x = pn_out.acceleration_pn_ned.y;
+          idbg.guidance_y = pn_out.acceleration_pn_ned.x;
+        } else {
+          roll_rate_cmd = 0.0;
+          pitch_rate_cmd = 0.0;
+          thrust = 0.0F;
+        }
+      }
+
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
-                    "TRACK[PID] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f "
-                    "tau=%.2fs ease=%.2f thr=%.2f rate=(%.0f,%.0f)deg/s",
+                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f "
+                    "tau=%.2fs ease=%.2f thr=%.2f cmd=(%.0f,%.0f)%s",
+                    guidance_mode_ == 1 ? "PN" : "PID",
                     filt_err_x_, filt_err_y_,
                     err_dot_x_, err_dot_y_,
                     loom_s_ema_,
                     std::isfinite(tau_sec_) ? tau_sec_ : 9.99, tau_ease_dbg_, thrust,
                     roll_rate_cmd,
-                    pitch_rate_cmd);
+                    pitch_rate_cmd,
+                    guidance_mode_ == 1 ? "deg" : "deg/s");
       }
       }
     } else {
@@ -928,6 +1056,7 @@ class ArmsControlNode : public rclcpp::Node {
       thrust = 0.f;
       align_locked_ = false;
       tau_ease_dbg_ = 1.0;
+      pn_guidance_.reset();
     }
 
     // ---- 유효 스위치 = 상태 스위치 && 재토글 래치 해제 ----
@@ -1054,12 +1183,20 @@ class ArmsControlNode : public rclcpp::Node {
     flight_cmd.header.stamp = now_t;
     flight_cmd.arm = ch5_armed;
     flight_cmd.manual_mode = manual_out;
+    const bool pn_attitude_mode = !manual_out && state == State::TRACK && guidance_mode_ == 1;
+    flight_cmd.stabilized_mode = pn_attitude_mode;
     flight_cmd.rtl_request = rtl_handover;
     if (manual_out) {
       flight_cmd.roll = joy_axes_[2];
       flight_cmd.pitch = joy_axes_[3];
       flight_cmd.throttle = std::clamp((joy_axes_[1] + 1.0F) * 0.5F, 0.0F, 1.0F);
       flight_cmd.yaw = joy_axes_[0];
+    } else if (pn_attitude_mode) {
+      const double angle_limit = std::max(max_angle_deg_, 1.0);
+      flight_cmd.roll = std::clamp(roll_rate_cmd, -angle_limit, angle_limit) / angle_limit;
+      flight_cmd.pitch = std::clamp(pitch_rate_cmd, -angle_limit, angle_limit) / angle_limit;
+      flight_cmd.throttle = std::clamp(thrust, 0.0F, 1.0F);
+      flight_cmd.yaw = 0.0F;
     } else {
       // Preserve the previous two-stage limit: guidance output is
       // bounded by max_cmd_rate_dps before conversion to the FC stick range.
@@ -1096,7 +1233,7 @@ class ArmsControlNode : public rclcpp::Node {
     // ---- Debug publish (UI 화살표용) — 구독자 있을 때만 ----
     if (pub_dbg_->get_subscription_count() > 0) {
       geometry_msgs::msg::Vector3 dbg;
-      dbg.x = roll_rate_cmd;   // deg/s (각도 아님)
+      dbg.x = roll_rate_cmd;   // PID: deg/s, PN: desired attitude deg
       dbg.y = pitch_rate_cmd;
       dbg.z = thrust;
       pub_dbg_->publish(dbg);
@@ -1248,6 +1385,14 @@ class ArmsControlNode : public rclcpp::Node {
   double err_dot_clamp_{0.6};
   double max_cmd_rate_dps_{227.5};   // 유도 출력 각속도 상한[deg/s]
   bool   gain_shaping_{false};       // 중심 근처 게인 감쇠 (기본 off = 순수 P)
+  // 0=PID rate guidance(ACRO), 1=PN attitude guidance(Stabilized).
+  int guidance_mode_{0};
+  double max_angle_deg_{55.0};
+  double pn_measurement_age_sec_{0.20};
+  pn::Parameters pn_params_{};
+  pn::CameraModel pn_camera_{};
+  pn::Guidance pn_guidance_{};
+  pn::AttitudeBuffer pn_attitudes_{};
   // 카메라 tan 좌표 근사값. calibrated=true면 control.camera 내부파라미터를 쓴다.
   double camera_hfov_deg_{43.6028};
   double camera_aspect_{0.6666667};
@@ -1272,6 +1417,8 @@ class ArmsControlNode : public rclcpp::Node {
   double tau_ease_min_scale_{0.3};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
+  rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_raw_;
+  rclcpp::Subscription<arms_msgs::msg::AttitudeTelemetry>::SharedPtr sub_attitude_;
   rclcpp::Subscription<arms_msgs::msg::OperatorInput>::SharedPtr sub_input_;
   rclcpp::Subscription<arms_msgs::msg::IoStatus>::SharedPtr sub_io_status_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;

@@ -62,11 +62,9 @@ class ArmsSITLCommNode(Node):
 
         self._conn_str   = self.get_parameter("connection").value
         self._send_rate  = self.get_parameter("send_rate_hz").value
-        # 자동(CH6 low)은 ACRO 고정이다. 고를 여지가 없다 -- arms_control_node 가
-        # 내는 자동 출력은 각속도[deg/s]를 max_rate_dps 로 정규화한 값이고, PX4 가
-        # 그걸 각속도로 되돌리는 모드는 ACRO 뿐이다. Manual(각도) 로 넣으면 같은
-        # 숫자에 MPC_MAN_TILT_MAX 가 곱해져 '기울기 명령'으로 조용히 오해석된다
-        # (안 떨어지고 그냥 다른 제어 법칙으로 난다 -- 그래서 더 나쁘다).
+        # PID 자동유도는 ACRO rate 명령을, PN 자동유도는 Stabilized attitude 명령을
+        # 사용한다. manual_mode와 stabilized_mode는 모두 CH6 high를 뜻하지만,
+        # 전자는 스틱 passthrough이고 후자는 자동 목표 자세 명령이다.
 
         self._command = FlightCommand()
         self._ch5_high  = False        # arm switch, level (not edge) — kept in sync with CH5
@@ -132,8 +130,8 @@ class ArmsSITLCommNode(Node):
                 time.sleep(3.0)
 
     def _initial_setup(self):
-        """Set default autonomous mode after EKF convergence; arming is done via CH5.
-        Flight mode thereafter follows CH6 (low=ACRO/자동, high=Stabilized/수동)."""
+        """Set the default ACRO mode after EKF convergence; arming is via CH5.
+        Flight mode thereafter follows FlightCommand (ACRO or Stabilized)."""
         # PX4가 이전 SITL 실행의 저장 파라미터를 복원할 수 있다. 이 경우 airframe의
         # `set-default RC_MAP_KILL_SW 0`만으로는 CH7=kill을 해제하지 못한다.
         # 연결 직후 강제로 지워 RTL 첫 입력부터 motor kill이 되지 않게 한다.
@@ -271,9 +269,11 @@ class ArmsSITLCommNode(Node):
     def _on_command(self, command: FlightCommand):
         """Map semantic command edges to PX4 services; axes go out at the timer rate."""
         with self._lock:
-            if command.manual_mode != self._command.manual_mode:
+            requested_stabilized = command.manual_mode or command.stabilized_mode
+            previous_stabilized = self._command.manual_mode or self._command.stabilized_mode
+            if requested_stabilized != previous_stabilized:
                 self._mode_pending = (PX4_CUSTOM_MAIN_MODE_STABILIZED
-                                      if command.manual_mode else PX4_CUSTOM_MAIN_MODE_ACRO)
+                                      if requested_stabilized else PX4_CUSTOM_MAIN_MODE_ACRO)
             if command.rtl_request and not self._command.rtl_request:
                 self._rtl_pending = True
             if self._ch5_high and not command.arm:
@@ -339,7 +339,7 @@ class ArmsSITLCommNode(Node):
                                       int(1000 + max(0.0, min(1.0, command.throttle)) * 1000),
                                       axis(command.yaw))
         us[4] = 2000 if command.arm else 1000
-        us[5] = 2000 if command.manual_mode else 1000
+        us[5] = 2000 if (command.manual_mode or command.stabilized_mode) else 1000
         us[6] = 2000 if command.rtl_request else 1000
         try:
             self._mav.mav.rc_channels_override_send(

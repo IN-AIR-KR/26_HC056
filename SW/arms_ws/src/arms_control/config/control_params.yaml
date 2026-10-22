@@ -48,8 +48,8 @@
     # =====================================================================
     # 자동 제어: PID + 시간기반 lead (PX4 ACRO)
     # =====================================================================
-    # 화면 정규화 오차 → tan 카메라 좌표 → LPF/deadzone/lead → PID 각속도[deg/s]
-    # → 근접도 스케줄링·clamp → flight_command. 추력은 별도 pursuit 경로에서 만든다.
+    # PID: 화면 정규화 오차 → tan 카메라 좌표 → rate[deg/s] → ACRO.
+    # PN: raw bbox + timestamped attitude → 관성 LOS-rate → attitude[deg] → Stabilized.
     control:
       # ── 루프와 최종 출력 범위 ──────────────────────────────────────────
       control_rate_hz: 50.0
@@ -57,6 +57,8 @@
       # max_rate_dps: FC ACRO의 풀스틱 각속도. 자동 명령은 이 값으로 나눠 정규화한다.
       max_cmd_rate_dps: 227.5
       max_rate_dps: 400.0
+      # PN의 목표 roll/pitch 각도 상한. PX4/Betaflight Stabilized의 풀스틱 tilt와 맞춘다.
+      max_angle_deg: 55.0
       roll_sign: 1.0
       pitch_sign: 1.0
 
@@ -102,6 +104,30 @@
       err_dot_clamp: 0.6
       # 구 물리량 시절 지터 대책. false는 순수 PID이며 현재 기본값이다.
       gain_shaping: false
+
+      # ── PN 관성 LOS-rate 유도 ──────────────────────────────────────────
+      # guidance_mode: 0=기존 PID/ACRO, 1=PN/Stabilized. 기본은 검증된 PID다.
+      # PN은 raw bbox와 vehicle/attitude를 촬영시각 기준으로 합성한다. raw IMU/gyro는
+      # 직접 쓰지 않고 FC가 추정해 발행한 attitude를 사용한다.
+      guidance_mode: 0
+      pn:
+        navigation_ratio: 3.0
+        # LOS 방향의 접근 가속도. PN 횡가속도와 합쳐 gravity compensation에 사용한다.
+        approach_accel_mps2: 5.0
+        # SITL 풍선 지름(반지름 0.25 m). 실기체에서는 실제 풍선 지름으로 덮어쓴다.
+        target_diameter_m: 0.50
+        closing_speed_alpha: 0.25
+        kf_accel_noise: 0.8
+        kf_measurement_noise: 0.0025
+        max_lateral_accel_mps2: 12.0
+        # raw detection 촬영시각에 대응하는 attitude가 이보다 오래되면 PN 명령을 차단한다.
+        max_measurement_age_sec: 0.20
+        camera:
+          # OpenCV optical(right, down, forward) → PX4 body FRD.
+          # 상방 카메라: optical forward는 body up(-z)다.
+          r_bc: [0.0, 1.0, 0.0,
+                 1.0, 0.0, 0.0,
+                 0.0, 0.0, -1.0]
 
       # ── 근접도 기반 출력 스케줄링 ──────────────────────────────────────
       # bbox가 커질수록(가까워질수록) 회전 게인과 최대 추력을 함께 낮춘다.

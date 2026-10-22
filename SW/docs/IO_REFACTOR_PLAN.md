@@ -276,8 +276,9 @@ OperatorInput
 
 FlightCommand
   header, roll, pitch, throttle, yaw
-  arm, manual_mode, rtl_request
+  arm, manual_mode, stabilized_mode, rtl_request
   # -1..1 또는 throttle 0..1의 기체 비종속 명령. RC 채널값은 담지 않는다.
+  # stabilized_mode는 자동 PN의 목표 자세 입력용이며 manual_mode(스틱 passthrough)와 다르다.
 
 IoStatus
   header

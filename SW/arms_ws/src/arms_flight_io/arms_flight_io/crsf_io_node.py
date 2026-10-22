@@ -129,7 +129,8 @@ class CrsfIoNode(Node):
         channels[2] = _throttle(cmd.throttle)
         channels[3] = _norm(cmd.yaw)
         channels[4] = CRSF_MAX if cmd.arm else CRSF_MIN
-        channels[5] = CRSF_MAX if cmd.manual_mode else CRSF_MIN
+        # manual_mode는 스틱 passthrough, stabilized_mode는 자동 자세 유도용이다.
+        channels[5] = CRSF_MAX if (cmd.manual_mode or cmd.stabilized_mode) else CRSF_MIN
         channels[6] = CRSF_MAX if cmd.rtl_request else CRSF_MIN
         try:
             packet = _packed_channels(channels)
