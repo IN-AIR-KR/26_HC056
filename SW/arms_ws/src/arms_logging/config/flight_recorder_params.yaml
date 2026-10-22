@@ -6,6 +6,7 @@
       - /arms/perception/detections
       - /arms/perception/status
       - /arms/control/diagnostics
+      - /arms/control/pn_debug
       - /arms/control/debug
       - /arms/io/crsf/tx
       - /arms/io/crsf/rx
@@ -16,6 +17,7 @@
       - /arms/operator/input
       - /arms/control/flight_command
       - /arms/io/status
+      - /arms/sim/guidance_ground_truth
     save_dir: ~/arms_flight_logs_ibvs
     storage: sqlite3
     tag: ''

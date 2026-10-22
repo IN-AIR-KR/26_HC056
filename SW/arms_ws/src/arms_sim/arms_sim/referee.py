@@ -422,6 +422,8 @@ class BalloonReferee(Node):
             if not self._launched_once or self._park_point() != self._last_park_req:
                 self._park_at_start()   # 멱등 — 이미 제자리면 no-op
             self._prev_enabled = False
+            # 정지 풍선에서도 드론은 접근하므로 GT LOS-rate/접근속도는 계속 유효하다.
+            self._publish_guidance_ground_truth(now)
             return
 
         # ---- 비활성→활성 상승엣지(=비행시작/재개) ----

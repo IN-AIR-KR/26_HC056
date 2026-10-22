@@ -14,6 +14,8 @@ const D = "/arms/perception/detections";
 const DR = "/arms/perception/detections_raw";
 const DS = "/arms/perception/status";
 const IO = "/arms/io/status";
+const PN = "/arms/control/pn_debug";
+const PN_GT = "/arms/sim/guidance_ground_truth";
 const RATE = "__flight_analyzer_rates";
 const RATE_WINDOW_SEC = 1.0;
 const RATE_STEP_SEC = 0.1;
@@ -64,6 +66,25 @@ const FIELD_INFO = {
   control_hz: "1초 이동 윈도우의 control debug 메시지 수신율 [Hz]",
   tx_uart_write_hz: "최근 1초 UART write 성공 CRSF 채널 프레임율 [Hz]",
   rx_uart_valid_frame_hz: "최근 1초 UART 수신·CRC 통과 CRSF 프레임율 [Hz]",
+  estimated_los_rate_x: "영상·자세로 추정한 LOS 각속도 NED north [rad/s]",
+  estimated_los_rate_y: "영상·자세로 추정한 LOS 각속도 NED east [rad/s]",
+  estimated_los_rate_z: "영상·자세로 추정한 LOS 각속도 NED down [rad/s]",
+  applied_los_rate_x: "PN 식에 실제 입력한 LOS 각속도 NED north [rad/s]",
+  applied_los_rate_y: "PN 식에 실제 입력한 LOS 각속도 NED east [rad/s]",
+  applied_los_rate_z: "PN 식에 실제 입력한 LOS 각속도 NED down [rad/s]",
+  estimated_closing_speed_mps: "bbox scale로 추정한 접근속도 [m/s]",
+  applied_closing_speed_mps: "PN 식에 실제 입력한 접근속도 [m/s]",
+  closing_speed_mps: "Gazebo world pose 기준 접근속도 [m/s]",
+  los_rate_x: "Gazebo world pose 기준 LOS 각속도 NED north [rad/s]",
+  los_rate_y: "Gazebo world pose 기준 LOS 각속도 NED east [rad/s]",
+  los_rate_z: "Gazebo world pose 기준 LOS 각속도 NED down [rad/s]",
+  range_m: "bbox scale 기반 거리 추정 [m]",
+  acceleration_pn_x: "PN 횡가속도 NED north [m/s²]",
+  acceleration_pn_y: "PN 횡가속도 NED east [m/s²]",
+  acceleration_pn_z: "PN 횡가속도 NED down [m/s²]",
+  command_roll_deg: "FC에 보낼 PN 목표 roll [deg]",
+  command_pitch_deg: "FC 규약 변환 전 PN 목표 pitch [deg]",
+  command_throttle: "PN 추력 명령 [0..1]",
 };
 
 // 기록에 없는 중간값은 기록된 필드로 계산한다. 입력 중 null 이면 null.
@@ -111,6 +132,29 @@ const GENERAL_PANELS = [
     series: [
       { t: C, f: "x", label: "roll rate [deg/s]" }, { t: C, f: "y", label: "pitch rate [deg/s]" },
       { t: C, f: "z", label: "thrust [0..1]", scale: "y2" },
+    ] },
+  { title: "PN closing speed", note: "solid: image-scale estimate · dashed: Gazebo world-pose ground truth · PN input is the value actually used",
+    series: [
+      { t: PN, f: "estimated_closing_speed_mps", label: "estimate [m/s]" },
+      { t: PN, f: "applied_closing_speed_mps", label: "PN input [m/s]", color: "#fbbf24" },
+      { t: PN_GT, f: "closing_speed_mps", label: "Gazebo GT [m/s]", color: "#f87171", dash: [5, 3] },
+    ] },
+  { title: "PN LOS rate", note: "solid: image + attitude estimate · dashed: Gazebo world-pose ground truth · NED [rad/s]",
+    series: [
+      { t: PN, f: "estimated_los_rate_x", label: "estimate north", color: "#60a5fa" },
+      { t: PN, f: "estimated_los_rate_y", label: "estimate east", color: "#4ade80" },
+      { t: PN, f: "estimated_los_rate_z", label: "estimate down", color: "#c084fc" },
+      { t: PN_GT, f: "los_rate_x", label: "GT north", color: "#60a5fa", dash: [5, 3] },
+      { t: PN_GT, f: "los_rate_y", label: "GT east", color: "#4ade80", dash: [5, 3] },
+      { t: PN_GT, f: "los_rate_z", label: "GT down", color: "#c084fc", dash: [5, 3] },
+    ] },
+  { title: "PN command", note: "desired attitude / PN lateral acceleration / thrust",
+    series: [
+      { t: PN, f: "command_roll_deg", label: "roll [deg]" },
+      { t: PN, f: "command_pitch_deg", label: "pitch [deg]" },
+      { t: PN, f: "acceleration_pn_x", label: "aPN north [m/s²]", color: "#4ade80", dash: [5, 3], scale: "y2" },
+      { t: PN, f: "acceleration_pn_y", label: "aPN east [m/s²]", color: "#c084fc", dash: [5, 3], scale: "y2" },
+      { t: PN, f: "command_throttle", label: "throttle", color: "#fbbf24", scale: "y2" },
     ] },
   { title: "Attitude", note: "source-independent vehicle roll / pitch / yaw",
     series: [

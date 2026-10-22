@@ -1,0 +1,27 @@
+std_msgs/Header header
+
+# PN seeker / guidance snapshot. Published only while guidance_mode=1.
+bool valid
+bool command_active
+bool using_ground_truth
+
+# Image + attitude based estimator output (world NED).
+float32 estimated_los_rate_x
+float32 estimated_los_rate_y
+float32 estimated_los_rate_z
+float32 estimated_closing_speed_mps
+
+# Values actually supplied to the PN law. They equal the estimator output
+# normally, and the Gazebo ground truth values when using_ground_truth=true.
+float32 applied_los_rate_x
+float32 applied_los_rate_y
+float32 applied_los_rate_z
+float32 applied_closing_speed_mps
+
+float32 range_m
+float32 acceleration_pn_x
+float32 acceleration_pn_y
+float32 acceleration_pn_z
+float32 command_roll_deg
+float32 command_pitch_deg
+float32 command_throttle

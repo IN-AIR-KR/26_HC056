@@ -212,11 +212,13 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
   }
 
   const Vec3 los = los_filter_.los();
+  const Vec3 estimated_los_rate = los_filter_.los_rate();
+  const double estimated_closing_speed = std::max(0.0, closing_speed_mps_);
   const Vec3 los_rate = los_rate_override_ned != nullptr
-      ? *los_rate_override_ned : los_filter_.los_rate();
+      ? *los_rate_override_ned : estimated_los_rate;
   const double closing_speed = closing_speed_override_mps != nullptr
       ? std::max(0.0, *closing_speed_override_mps)
-      : std::max(0.0, closing_speed_mps_);
+      : estimated_closing_speed;
   Vec3 a_pn = params_.navigation_ratio * closing_speed * los_rate;
   const double lateral = norm(a_pn);
   if (params_.max_lateral_accel_mps2 > 0.0 && lateral > params_.max_lateral_accel_mps2) {
@@ -229,6 +231,10 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
   output_.valid = los_filter_.initialized() && scale_initialized_ && range_m > 0.0;
   output_.stamp_sec = stamp_sec;
   output_.los_ned = los;
+  output_.estimated_los_rate_ned = estimated_los_rate;
+  output_.estimated_closing_speed_mps = estimated_closing_speed;
+  output_.using_ground_truth =
+      los_rate_override_ned != nullptr || closing_speed_override_mps != nullptr;
   output_.los_rate_ned = los_rate;
   output_.range_m = range_m;
   output_.closing_speed_mps = closing_speed;

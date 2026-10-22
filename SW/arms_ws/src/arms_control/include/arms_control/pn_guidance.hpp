@@ -134,6 +134,11 @@ struct Output {
   bool valid{false};
   double stamp_sec{0.0};
   Vec3 los_ned{};
+  // Image + attitude based estimate before an optional simulator GT override.
+  Vec3 estimated_los_rate_ned{};
+  double estimated_closing_speed_mps{0.0};
+  // Values actually fed into the PN acceleration law.
+  bool using_ground_truth{false};
   Vec3 los_rate_ned{};
   double range_m{0.0};
   double closing_speed_mps{0.0};

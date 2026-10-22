@@ -23,6 +23,7 @@
 #include "arms_msgs/msg/io_status.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
 #include "arms_msgs/msg/operator_input.hpp"
+#include "arms_msgs/msg/pn_debug.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/empty.hpp"
@@ -479,6 +480,8 @@ class ArmsControlNode : public rclcpp::Node {
     pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("control/looming_debug", 10);
     // PID 제어기의 상세 스냅샷. 녹화기와 분석기가 이 토픽을 사용한다.
     pub_control_diag_ = create_publisher<arms_msgs::msg::ControlDebug>("control/diagnostics", 10);
+    // PN 추정값·실제 PN 입력·명령을 분리해 기록한다. Gazebo GT는 별도 토픽으로 비교한다.
+    pub_pn_debug_ = create_publisher<arms_msgs::msg::PnDebug>("control/pn_debug", 10);
     pub_flight_cmd_ = create_publisher<arms_msgs::msg::FlightCommand>("control/flight_command", 10);
 
     // ----------------------------------------------------------------
@@ -866,6 +869,7 @@ class ArmsControlNode : public rclcpp::Node {
     double roll_rate_cmd = 0.0;
     double pitch_rate_cmd = 0.0;
     float thrust = 0.f;
+    bool pn_command_active = false;
 
     // 제어 디버그 스냅샷 — 아래 계산 단계마다 채우고 틱 끝에 발행한다.
     arms_msgs::msg::ControlDebug idbg;
@@ -1049,6 +1053,7 @@ class ArmsControlNode : public rclcpp::Node {
           roll_rate_cmd = std::atan2(desired(2, 1), desired(2, 2)) * pn::kRadToDeg;
           pitch_rate_cmd = std::asin(std::clamp(-desired(2, 0), -1.0, 1.0)) * pn::kRadToDeg;
           thrust = static_cast<float>(pn_out.throttle);
+          pn_command_active = true;
           idbg.guidance_x = pn_out.acceleration_pn_ned.y;
           idbg.guidance_y = pn_out.acceleration_pn_ned.x;
         } else {
@@ -1258,6 +1263,34 @@ class ArmsControlNode : public rclcpp::Node {
       pub_control_diag_->publish(idbg);
     }
 
+    // PN 해석용 데이터는 PID 비행에서는 발행하지 않는다. 추정값과 실제로 PN 식에
+    // 사용한 값은 GT override 여부와 무관하게 함께 남겨 Analyzer에서 GT와 비교한다.
+    if (guidance_mode_ == 1) {
+      const auto &pn_out = pn_guidance_.output();
+      arms_msgs::msg::PnDebug pn_dbg;
+      pn_dbg.header.stamp = now_t;
+      pn_dbg.valid = pn_out.valid;
+      pn_dbg.command_active = pn_command_active;
+      pn_dbg.using_ground_truth = pn_out.using_ground_truth;
+      pn_dbg.estimated_los_rate_x = static_cast<float>(pn_out.estimated_los_rate_ned.x);
+      pn_dbg.estimated_los_rate_y = static_cast<float>(pn_out.estimated_los_rate_ned.y);
+      pn_dbg.estimated_los_rate_z = static_cast<float>(pn_out.estimated_los_rate_ned.z);
+      pn_dbg.estimated_closing_speed_mps =
+          static_cast<float>(pn_out.estimated_closing_speed_mps);
+      pn_dbg.applied_los_rate_x = static_cast<float>(pn_out.los_rate_ned.x);
+      pn_dbg.applied_los_rate_y = static_cast<float>(pn_out.los_rate_ned.y);
+      pn_dbg.applied_los_rate_z = static_cast<float>(pn_out.los_rate_ned.z);
+      pn_dbg.applied_closing_speed_mps = static_cast<float>(pn_out.closing_speed_mps);
+      pn_dbg.range_m = static_cast<float>(pn_out.range_m);
+      pn_dbg.acceleration_pn_x = static_cast<float>(pn_out.acceleration_pn_ned.x);
+      pn_dbg.acceleration_pn_y = static_cast<float>(pn_out.acceleration_pn_ned.y);
+      pn_dbg.acceleration_pn_z = static_cast<float>(pn_out.acceleration_pn_ned.z);
+      pn_dbg.command_roll_deg = static_cast<float>(roll_rate_cmd);
+      pn_dbg.command_pitch_deg = static_cast<float>(pitch_rate_cmd);
+      pn_dbg.command_throttle = thrust;
+      pub_pn_debug_->publish(pn_dbg);
+    }
+
     // ---- Debug publish (UI 화살표용) — 구독자 있을 때만 ----
     if (pub_dbg_->get_subscription_count() > 0) {
       geometry_msgs::msg::Vector3 dbg;
@@ -1459,6 +1492,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<arms_msgs::msg::ControlDebug>::SharedPtr pub_control_diag_;
+  rclcpp::Publisher<arms_msgs::msg::PnDebug>::SharedPtr pub_pn_debug_;
   rclcpp::Publisher<arms_msgs::msg::FlightCommand>::SharedPtr pub_flight_cmd_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
