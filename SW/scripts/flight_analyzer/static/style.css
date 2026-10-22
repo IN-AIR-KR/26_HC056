@@ -64,7 +64,10 @@ body.sidebar-collapsed #sidebar { overflow: hidden; border-right: 0; }
 #rec-meta { font-size: 12px; }
 #v-download { text-decoration: none; }
 #state-legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 0 0; font-size: 12px; }
-.section-title { font-size: 14px; margin: 18px 0 0; color: var(--fg); }
+.section-title {
+  font-size: 20px; line-height: 1.25; font-weight: 750;
+  margin: 28px 0 2px; color: var(--fg); letter-spacing: -0.01em;
+}
 #state-legend span { display: inline-flex; align-items: center; gap: 5px; }
 #state-legend i { width: 14px; height: 10px; border-radius: 2px; display: inline-block; border: 1px solid var(--border); }
 #errors { color: var(--danger); font-size: 12px; }
@@ -109,6 +112,18 @@ body.sidebar-collapsed #sidebar { overflow: hidden; border-right: 0; }
 
 #custom-add { display: flex; gap: 8px; margin-top: 16px; }
 #custom-add input { flex: 1; min-width: 0; }
+.yaml-panel {
+  margin-top: 28px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden;
+}
+.yaml-panel summary { padding: 11px 12px; cursor: pointer; font-size: 15px; font-weight: 700; }
+.yaml-panel summary:hover { background: var(--panel-2); }
+.yaml-panel pre {
+  margin: 0; padding: 14px; overflow: auto; border-top: 1px solid var(--border);
+  background: #10141a; color: #d7dde7; font-size: 12px; line-height: 1.55;
+}
+.yaml-key { color: #93c5fd; }
+.yaml-comment { color: #7f8b99; }
 
 /* ---------------- controls ---------------- */
 input {
@@ -182,8 +197,12 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 #scene-canvas { width: 100%; aspect-ratio: 4 / 3; background: #090c10; border-radius: 6px; overflow: hidden; cursor: grab; }
 #scene-canvas:active { cursor: grabbing; }
 #scene-canvas canvas { width: 100%; height: 100%; display: block; }
+#scene-metrics { font-size: 12px; line-height: 1.35; }
 .scene-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.scene-control-group { display: flex; align-items: center; gap: 8px; }
 .scene-controls .seg button { padding: 4px 9px; }
+.scene-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+.scene-toggle input { accent-color: var(--accent); }
 #balloon-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
 #balloon-form label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
 #balloon-form input { width: 100%; min-width: 0; padding: 8px 10px; font-size: 14px; }

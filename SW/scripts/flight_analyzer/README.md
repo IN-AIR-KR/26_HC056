@@ -9,15 +9,14 @@
 
 ```bash
 pip install -r SW/scripts/flight_analyzer/requirements.txt
-python3 SW/scripts/flight_analyzer/server.py
+python3 SW/scripts/flight_analyzer/app.py
 ```
 
 - 로그 폴더는 이 디렉터리의 tracked `.env`에서 정한다.
   `FLIGHT_ANALYZER_LOG_ROOT=~/arms_flight_logs_ibvs` 값을 환경에 맞게 바꾼 뒤 실행한다.
   경로가 없거나 폴더가 아니면 서버는 시작하지 않고 오류를 낸다.
 - 젯슨에서 띄우고 노트북으로 볼 때: `--host 0.0.0.0` → `http://<젯슨IP>:5050/`
-  (SSH 세션이면 브라우저 자동 열기는 생략된다).
-- 포트 변경 `--port`, 자동 열기 끄기 `--no-browser`.
+- 포트 변경: `--port`.
 
 ### Docker 서버 배포
 

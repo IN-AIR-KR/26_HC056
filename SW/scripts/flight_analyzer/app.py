@@ -6,8 +6,8 @@ ROS 없이 동작한다(sqlite3 + rosbags 로 직접 읽음) → 노트북에 ba
 
 사용:
     pip install -r SW/scripts/flight_analyzer/requirements.txt
-    python3 SW/scripts/flight_analyzer/server.py                  # .env의 로그 폴더를 연다
-    python3 SW/scripts/flight_analyzer/server.py --host 0.0.0.0   # 젯슨에서 띄우고 노트북으로 접속
+    python3 SW/scripts/flight_analyzer/app.py                  # .env의 로그 폴더를 연다
+    python3 SW/scripts/flight_analyzer/app.py --host 0.0.0.0   # 젯슨에서 띄우고 노트북으로 접속
 """
 import argparse
 import json
@@ -16,7 +16,6 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import webbrowser
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -258,6 +257,21 @@ def record():
     return jsonify(payload)
 
 
+@app.get("/api/control-params")
+def control_params():
+    """Return the immutable control_params.yaml snapshot saved with one flight."""
+    record = _record_path(request.args.get("id", ""))
+    path = _manifest_path(record).parent / "control_params.yaml"
+    if not path.is_file():
+        return jsonify({"exists": False})
+    try:
+        if path.stat().st_size > 512 * 1024:
+            abort(413, "control_params.yaml 파일이 너무 큼")
+        return jsonify({"exists": True, "text": path.read_text(encoding="utf-8")})
+    except OSError as exc:
+        abort(500, f"control_params.yaml 읽기 실패: {exc}")
+
+
 @app.post("/api/manifest/balloon")
 def save_balloon():
     body = request.get_json(silent=True) or {}
@@ -284,7 +298,6 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5050)
-    ap.add_argument("--no-browser", action="store_true", help="브라우저 자동 열기 끔")
     args = ap.parse_args()
 
     _load_env()
@@ -296,8 +309,6 @@ def main():
     bag_reader.typestore()   # arms_msgs .msg 등록 오류를 기동 시점에 바로 드러낸다
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}/"
     print(f"ARMS Flight Analyzer: {url}  (로그 폴더: {state['root']})")
-    if not args.no_browser and not os.environ.get("SSH_CONNECTION"):
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     app.run(host=args.host, port=args.port, threaded=True)
 
 

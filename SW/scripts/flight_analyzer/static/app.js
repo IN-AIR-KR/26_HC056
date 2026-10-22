@@ -16,6 +16,7 @@ const DS = "/arms/perception/status";
 const IO = "/arms/io/status";
 const PN = "/arms/control/pn_debug";
 const PN_GT = "/arms/sim/guidance_ground_truth";
+const VIDEO_INPUT = "/arms/recording/video_input_header";
 const RATE = "__flight_analyzer_rates";
 const RATE_WINDOW_SEC = 1.0;
 const RATE_STEP_SEC = 0.1;
@@ -60,8 +61,8 @@ const FIELD_INFO = {
   pitch_deg: "CRSF 텔레메트리 pitch [deg]",
   yaw_deg: "CRSF 텔레메트리 yaw [deg]",
   satellites: "GPS 수신 위성 수",
-  video_hz: "1초 이동 윈도우의 원본 카메라 compressed 영상 수신율 [Hz]",
-  ui_hz: "1초 이동 윈도우의 UI overlay compressed 영상 수신율 [Hz]",
+  video_hz: "1초 이동 윈도우의 recorder 원본 카메라 입력 수신율 [Hz] (경량 Header)",
+  ui_hz: "1초 이동 윈도우의 녹화된 UI 압축 영상 주기 [Hz]",
   detection_hz: "1초 이동 윈도우의 detection 메시지 수신율 [Hz]",
   control_hz: "1초 이동 윈도우의 control debug 메시지 수신율 [Hz]",
   tx_uart_write_hz: "최근 1초 UART write 성공 CRSF 채널 프레임율 [Hz]",
@@ -97,8 +98,8 @@ const DERIVED = {
 const GENERAL_PANELS = [
   { title: "Stream rate", note: "1.0 s message rate · CRSF is measured at the UART boundary",
     series: [
-      { t: RATE, f: "video_hz", label: "video (raw) [Hz]" },
-      { t: RATE, f: "ui_hz", label: "UI overlay [Hz]" },
+      { t: RATE, f: "video_hz", label: "camera input [Hz]" },
+      { t: RATE, f: "ui_hz", label: "UI output [Hz]" },
       { t: RATE, f: "detection_hz", label: "detection [Hz]" },
       { t: RATE, f: "control_hz", label: "control [Hz]" },
       { t: IO, f: "tx_uart_write_hz", label: "CRSF TX UART [Hz]" },
@@ -133,6 +134,10 @@ const GENERAL_PANELS = [
       { t: C, f: "x", label: "roll rate [deg/s]" }, { t: C, f: "y", label: "pitch rate [deg/s]" },
       { t: C, f: "z", label: "thrust [0..1]", scale: "y2" },
     ] },
+];
+
+// ---------------------------------------------------------------- PN 유도 전용
+const PN_PANELS = [
   { title: "PN closing speed", note: "solid: image-scale estimate · dashed: Gazebo world-pose ground truth · PN input is the value actually used",
     series: [
       { t: PN, f: "estimated_closing_speed_mps", label: "estimate [m/s]" },
@@ -156,6 +161,9 @@ const GENERAL_PANELS = [
       { t: PN, f: "acceleration_pn_y", label: "aPN east [m/s²]", color: "#c084fc", dash: [5, 3], scale: "y2" },
       { t: PN, f: "command_throttle", label: "throttle", color: "#fbbf24", scale: "y2" },
     ] },
+];
+
+const GENERAL_TAIL_PANELS = [
   { title: "Attitude", note: "source-independent vehicle roll / pitch / yaw",
     series: [
       { t: A, f: "roll_deg", label: "roll [deg]" }, { t: A, f: "pitch_deg", label: "pitch [deg]" },
@@ -360,11 +368,44 @@ async function openRecord(id) {
   buildStreamRates(rec.video?.topic);
   fillFieldList();
   renderPanels();
+  loadControlYaml(id);
   initScene();
   buildScenePath();
   loadBalloon();
   resetVideo();
   updateScene(0);
+}
+
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function highlightYaml(source) {
+  return source.split("\n").map((line) => {
+    const commentAt = line.indexOf("#");
+    const body = commentAt < 0 ? line : line.slice(0, commentAt);
+    const comment = commentAt < 0 ? "" : line.slice(commentAt);
+    const escaped = escapeHtml(body).replace(
+      /^(\s*(?:-\s*)?)([A-Za-z_][\w.-]*)(:)/,
+      "$1<span class=\"yaml-key\">$2</span>$3");
+    return escaped + (comment ? `<span class="yaml-comment">${escapeHtml(comment)}</span>` : "");
+  }).join("\n");
+}
+
+async function loadControlYaml(id) {
+  const panel = $("control-yaml");
+  const code = $("control-yaml-content");
+  panel.hidden = true;
+  panel.open = false;
+  code.textContent = "";
+  try {
+    const data = await api("/api/control-params?id=" + encodeURIComponent(id));
+    if (id !== currentId || !data.exists) return;
+    code.innerHTML = highlightYaml(data.text || "");
+    panel.hidden = false;
+  } catch (e) {
+    if (id === currentId) console.warn("control_params.yaml load failed:", e);
+  }
 }
 
 function buildStateSegs() {
@@ -397,7 +438,9 @@ function stateAt(t) {
 const S3 = { renderer: null, scene: null, camera: null, drone: null, balloon: null,
   path: null, origin: null, gps: null, resize: null, target: null,
   radius: 30, theta: 0, phi: 1.1, pointer: null,
-  focus: loadLS("flight_analyzer.scene_focus", "drone") };
+  focus: loadLS("flight_analyzer.scene_focus", "drone"),
+  helpers: null, guideGround: null, guideHeight: null, guideDirect: null,
+  helpersVisible: loadLS("flight_analyzer.scene_helpers", true) };
 const deg = (v) => (v || 0) * Math.PI / 180;
 
 function nearestAt(d, field, t) {
@@ -454,6 +497,21 @@ function setSceneFocus(focus) {
   else if (S3.drone?.visible) S3.target.copy(S3.drone.position);
   applySceneCamera(); renderScene();
 }
+function updateSceneHelpersControl() {
+  $("scene-helpers").checked = S3.helpersVisible;
+}
+function setSceneHelpersVisible(visible) {
+  S3.helpersVisible = Boolean(visible);
+  saveLS("flight_analyzer.scene_helpers", S3.helpersVisible);
+  if (S3.helpers) S3.helpers.visible = S3.helpersVisible;
+  updateSceneHelpersControl();
+  renderScene();
+}
+function setGuide(line, points) {
+  if (!line) return;
+  line.geometry.setFromPoints(points);
+  line.computeLineDistances();
+}
 function initScene() {
   const host = $("scene-canvas");
   if (!window.THREE || !host) return;
@@ -467,8 +525,17 @@ function initScene() {
   S3.camera.position.set(20, 16, 22); S3.camera.lookAt(0, 0, 0);
   setSceneCamera(new THREE.Vector3(), null);
   S3.scene.add(new THREE.HemisphereLight(0xbfd7ff, 0x202a32, 2.2));
-  const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.scene.add(grid);
-  const worldAxes = new THREE.AxesHelper(4); S3.scene.add(worldAxes);
+  S3.helpers = new THREE.Group(); S3.helpers.visible = S3.helpersVisible; S3.scene.add(S3.helpers);
+  const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.helpers.add(grid);
+  const worldAxes = new THREE.AxesHelper(4); S3.helpers.add(worldAxes);
+  const guide = (color) => new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineDashedMaterial({ color, dashSize: 0.45, gapSize: 0.28 }));
+  S3.guideGround = guide(0x60a5fa);
+  S3.guideHeight = guide(0x94a3b8);
+  S3.guideDirect = guide(0xfbbf24);
+  S3.helpers.add(S3.guideGround, S3.guideHeight, S3.guideDirect);
+  updateSceneHelpersControl();
   S3.drone = new THREE.Group();
   S3.drone.add(new THREE.Mesh(new THREE.SphereGeometry(.55, 20, 14), new THREE.MeshStandardMaterial({ color: 0x60a5fa })));
   const axes = [[0xff5555, new THREE.Vector3(1, 0, 0)], [0x55dd77, new THREE.Vector3(0, 1, 0)], [0x55aaff, new THREE.Vector3(0, 0, 1)]];
@@ -548,9 +615,18 @@ function updateScene(t) {
     S3.drone.rotation.set(deg(pitch), -deg(yaw), deg(roll));
     if (S3.focus === "drone") { S3.target.copy(pos); applySceneCamera(); }
     const a = (v) => v == null ? "—" : v.toFixed(0) + "°";
-    $("scene-info").textContent = `t=${t.toFixed(2)}s  E ${pos.x.toFixed(1)} N ${pos.z.toFixed(1)} U ${pos.y.toFixed(1)}m · R ${a(roll)} P ${a(pitch)} Y ${a(yaw)}`;
+    const horizontal = Math.hypot(pos.x, pos.z);
+    const direct = pos.length();
+    $("scene-info").textContent = `t=${t.toFixed(2)}s · R ${a(roll)} P ${a(pitch)} Y ${a(yaw)}`;
+    $("scene-metrics").textContent =
+      `출발 위치 기준: X(E) ${pos.x.toFixed(1)} m · Y(N) ${pos.z.toFixed(1)} m · ΔU ${pos.y.toFixed(1)} m · 수평 ${horizontal.toFixed(1)} m · 직선 ${direct.toFixed(1)} m`;
+    const ground = new THREE.Vector3(pos.x, 0, pos.z);
+    setGuide(S3.guideGround, [new THREE.Vector3(), ground]);
+    setGuide(S3.guideHeight, [ground, pos.clone()]);
+    setGuide(S3.guideDirect, [new THREE.Vector3(), pos.clone()]);
   } else {
     S3.drone.visible = false; $("scene-info").textContent = "GPS 위치 없음";
+    $("scene-metrics").textContent = "출발 위치 기준: X — · Y — · 수평 — · 직선 —";
   }
   renderScene();
 }
@@ -616,7 +692,7 @@ function buildStreamRates() {
   const detection = rec.topics[D] || rec.topics[DR];
   const control = rec.topics[C] || rec.topics[T];
   const fields = {
-    video_hz: rollingRate(rec.videos?.[RAW_VIDEO_TOPIC]?.t, grid),
+    video_hz: rollingRate(rec.topics[VIDEO_INPUT]?.t || rec.videos?.[RAW_VIDEO_TOPIC]?.t, grid),
     ui_hz: rollingRate(rec.videos?.[UI_VIDEO_TOPIC]?.t, grid),
     detection_hz: rollingRate(detection?.t, grid),
     control_hz: rollingRate(control?.t, grid),
@@ -639,12 +715,17 @@ function renderPanels() {
   $("empty").hidden = true;
   const general = $("general-panels");
   const control = $("control-panels");
+  const pn = $("pn-panels");
   general.innerHTML = "";
   control.innerHTML = "";
-  for (const p of GENERAL_PANELS) if (p.series.some((s) => fieldCol(s.t || T, s.f))) general.appendChild(makePanel(p));
+  pn.innerHTML = "";
+  for (const p of [...GENERAL_PANELS, ...GENERAL_TAIL_PANELS]) {
+    if (p.series.some((s) => fieldCol(s.t || T, s.f))) general.appendChild(makePanel(p));
+  }
   for (const p of [...PANELS, ...customPanels.map((p, i) => ({ ...p, custom: i }))]) {
     control.appendChild(makePanel(p));
   }
+  for (const p of PN_PANELS) if (p.series.some((s) => fieldCol(s.t || T, s.f))) pn.appendChild(makePanel(p));
 }
 
 function makePanel(p) {
@@ -1077,7 +1158,9 @@ function bind() {
     updateMp4Download(); showFrameAt(V.t);
   };
   document.querySelectorAll("#scene-focus button").forEach((b) => { b.onclick = () => setSceneFocus(b.dataset.focus); });
+  $("scene-helpers").onchange = () => setSceneHelpersVisible($("scene-helpers").checked);
   updateSceneFocusControls();
+  updateSceneHelpersControl();
   ["balloon-lat", "balloon-lon", "balloon-alt"].forEach((id) => { $(id).onchange = setBalloonFromInputs; });
   $("balloon-save").onclick = saveBalloon;
   document.addEventListener("keydown", (e) => {   // Space = 재생/일시정지 (입력창 밖에서만)
@@ -1092,7 +1175,7 @@ function bind() {
   $("rec-filter").oninput = renderRecords;
   const applyHelp = () => {
     document.body.classList.toggle("hide-help", !showHelp);
-    $("btn-help").textContent = showHelp ? "수식 숨기기" : "수식 보기";
+    $("btn-help").textContent = showHelp ? "항목 설명 숨기기" : "항목 설명 보기";
   };
   $("btn-help").onclick = () => { showHelp = !showHelp; saveLS("flight_analyzer.help", showHelp); applyHelp(); };
   applyHelp();

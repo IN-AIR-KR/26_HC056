@@ -30,7 +30,7 @@
         <div id="rec-meta" class="muted"></div>
       </div>
       <div class="top-tools">
-        <button id="btn-help" class="btn" title="필터 칩의 수식 표시">수식 숨기기</button>
+        <button id="btn-help" class="btn" title="그래프 항목의 상세 설명 표시">항목 설명 숨기기</button>
         <div class="seg" id="layout" title="화면 구성">
           <button data-l="graphs">Graphs</button>
           <button data-l="split">Video + Graphs</button>
@@ -63,12 +63,16 @@
         <section id="scene-pane">
           <div class="scene-head"><span id="scene-info" class="mono muted"></span></div>
           <div id="scene-canvas" aria-label="GPS 및 CRSF 자세 기반 3D 비행 경로. 드래그로 회전, 휠로 확대 및 축소"></div>
+          <div id="scene-metrics" class="mono muted">출발 위치 기준: X — · Y — · 수평 — · 직선 —</div>
           <div class="scene-controls">
-            <span class="muted">회전/줌 중심</span>
-            <div class="seg" id="scene-focus">
-              <button data-focus="origin">원점</button>
-              <button data-focus="drone">드론</button>
+            <div class="scene-control-group">
+              <span class="muted">회전/줌 중심</span>
+              <div class="seg" id="scene-focus">
+                <button data-focus="origin">원점</button>
+                <button data-focus="drone">드론</button>
+              </div>
             </div>
+            <label class="scene-toggle"><input id="scene-helpers" type="checkbox"> 보조선</label>
           </div>
           <div id="balloon-form">
             <label>풍선 위도<input id="balloon-lat" type="number" step="any" placeholder="latitude"></label>
@@ -85,11 +89,17 @@
         <div id="general-panels"></div>
         <h2 class="section-title">PID control</h2>
         <div id="control-panels"></div>
+        <h2 class="section-title">PN guidance</h2>
+        <div id="pn-panels"></div>
         <section id="custom-add" hidden>
           <input id="custom-input" list="field-list" placeholder="필드 추가 → 새 패널 (예: /arms/control/diagnostics err_dot_x, /arms/io/crsf/rx roll_deg)">
           <datalist id="field-list"></datalist>
           <button id="btn-custom" class="btn">패널 추가</button>
         </section>
+        <details id="control-yaml" class="yaml-panel" hidden>
+          <summary>control_params.yaml</summary>
+          <pre><code id="control-yaml-content" class="mono"></code></pre>
+        </details>
         <div id="empty" class="muted">왼쪽 목록에서 기록을 고르면 그래프가 나옵니다.<br>
           차트 위 드래그 = 구간 확대 · 더블클릭 = 전체 보기 · 범례 클릭 = 시리즈 켜기/끄기</div>
       </div>

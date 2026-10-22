@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """비행 로그 녹화기 (auto_save:=true 일 때 arms.launch.py / arms_sitl.launch.py 가 기동).
 
-조종기 ARM 스위치를 올리면(DOWN→UP) record_topics(UI/원본 영상 + 검출 raw/필터/진단 + 상세 제어 로그
+조종기 ARM 스위치를 올리면(DOWN→UP) record_topics(UI 영상 + 원본 카메라 수신 Header + 검출 raw/필터/진단 + 상세 제어 로그
 + 제어·CRSF·GPS·배터리 + 상태/조종)를 rosbag 으로 녹화하기 시작하고, 내리면 멈추고 저장한다.
 모드(auto/manual)·상태머신·kill 과는 무관하게 ARM 스위치 하나로만 결정한다.
 저장 포맷은 sqlite3(항상 사용 가능). mcap 은 젯슨에 플러그인이 없어 쓰지 않는다.
@@ -25,9 +25,12 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import Image
+from std_msgs.msg import Header
 from arms_msgs.msg import OperatorInput
 
 RAW_CAMERA_TOPIC = "/arms/camera/image_raw/compressed"
+VIDEO_INPUT_HEADER_TOPIC = "/arms/recording/video_input_header"
 
 
 class FlightRecorder(Node):
@@ -42,7 +45,7 @@ class FlightRecorder(Node):
 
     def __init__(self):
         super().__init__("flight_recorder")
-        # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
+        # 녹화할 토픽 목록. UI 영상·원본 카메라 수신 Header + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
         #   detections_raw = 칼만 적용 전 원시 측정값(추후 KF 튜닝 재현용).
         #   diagnostics=PID 제어 오차·lead·스케줄링·명령·추력 스냅샷,
         #   pn_debug=PN 추정/입력/명령, sim/guidance_ground_truth=Gazebo 기준값이다.
@@ -80,6 +83,12 @@ class FlightRecorder(Node):
         best = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                           history=HistoryPolicy.KEEP_LAST, depth=1)
         self.create_subscription(OperatorInput, "/arms/operator/input", self._cb_cmd, best)
+        # 원본 Image를 recorder가 실제로 받은 빈도를 별도 Header 토픽으로 남긴다.
+        # 영상 payload는 이 토픽에 복사하지 않으므로 bag 용량에는 거의 영향이 없다.
+        self._video_input_header_pub = self.create_publisher(
+            Header, VIDEO_INPUT_HEADER_TOPIC, best)
+        self.create_subscription(
+            Image, "/arms/camera/image_raw", self._cb_camera_image, best)
         self.get_logger().info(
             "flight_recorder ready — ARM 스위치 올리면 녹화 시작, "
             f"내리면 종료. 저장: {self._save_dir}")
@@ -94,6 +103,10 @@ class FlightRecorder(Node):
         elif not arm and self._recording():
             self._stop("ARM 스위치 OFF")        # ARM 내림 → 녹화 종료·저장
         self._arm = arm
+
+    def _cb_camera_image(self, msg: Image):
+        """Jetson/recorder가 수신한 원본 카메라 메시지마다 Header만 재발행한다."""
+        self._video_input_header_pub.publish(msg.header)
 
     def _start(self):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

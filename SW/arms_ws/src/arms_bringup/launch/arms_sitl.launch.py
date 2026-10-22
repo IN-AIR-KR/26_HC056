@@ -283,6 +283,7 @@ def generate_launch_description():
                 "tag": "sitl",
                 "record_topics": [
                     "/arms/ui/image/compressed",
+                    "/arms/recording/video_input_header",
                     "/arms/perception/detections_raw",
                     "/arms/perception/detections",
                     "/arms/perception/status",
