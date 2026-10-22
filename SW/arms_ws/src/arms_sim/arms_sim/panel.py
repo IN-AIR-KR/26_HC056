@@ -563,7 +563,21 @@ class PanelGUI:
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
 
         # ── [유도] arms_control ─────────────────────────────────────────────
-        g_guid = group(right, "유도  ·  PID 추적")
+        g_guid = group(right, "유도  ·  PID / PN")
+
+        # PN 검증 시에만 Gazebo referee가 계산한 LOS-rate와 closing speed를 쓴다.
+        # 해제하면 평소처럼 영상 측정값 경로이며, 실기체에는 GT 발행자가 없다.
+        self.pn_ground_truth = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            g_guid, text="PN 입력: Gazebo GT", variable=self.pn_ground_truth,
+            bg="#1e1e1e", fg="#f0c84b", selectcolor="#333333",
+            activebackground="#1e1e1e", activeforeground="#f0c84b",
+            command=lambda: ros_param_set(
+                "control.pn.use_ground_truth", self.pn_ground_truth.get())
+        ).pack(anchor="w", pady=(0, 4))
+        self._track(
+            CTRL_NODE, "control.pn.use_ground_truth",
+            lambda v: self.pn_ground_truth.set(str(v).lower() == "true"))
 
         # 예측 조준(lead) — 움직이는 공의 미래 위치를 겨냥 (control.lead_gain)
         self.lead = tk.Scale(g_guid, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",

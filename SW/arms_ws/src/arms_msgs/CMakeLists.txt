@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/OperatorInput.msg"
   "msg/FlightCommand.msg"
   "msg/IoStatus.msg"
+  "msg/GuidanceGroundTruth.msg"
   DEPENDENCIES std_msgs
 )
 

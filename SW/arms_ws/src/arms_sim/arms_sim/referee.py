@@ -32,6 +32,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
+from arms_msgs.msg import GuidanceGroundTruth
 
 WORLD = "arms_sitl"
 MODEL_BALLOON = "target_ball"   # 표적 A: 풍선(빨간 구)
@@ -141,6 +142,12 @@ class BalloonReferee(Node):
         self.pause_until = 0.0          # 재등장 대기 종료 시각
         self._ball_pos = (0.0, 0.0, HIDE_Z)   # 풍선 현재 위치(직격 판정용)
         self._drone_pos = None                # 드론 실제 위치(gz 구독)
+        self._target_pos_gt = None            # Gazebo pose 기반 PN GT 표적 위치
+        self._gt_prev_time = None
+        self._gt_prev_los = None
+        self._gt_prev_range = None
+        self._gt_drone_updated = False
+        self._gt_target_updated = False
         self._drone_seen = False
         # 드론 실제 위치 구독 → 진짜 충돌(직격) 판정. (gz dynamic pose)
         if _GZ_OK and _GzPoseV is not None:
@@ -176,6 +183,8 @@ class BalloonReferee(Node):
         # 이제 둘은 독립이고, 어긋나는 것 자체가 정보다.
         # /arms/hit 은 통지용 — arms_control 은 이걸 로그로만 쓴다.
         self._hit_pub = self.create_publisher(Empty, "sim/hit", 10)
+        self._gt_pub = self.create_publisher(
+            GuidanceGroundTruth, "sim/guidance_ground_truth", 10)
         self.create_subscription(Empty, "sim/reset_event", self._on_reset, 10)
         self._last_dist_log = 0.0     # 접근거리 로그 스로틀
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
@@ -198,6 +207,7 @@ class BalloonReferee(Node):
         self._prev_enabled = True
         self._launched_once = False
         self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
+        self._reset_ground_truth_history()
         self._park_at_start()
         self.get_logger().info("실험 RESET: 표적을 패스 시작점에 대기")
 
@@ -255,19 +265,86 @@ class BalloonReferee(Node):
         self._min_dist = 999.0
 
     def _on_poses(self, msg):
-        """gz dynamic pose 구독 콜백 → 드론 실제 위치 추적 (직격 판정용)."""
+        """Gazebo pose 구독 → 충돌 거리와 PN ground-truth 상대 상태를 갱신한다."""
         if not self._drone_seen and not getattr(self, "_names_logged", False):
             self._names_logged = True
             self.get_logger().info(
                 f"gz dynamic pose 모델들: {[p.name for p in msg.pose]}")
+        drone_pos = None
+        target_pos = None
         for p in msg.pose:
             n = p.name
             if ("drone" in n or "x500" in n) and n not in (MODEL_BALLOON, MODEL_DRONE):
-                self._drone_pos = (p.position.x, p.position.y, p.position.z)
+                drone_pos = (p.position.x, p.position.y, p.position.z)
                 if not self._drone_seen:
                     self._drone_seen = True
                     self.get_logger().info(f"직격 판정 활성화 (드론='{n}' 위치 추적 중)")
-                return
+            elif n == self.target_model and p.position.z > HIDE_Z / 2.0:
+                target_pos = (p.position.x, p.position.y, p.position.z)
+        if drone_pos is not None:
+            self._drone_pos = drone_pos
+            self._gt_drone_updated = True
+        # dynamic_pose/info는 부분 갱신일 수 있으므로, 이번 메시지에 표적이 없다고
+        # 이전 표적 위치를 지우지 않는다.
+        if target_pos is not None:
+            self._target_pos_gt = target_pos
+            self._gt_target_updated = True
+
+    def _reset_ground_truth_history(self):
+        self._gt_prev_time = None
+        self._gt_prev_los = None
+        self._gt_prev_range = None
+        self._gt_drone_updated = False
+        self._gt_target_updated = False
+
+    def _publish_guidance_ground_truth(self, now):
+        """Gazebo ENU pose에서 PN용 NED LOS-rate와 closing speed를 계산한다."""
+        # 표적은 referee가 직접 set_pose 하므로, dynamic pose 알림이 아직 오지 않은
+        # 첫 프레임에는 직전에 요청한 pose를 정확한 target ground truth로 쓴다.
+        target_pos = self._target_pos_gt or self._ball_pos
+        if self._drone_pos is None or target_pos[2] <= HIDE_Z / 2.0:
+            self._reset_ground_truth_history()
+            return
+        # 표적이 정지해도 드론 pose는 계속 바뀐다. 표적은 마지막 유효 pose를
+        # 유지하고, 새 드론 pose가 들어온 때에만 한 번 미분한다.
+        if not self._gt_drone_updated:
+            return
+        self._gt_drone_updated = False
+        self._gt_target_updated = False
+
+        dx = target_pos[0] - self._drone_pos[0]  # ENU east
+        dy = target_pos[1] - self._drone_pos[1]  # ENU north
+        dz = target_pos[2] - self._drone_pos[2]  # ENU up
+        # ENU(east, north, up) -> NED(north, east, down)
+        rel = (dy, dx, -dz)
+        distance = math.sqrt(sum(v * v for v in rel))
+        if distance < 1e-6:
+            self._reset_ground_truth_history()
+            return
+        los = tuple(v / distance for v in rel)
+
+        if self._gt_prev_time is None:
+            self._gt_prev_time = now
+            self._gt_prev_los = los
+            self._gt_prev_range = distance
+            return
+        dt = now - self._gt_prev_time
+        self._gt_prev_time = now
+        if not (1e-4 < dt < 0.5):
+            self._gt_prev_los = los
+            self._gt_prev_range = distance
+            return
+        raw_rate = tuple((los[i] - self._gt_prev_los[i]) / dt for i in range(3))
+        parallel = sum(raw_rate[i] * los[i] for i in range(3))
+        los_rate = tuple(raw_rate[i] - parallel * los[i] for i in range(3))
+        msg = GuidanceGroundTruth()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.valid = True
+        msg.los_rate_x, msg.los_rate_y, msg.los_rate_z = los_rate
+        msg.closing_speed_mps = (self._gt_prev_range - distance) / dt
+        self._gt_pub.publish(msg)
+        self._gt_prev_los = los
+        self._gt_prev_range = distance
 
     @staticmethod
     def _is_our_drone(collision_name):
@@ -381,6 +458,7 @@ class BalloonReferee(Node):
         x, y, z = self._path_at(self.t)
         set_pose(self.target_model, x, y, z)
         self._ball_pos = (x, y, z)
+        self._publish_guidance_ground_truth(now)
 
         # ── 접근거리 로그 (판정 아님) ──────────────────────────────────────
         #   명중 판정은 Gazebo 접촉 센서(_on_contact)가 한다. 여기서 재는 거리는

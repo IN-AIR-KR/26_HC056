@@ -178,7 +178,9 @@ Mat3 Guidance::desired_attitude(const Vec3 &specific_thrust_ned) const {
 }
 
 bool Guidance::update_detection(double stamp_sec, double x_center, double y_center,
-                                double width, double height, const Quaternion &q_nb) {
+                                double width, double height, const Quaternion &q_nb,
+                                const Vec3 *los_rate_override_ned,
+                                const double *closing_speed_override_mps) {
   if (!(camera_.fx > 1.0 && camera_.fy > 1.0 && camera_.width > 1.0 && camera_.height > 1.0)) return false;
   const Vec3 ray_camera = normalized({(x_center * camera_.width - camera_.cx) / camera_.fx,
                                       (y_center * camera_.height - camera_.cy) / camera_.fy, 1.0});
@@ -210,8 +212,11 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
   }
 
   const Vec3 los = los_filter_.los();
-  const Vec3 los_rate = los_filter_.los_rate();
-  const double closing_speed = std::max(0.0, closing_speed_mps_);
+  const Vec3 los_rate = los_rate_override_ned != nullptr
+      ? *los_rate_override_ned : los_filter_.los_rate();
+  const double closing_speed = closing_speed_override_mps != nullptr
+      ? std::max(0.0, *closing_speed_override_mps)
+      : std::max(0.0, closing_speed_mps_);
   Vec3 a_pn = params_.navigation_ratio * closing_speed * los_rate;
   const double lateral = norm(a_pn);
   if (params_.max_lateral_accel_mps2 > 0.0 && lateral > params_.max_lateral_accel_mps2) {

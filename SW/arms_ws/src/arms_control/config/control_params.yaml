@@ -49,7 +49,7 @@
     # 자동 제어: PID + 시간기반 lead (PX4 ACRO)
     # =====================================================================
     # PID: 화면 정규화 오차 → tan 카메라 좌표 → rate[deg/s] → ACRO.
-    # PN: raw bbox + timestamped attitude → 관성 LOS-rate → attitude[deg] → Stabilized.
+    # PN: tracked bbox + attitude → 관성 LOS-rate → attitude[deg] → Stabilized.
     control:
       # ── 루프와 최종 출력 범위 ──────────────────────────────────────────
       control_rate_hz: 50.0
@@ -107,7 +107,7 @@
 
       # ── PN 관성 LOS-rate 유도 ──────────────────────────────────────────
       # guidance_mode: 0=기존 PID/ACRO, 1=PN/Stabilized. 기본은 검증된 PID다.
-      # PN은 raw bbox와 vehicle/attitude를 촬영시각 기준으로 합성한다. raw IMU/gyro는
+      # PN은 perception track bbox와 vehicle/attitude를 합성한다. raw IMU/gyro는
       # 직접 쓰지 않고 FC가 추정해 발행한 attitude를 사용한다.
       guidance_mode: 0
       pn:
@@ -120,8 +120,11 @@
         kf_accel_noise: 0.8
         kf_measurement_noise: 0.0025
         max_lateral_accel_mps2: 12.0
-        # raw detection 촬영시각에 대응하는 attitude가 이보다 오래되면 PN 명령을 차단한다.
+        # detection track 수신시각에 대응하는 attitude가 이보다 오래되면 PN 명령을 차단한다.
         max_measurement_age_sec: 0.20
+        # SITL referee의 Gazebo ground truth LOS-rate/Vc로 PN을 검증한다.
+        # 실기체에는 이 토픽이 없으므로 반드시 false를 유지한다.
+        use_ground_truth: false
         camera:
           # OpenCV optical(right, down, forward) → PX4 body FRD.
           # 상방 카메라: optical forward는 body up(-z)다.

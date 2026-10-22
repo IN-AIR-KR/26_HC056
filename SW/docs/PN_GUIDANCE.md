@@ -28,6 +28,12 @@ PN은 raw IMU/gyro 토픽을 직접 구독하지 않는다. 다만 영상 bearin
 - `/arms/perception/detections`: perception이 확정·평활한 단일 표적 bbox
 - `/arms/vehicle/attitude`: roll/pitch/yaw attitude estimate
 
+SITL 검증 전용으로 `control.pn.use_ground_truth=true`를 선택하면 referee가
+`/arms/sim/guidance_ground_truth`로 발행하는 Gazebo ground-truth LOS-rate와 closing
+speed를 대신 쓴다. bearing과 attitude, FC 명령 경로는 동일하게 유지하므로 PN 법칙과
+좌표변환을 영상 range/LOS-rate 측정 노이즈와 분리해 확인할 수 있다. 실기체에는 이
+발행자가 없으므로 해당 옵션은 반드시 `false`다.
+
 SITL은 PX4 MAVLink `ATTITUDE`, 실기체는 CRSF attitude telemetry를 이 공통 토픽으로
 발행한다. PN은 raw detector 출력 대신 이 track 토픽을 사용한다. 짧은 검출 miss는
 perception의 KF coast가 흡수하므로, raw bbox 한 프레임 누락이 곧바로 PN 추력 단절로
@@ -113,6 +119,7 @@ PID mode 0은 기존과 같이 ACRO rate 입력을 쓴다.
 | `pn.approach_accel_mps2` | LOS 방향 접근 가속도 | `5.0` |
 | `pn.target_diameter_m` | 실제 풍선 지름 | `0.50` |
 | `pn.max_lateral_accel_mps2` | PN 횡가속도 상한 | `12.0` |
+| `pn.use_ground_truth` | SITL Gazebo GT LOS-rate/Vc 사용 | `false` |
 | `max_angle_deg` | Stabilized roll/pitch 상한 | `55.0` |
 
 1. PID mode 0에서 `vehicle/attitude`가 지속 발행되는지 확인한다.

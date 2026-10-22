@@ -148,7 +148,9 @@ class Guidance {
   void set_parameters(const Parameters &params) { params_ = params; }
   void set_camera(const CameraModel &camera) { camera_ = camera; }
   bool update_detection(double stamp_sec, double x_center, double y_center,
-                        double width, double height, const Quaternion &q_nb);
+                        double width, double height, const Quaternion &q_nb,
+                        const Vec3 *los_rate_override_ned = nullptr,
+                        const double *closing_speed_override_mps = nullptr);
   const Output &output() const { return output_; }
 
  private:

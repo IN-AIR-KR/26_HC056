@@ -18,6 +18,7 @@
 #include "arms_msgs/msg/attitude_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/flight_command.hpp"
+#include "arms_msgs/msg/guidance_ground_truth.hpp"
 #include "arms_msgs/msg/control_debug.hpp"
 #include "arms_msgs/msg/io_status.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
@@ -84,6 +85,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.pn.kf_measurement_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.max_lateral_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.max_measurement_age_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.use_ground_truth", rclcpp::ParameterType::PARAMETER_BOOL);
     declare_required_parameter("control.pn.camera.r_bc", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
 
     declare_required_parameter("mission.sitl_auto_launch", rclcpp::ParameterType::PARAMETER_BOOL);
@@ -296,6 +298,7 @@ class ArmsControlNode : public rclcpp::Node {
     pn_params_.max_lateral_accel_mps2 =
         get_parameter("control.pn.max_lateral_accel_mps2").as_double();
     pn_measurement_age_sec_ = get_parameter("control.pn.max_measurement_age_sec").as_double();
+    pn_use_ground_truth_ = get_parameter("control.pn.use_ground_truth").as_bool();
     pn_params_.max_throttle = track_throttle_;
     pn_params_.hover_throttle = hover_throttle_;
     pn_camera_.fx = cam_fx_;
@@ -397,6 +400,8 @@ class ArmsControlNode : public rclcpp::Node {
               pn_params_.kf_measurement_noise = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.max_lateral_accel_mps2") {
               pn_params_.max_lateral_accel_mps2 = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.use_ground_truth") {
+              pn_use_ground_truth_ = p.as_bool();
             }
             else if (n == "control.gain_shaping")
               gain_shaping_ = p.as_bool();
@@ -501,8 +506,33 @@ class ArmsControlNode : public rclcpp::Node {
                   sample.seconds(), pn_measurement_age_sec_, attitude)) {
             return;
           }
+          const pn::Vec3 *gt_los_rate = nullptr;
+          const double *gt_closing_speed = nullptr;
+          pn::Vec3 gt_rate;
+          double gt_speed = 0.0;
+          if (pn_use_ground_truth_) {
+            const bool gt_fresh = gt_received_ && latest_gt_.valid &&
+                (sample - gt_receipt_time_).seconds() >= 0.0 &&
+                (sample - gt_receipt_time_).seconds() <= pn_measurement_age_sec_;
+            if (!gt_fresh) return;
+            gt_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
+                       latest_gt_.los_rate_z};
+            gt_speed = latest_gt_.closing_speed_mps;
+            gt_los_rate = &gt_rate;
+            gt_closing_speed = &gt_speed;
+          }
           pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
-                                        best->width, best->height, attitude);
+                                        best->width, best->height, attitude,
+                                        gt_los_rate, gt_closing_speed);
+        });
+
+    sub_guidance_gt_ = create_subscription<arms_msgs::msg::GuidanceGroundTruth>(
+        "sim/guidance_ground_truth", rclcpp::SensorDataQoS(),
+        [this](arms_msgs::msg::GuidanceGroundTruth::SharedPtr msg) {
+          if (!msg->valid) return;
+          latest_gt_ = *msg;
+          gt_receipt_time_ = now();
+          gt_received_ = true;
         });
 
     // raw IMU/gyro는 직접 구독하지 않는다. SITL(PX4 MAVLink)과 실기체(CRSF)가
@@ -615,6 +645,7 @@ class ArmsControlNode : public rclcpp::Node {
           loom_init_ = false;
           pn_guidance_.reset();
           pn_attitudes_.clear();
+          gt_received_ = false;
           align_locked_ = false;
           auto_armed_ = manual_armed_ = false;
           lock_timer_started_ = auto_launched_ = false;
@@ -1007,7 +1038,7 @@ class ArmsControlNode : public rclcpp::Node {
 
       if (state == State::TRACK && guidance_mode_ == 1) {
         // PN은 world NED의 desired thrust vector에서 만든 목표 자세를 사용한다.
-        // 계산에 필요한 attitude 또는 raw bbox가 오래되면 추력을 내지 않는다. PID 출력을
+        // 계산에 필요한 attitude 또는 detection track이 오래되면 추력을 내지 않는다. PID 출력을
         // Stabilized 입력으로 잘못 해석하는 fallback은 허용하지 않는다.
         const auto &pn_out = pn_guidance_.output();
         const bool fresh = pn_out.valid &&
@@ -1386,10 +1417,14 @@ class ArmsControlNode : public rclcpp::Node {
   int guidance_mode_{0};
   double max_angle_deg_{55.0};
   double pn_measurement_age_sec_{0.20};
+  bool pn_use_ground_truth_{false};
   pn::Parameters pn_params_{};
   pn::CameraModel pn_camera_{};
   pn::Guidance pn_guidance_{};
   pn::AttitudeBuffer pn_attitudes_{};
+  arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
+  rclcpp::Time gt_receipt_time_{};
+  bool gt_received_{false};
   // 카메라 tan 좌표 근사값. calibrated=true면 control.camera 내부파라미터를 쓴다.
   double camera_hfov_deg_{43.6028};
   double camera_aspect_{0.6666667};
@@ -1414,6 +1449,7 @@ class ArmsControlNode : public rclcpp::Node {
   double tau_ease_min_scale_{0.3};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
+  rclcpp::Subscription<arms_msgs::msg::GuidanceGroundTruth>::SharedPtr sub_guidance_gt_;
   rclcpp::Subscription<arms_msgs::msg::AttitudeTelemetry>::SharedPtr sub_attitude_;
   rclcpp::Subscription<arms_msgs::msg::OperatorInput>::SharedPtr sub_input_;
   rclcpp::Subscription<arms_msgs::msg::IoStatus>::SharedPtr sub_io_status_;
