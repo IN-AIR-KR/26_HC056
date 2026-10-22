@@ -554,6 +554,8 @@ function initScene() {
   axes.forEach(([color, dir]) => S3.drone.add(new THREE.ArrowHelper(dir, new THREE.Vector3(), 1.5, color, .3, .18)));
   S3.scene.add(S3.drone);
   S3.balloon = new THREE.Mesh(new THREE.SphereGeometry(.45, 18, 14), new THREE.MeshStandardMaterial({ color: 0xef4444 }));
+  // 보조선보다 나중에 그려 풍선 내부를 선이 관통해 보이지 않게 한다.
+  S3.balloon.renderOrder = 3;
   S3.balloon.visible = false; S3.scene.add(S3.balloon);
   const canvas = S3.renderer.domElement;
   canvas.addEventListener("pointerdown", (e) => {
@@ -631,7 +633,7 @@ function updateScene(t) {
     const direct = pos.length();
     $("scene-info").textContent = `t=${t.toFixed(2)}s · R ${a(roll)} P ${a(pitch)} Y ${a(yaw)}`;
     $("scene-metrics").textContent =
-      `출발 위치 기준: X(E) ${pos.x.toFixed(1)} m · Y(N) ${pos.z.toFixed(1)} m · ΔU ${pos.y.toFixed(1)} m · 수평 ${horizontal.toFixed(1)} m · 직선 ${direct.toFixed(1)} m`;
+      `출발 위치 기준: X(E) ${pos.x.toFixed(1)} m · Y(N) ${pos.z.toFixed(1)} m · 고도 ${pos.y.toFixed(1)} m · 수평 ${horizontal.toFixed(1)} m · 직선 ${direct.toFixed(1)} m`;
     // GridHelper와 동일 평면이면 z-fighting이 생기므로 아주 조금 띄운다.
     const ground = new THREE.Vector3(pos.x, 0.02, pos.z);
     const groundOrigin = new THREE.Vector3(0, 0.02, 0);
