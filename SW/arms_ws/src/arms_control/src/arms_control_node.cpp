@@ -491,7 +491,9 @@ class ArmsControlNode : public rclcpp::Node {
         });
 
     // PN은 detector의 추적/KF 결과를 다시 미분하지 않도록 원시 bbox를 한 번만
-    // 필터링한다. DetectionArray header는 원본 이미지 촬영 시각을 유지한다.
+    // 필터링한다. Gazebo 이미지와 PX4 MAVLink는 서로 다른 time base를 쓰므로,
+    // 두 입력의 동기화에는 이 노드에서 수신한 공통 ROS 시각을 쓴다. 원본 image
+    // header 시각은 rosbag/영상 동기화용으로 보존하되 여기서 직접 비교하지 않는다.
     sub_detections_raw_ = create_subscription<arms_msgs::msg::DetectionArray>(
         "perception/detections_raw", best_effort_qos,
         [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
@@ -499,8 +501,7 @@ class ArmsControlNode : public rclcpp::Node {
           const auto best = std::max_element(
               msg->detections.begin(), msg->detections.end(),
               [](const auto &a, const auto &b) { return a.confidence < b.confidence; });
-          rclcpp::Time sample(msg->header.stamp, get_clock()->get_clock_type());
-          if (sample.nanoseconds() == 0) sample = now();
+          const auto sample = now();
           pn::Quaternion attitude;
           if (!pn_attitudes_.interpolate(
                   sample.seconds(), pn_measurement_age_sec_, attitude)) {
@@ -511,12 +512,11 @@ class ArmsControlNode : public rclcpp::Node {
         });
 
     // raw IMU/gyro는 직접 구독하지 않는다. SITL(PX4 MAVLink)과 실기체(CRSF)가
-    // 공통으로 제공하는 attitude estimate를 검출 시각에 보간해 관성 LOS를 만든다.
+    // 공통으로 제공하는 attitude estimate를 같은 수신 시간축에서 보간해 관성 LOS를 만든다.
     sub_attitude_ = create_subscription<arms_msgs::msg::AttitudeTelemetry>(
         "vehicle/attitude", rclcpp::SensorDataQoS(),
         [this](arms_msgs::msg::AttitudeTelemetry::SharedPtr msg) {
-          rclcpp::Time stamp(msg->header.stamp, get_clock()->get_clock_type());
-          if (stamp.nanoseconds() == 0) stamp = now();
+          const auto stamp = now();
           pn_attitudes_.push(
               stamp.seconds(), pn::Quaternion::from_euler(
                                   msg->roll_deg * pn::kDegToRad,

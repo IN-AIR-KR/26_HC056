@@ -29,8 +29,11 @@ PN은 raw IMU/gyro 토픽을 직접 구독하지 않는다. 다만 영상 bearin
 - `/arms/vehicle/attitude`: roll/pitch/yaw attitude estimate
 
 SITL은 PX4 MAVLink `ATTITUDE`, 실기체는 CRSF attitude telemetry를 이 공통 토픽으로
-발행한다. 제어 노드는 detection의 촬영 시각에 attitude buffer를 보간한다. 해당 시각에서
-자세가 `control.pn.max_measurement_age_sec`보다 오래되면 PN 추력과 명령을 0으로 둔다.
+발행한다. Gazebo 이미지 시각, PX4 MAVLink boot time, 실제 카메라 시각처럼 서로 다른
+clock이 섞일 수 있으므로 제어 노드는 두 메시지를 **자신이 수신한 ROS 시각**으로 정렬한다.
+원본 `header.stamp`는 영상·rosbag 동기화용으로 보존하지만 PN 시간차에는 직접 사용하지
+않는다. 수신 시각 기준으로 attitude가 `control.pn.max_measurement_age_sec`보다 오래되면
+PN 추력과 명령을 0으로 둔다.
 
 즉 새 IMU 하드웨어는 필요 없지만, FC의 attitude telemetry가 정상적으로 들어와야 한다.
 실기체 CRSF attitude의 지연·축 정의가 SITL과 다르면 PN 성능과 부호가 달라질 수 있으므로
