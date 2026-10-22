@@ -8,7 +8,7 @@
 제어를 그대로 유지한다.
 
 ```text
-perception/detections_raw + vehicle/attitude
+perception/detections + vehicle/attitude
   → camera ray → body FRD → world NED LOS
   → constant-rate LOS filter
   → PN lateral acceleration + LOS approach acceleration
@@ -25,12 +25,16 @@ FOV barrier, terminal 전용 제어는 포함하지 않는다.
 PN은 raw IMU/gyro 토픽을 직접 구독하지 않는다. 다만 영상 bearing에서 기체 회전을
 제거하려면 **attitude estimate가 필수**다.
 
-- `/arms/perception/detections_raw`: 원시 bbox와 원본 영상 `header.stamp`
+- `/arms/perception/detections`: perception이 확정·평활한 단일 표적 bbox
 - `/arms/vehicle/attitude`: roll/pitch/yaw attitude estimate
 
 SITL은 PX4 MAVLink `ATTITUDE`, 실기체는 CRSF attitude telemetry를 이 공통 토픽으로
-발행한다. Gazebo 이미지 시각, PX4 MAVLink boot time, 실제 카메라 시각처럼 서로 다른
-clock이 섞일 수 있으므로 제어 노드는 두 메시지를 **자신이 수신한 ROS 시각**으로 정렬한다.
+발행한다. PN은 raw detector 출력 대신 이 track 토픽을 사용한다. 짧은 검출 miss는
+perception의 KF coast가 흡수하므로, raw bbox 한 프레임 누락이 곧바로 PN 추력 단절로
+이어지지 않는다.
+
+Gazebo 이미지 시각, PX4 MAVLink boot time, 실제 카메라 시각처럼 서로 다른 clock이
+섞일 수 있으므로 제어 노드는 두 메시지를 **자신이 수신한 ROS 시각**으로 정렬한다.
 원본 `header.stamp`는 영상·rosbag 동기화용으로 보존하지만 PN 시간차에는 직접 사용하지
 않는다. 수신 시각 기준으로 attitude가 `control.pn.max_measurement_age_sec`보다 오래되면
 PN 추력과 명령을 0으로 둔다.

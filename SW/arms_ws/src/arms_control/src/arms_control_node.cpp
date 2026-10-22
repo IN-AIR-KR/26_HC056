@@ -116,10 +116,8 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("servo.lock_duty_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
     declare_required_parameter("servo.open_duty_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
 
-    // 자동요격은 ACRO(각속도) 고정이다. 예전 angle-mode 출력 분기와
-    // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
-    // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
-    // autonomous_acro 도 같이 없앴다(CH6 low = ACRO 고정).
+    // PID 유도는 ACRO(각속도)를 쓴다. PN은 별도 guidance_mode에서 Stabilized
+    // 목표 자세를 쓰며, PID 각속도를 각도로 오해하는 예전 분기는 유지하지 않는다.
     declare_required_parameter("control.max_rate_dps", rclcpp::ParameterType::PARAMETER_DOUBLE);
     // 추격 궤적(Pursuit): 정렬 기다리지 않고 조준하며 처음부터 상승.
     declare_required_parameter("control.hover_throttle", rclcpp::ParameterType::PARAMETER_DOUBLE);
@@ -488,19 +486,15 @@ class ArmsControlNode : public rclcpp::Node {
         [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
           sm_->on_detection(msg->detections);
           update_looming(msg);
-        });
-
-    // PN은 detector의 추적/KF 결과를 다시 미분하지 않도록 원시 bbox를 한 번만
-    // 필터링한다. Gazebo 이미지와 PX4 MAVLink는 서로 다른 time base를 쓰므로,
-    // 두 입력의 동기화에는 이 노드에서 수신한 공통 ROS 시각을 쓴다. 원본 image
-    // header 시각은 rosbag/영상 동기화용으로 보존하되 여기서 직접 비교하지 않는다.
-    sub_detections_raw_ = create_subscription<arms_msgs::msg::DetectionArray>(
-        "perception/detections_raw", best_effort_qos,
-        [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
           if (msg->detections.empty()) return;
           const auto best = std::max_element(
               msg->detections.begin(), msg->detections.end(),
               [](const auto &a, const auto &b) { return a.confidence < b.confidence; });
+          // PN은 perception이 확정·평활한 표적 상태를 사용한다. raw detector는
+          // 한 프레임 miss가 흔해 출력까지 끊기므로, target validity와 KF coast가
+          // 적용된 이 토픽을 seeker track으로 취급한다. Gazebo 이미지와 PX4
+          // MAVLink는 서로 다른 time base를 쓰므로 동기화에는 이 노드의 수신
+          // 시각을 사용한다. 원본 image header는 rosbag/영상 동기화용으로 보존한다.
           const auto sample = now();
           pn::Quaternion attitude;
           if (!pn_attitudes_.interpolate(
@@ -1417,7 +1411,6 @@ class ArmsControlNode : public rclcpp::Node {
   double tau_ease_min_scale_{0.3};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
-  rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_raw_;
   rclcpp::Subscription<arms_msgs::msg::AttitudeTelemetry>::SharedPtr sub_attitude_;
   rclcpp::Subscription<arms_msgs::msg::OperatorInput>::SharedPtr sub_input_;
   rclcpp::Subscription<arms_msgs::msg::IoStatus>::SharedPtr sub_io_status_;
