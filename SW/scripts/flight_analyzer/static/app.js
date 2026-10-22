@@ -439,7 +439,7 @@ const S3 = { renderer: null, scene: null, camera: null, drone: null, balloon: nu
   path: null, origin: null, gps: null, resize: null, target: null,
   radius: 30, theta: 0, phi: 1.1, pointer: null,
   focus: loadLS("flight_analyzer.scene_focus", "drone"),
-  helpers: null, guideGround: null, guideHeight: null, guideDirect: null,
+  guides: null, guideGround: null, guideHeight: null, guideDirect: null,
   helpersVisible: loadLS("flight_analyzer.scene_helpers", true) };
 const deg = (v) => (v || 0) * Math.PI / 180;
 
@@ -503,7 +503,7 @@ function updateSceneHelpersControl() {
 function setSceneHelpersVisible(visible) {
   S3.helpersVisible = Boolean(visible);
   saveLS("flight_analyzer.scene_helpers", S3.helpersVisible);
-  if (S3.helpers) S3.helpers.visible = S3.helpersVisible;
+  if (S3.guides) S3.guides.visible = S3.helpersVisible;
   updateSceneHelpersControl();
   renderScene();
 }
@@ -528,9 +528,9 @@ function initScene() {
   S3.camera.position.set(20, 16, 22); S3.camera.lookAt(0, 0, 0);
   setSceneCamera(new THREE.Vector3(), null);
   S3.scene.add(new THREE.HemisphereLight(0xbfd7ff, 0x202a32, 2.2));
-  S3.helpers = new THREE.Group(); S3.helpers.visible = S3.helpersVisible; S3.scene.add(S3.helpers);
-  const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.helpers.add(grid);
-  const worldAxes = new THREE.AxesHelper(4); S3.helpers.add(worldAxes);
+  // 격자와 세계 좌표축은 항상 보인다. 아래 guides 그룹만 UI 체크박스로 숨긴다.
+  const grid = new THREE.GridHelper(40, 20, 0x506070, 0x25303a); S3.scene.add(grid);
+  const worldAxes = new THREE.AxesHelper(4); S3.scene.add(worldAxes);
   const guide = (color) => {
     const line = new THREE.Line(
       new THREE.BufferGeometry(),
@@ -546,7 +546,9 @@ function initScene() {
   S3.guideGround = guide(0x60a5fa);
   S3.guideHeight = guide(0x94a3b8);
   S3.guideDirect = guide(0xfbbf24);
-  S3.helpers.add(S3.guideGround, S3.guideHeight, S3.guideDirect);
+  S3.guides = new THREE.Group(); S3.guides.visible = S3.helpersVisible;
+  S3.guides.add(S3.guideGround, S3.guideHeight, S3.guideDirect);
+  S3.scene.add(S3.guides);
   updateSceneHelpersControl();
   S3.drone = new THREE.Group();
   S3.drone.add(new THREE.Mesh(new THREE.SphereGeometry(.55, 20, 14), new THREE.MeshStandardMaterial({ color: 0x60a5fa })));
