@@ -327,7 +327,7 @@ function renderRecords() {
     name.append(document.createTextNode(r.name));
     if (r.guidance) {
       const badge = document.createElement("span");
-      badge.className = "guidance-badge";
+      badge.className = "guidance-badge guidance-" + r.guidance.toLowerCase();
       badge.textContent = r.guidance;
       name.appendChild(badge);
     }
@@ -1200,7 +1200,6 @@ function bind() {
   });
   applyLayout();
   resetVideo();
-  $("btn-refresh").onclick = () => loadRecords();
   const applyHelp = () => {
     document.body.classList.toggle("hide-help", !showHelp);
     $("btn-help").textContent = showHelp ? "항목 설명 숨기기" : "항목 설명 보기";
