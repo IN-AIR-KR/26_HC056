@@ -12,6 +12,7 @@ ROS 없이 동작한다(sqlite3 + rosbags 로 직접 읽음) → 노트북에 ba
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -128,6 +129,27 @@ def _records(root: Path) -> list:
         duration = duration_ns / 1e9 if duration_ns is not None else None
         return start, duration
 
+    def guidance_badge(record: Path) -> str | None:
+        """Manifest schema와 해당 비행의 설정 사본으로 guidance 표기를 결정한다."""
+        manifest = _read_manifest(record)
+        try:
+            schema = int(manifest.get("topic_schema_version"))
+        except (TypeError, ValueError):
+            return None
+        labels = {
+            2: ("PID", "SEMI_PN", "SEMI_CHIENSE"),
+            3: ("PID", "PNG", "CHINESE"),
+        }.get(schema)
+        if labels is None:
+            return None
+        params = _manifest_path(record).parent / "control_params.yaml"
+        try:
+            content = params.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        match = re.search(r"^\s*guidance_mode\s*:\s*([0-2])\s*(?:#.*)?$", content, re.MULTILINE)
+        return labels[int(match.group(1))] if match else None
+
     candidates = [root] if looks_like_record(root) else []
     candidates.extend(
         d for d in root.iterdir()
@@ -142,6 +164,7 @@ def _records(root: Path) -> list:
             "size": sum(p.stat().st_size for p in files),
             "start": start,
             "duration": duration,
+            "guidance": guidance_badge(d),
         })
     out.sort(key=lambda r: r["name"], reverse=True)   # <YYYYmmdd_HHMMSS> → 최신이 위
     return out

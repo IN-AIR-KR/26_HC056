@@ -304,16 +304,14 @@ async function loadRecords() {
   if (want && records.some((r) => r.id === want) && want !== currentId) openRecord(want);
 }
 function renderRecords() {
-  const q = $("rec-filter").value.trim().toLowerCase();
   const ul = $("rec-list");
   ul.innerHTML = "";
-  const list = records.filter((r) => !q || r.name.toLowerCase().includes(q));
-  if (!list.length) {
-    ul.innerHTML = `<li class="empty">${records.length ? "검색 결과 없음" : "이 폴더에 기록(.db3)이 없음"}</li>`;
+  if (!records.length) {
+    ul.innerHTML = `<li class="empty">이 폴더에 기록(.db3)이 없음</li>`;
     return;
   }
   let previousDate = null;
-  for (const r of list) {
+  for (const r of records) {
     const date = r.start ? r.start.slice(0, 10) : "날짜 알 수 없음";
     if (date !== previousDate) {
       const heading = document.createElement("li");
@@ -325,7 +323,14 @@ function renderRecords() {
     const li = document.createElement("li");
     li.className = r.id === currentId ? "active" : "";
     li.innerHTML = `<div class="rec-name"></div><div class="rec-sub"></div>`;
-    li.children[0].textContent = r.name;
+    const name = li.children[0];
+    name.append(document.createTextNode(r.name));
+    if (r.guidance) {
+      const badge = document.createElement("span");
+      badge.className = "guidance-badge";
+      badge.textContent = r.guidance;
+      name.appendChild(badge);
+    }
     const sub = li.children[1];
     const parts = [
       r.start ? r.start.replace("T", " ").slice(5, 16) : null,
@@ -1196,7 +1201,6 @@ function bind() {
   applyLayout();
   resetVideo();
   $("btn-refresh").onclick = () => loadRecords();
-  $("rec-filter").oninput = renderRecords;
   const applyHelp = () => {
     document.body.classList.toggle("hide-help", !showHelp);
     $("btn-help").textContent = showHelp ? "항목 설명 숨기기" : "항목 설명 보기";
