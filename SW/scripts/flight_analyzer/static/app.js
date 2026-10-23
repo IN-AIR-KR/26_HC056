@@ -351,15 +351,19 @@ async function openRecord(id) {
   $("rec-title").textContent = records.find((r) => r.id === id)?.name ?? id;
   $("rec-meta").textContent = "불러오는 중…";
   $("errors").innerHTML = "";
+  $("content-loading").hidden = false;
   try {
     rec = await api("/api/record?id=" + encodeURIComponent(id));
   } catch (e) {
+    if (currentId !== id) return;
+    $("content-loading").hidden = true;
     $("rec-meta").textContent = "";
     $("errors").innerHTML = `<div></div>`;
     $("errors").firstChild.textContent = "불러오기 실패: " + e.message;
     return;
   }
   if (currentId !== id) return;   // 로딩 중 다른 기록을 눌렀음
+  $("content-loading").hidden = true;
   const topics = Object.keys(rec.topics);
   $("rec-meta").textContent =
     `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · control diagnostics ${rec.topics[T]?.t.length ?? 0}개`;
