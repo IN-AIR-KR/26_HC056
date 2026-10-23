@@ -312,23 +312,24 @@ function renderRecords() {
     ul.innerHTML = `<li class="empty">${records.length ? "검색 결과 없음" : "이 폴더에 기록(.db3)이 없음"}</li>`;
     return;
   }
+  let previousDate = null;
   for (const r of list) {
+    const date = r.start ? r.start.slice(0, 10) : "날짜 알 수 없음";
     const li = document.createElement("li");
-    li.className = (r.id === currentId ? "active " : "") + (r.control_count ? "" : "no-control-debug");
+    li.className = `${r.id === currentId ? "active " : ""}${date !== previousDate ? "date-first" : ""}`;
+    if (date !== previousDate) li.dataset.date = date;
     li.innerHTML = `<div class="rec-name"></div><div class="rec-sub"></div>`;
     li.children[0].textContent = r.name;
     const sub = li.children[1];
     const parts = [
       r.start ? r.start.replace("T", " ").slice(5, 16) : null,
-      fmtDur(r.duration), fmtSize(r.size),
+      r.duration != null ? fmtDur(r.duration) : null,
+      fmtSize(r.size),
     ].filter(Boolean);
     for (const p of parts) { const s = document.createElement("span"); s.textContent = p; sub.appendChild(s); }
-    const s = document.createElement("span");
-    if (r.control_count) s.textContent = `control ${r.control_count}`;
-    else { s.textContent = "control diagnostics 없음"; s.className = "warn"; }
-    sub.appendChild(s);
     li.onclick = () => openRecord(r.id);
     ul.appendChild(li);
+    previousDate = date;
   }
 }
 
