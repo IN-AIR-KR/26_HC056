@@ -267,6 +267,21 @@ const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false,
 
 const $ = (id) => document.getElementById(id);
 
+function setContentLoading(show) {
+  const overlay = $("content-loading");
+  if (!show) {
+    overlay.hidden = true;
+    return;
+  }
+  const content = $("content").getBoundingClientRect();
+  const topbar = $("topbar").getBoundingClientRect();
+  overlay.style.left = `${Math.max(0, content.left)}px`;
+  overlay.style.right = `${Math.max(0, window.innerWidth - content.right)}px`;
+  overlay.style.top = `${Math.max(0, topbar.bottom)}px`;
+  overlay.style.bottom = "0";
+  overlay.hidden = false;
+}
+
 function loadLS(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }
 function saveLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 무시 */ } }
 
@@ -351,19 +366,19 @@ async function openRecord(id) {
   $("rec-title").textContent = records.find((r) => r.id === id)?.name ?? id;
   $("rec-meta").textContent = "불러오는 중…";
   $("errors").innerHTML = "";
-  $("content-loading").hidden = false;
+  setContentLoading(true);
   try {
     rec = await api("/api/record?id=" + encodeURIComponent(id));
   } catch (e) {
     if (currentId !== id) return;
-    $("content-loading").hidden = true;
+    setContentLoading(false);
     $("rec-meta").textContent = "";
     $("errors").innerHTML = `<div></div>`;
     $("errors").firstChild.textContent = "불러오기 실패: " + e.message;
     return;
   }
   if (currentId !== id) return;   // 로딩 중 다른 기록을 눌렀음
-  $("content-loading").hidden = true;
+  setContentLoading(false);
   const topics = Object.keys(rec.topics);
   $("rec-meta").textContent =
     `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · control diagnostics ${rec.topics[T]?.t.length ?? 0}개`;
