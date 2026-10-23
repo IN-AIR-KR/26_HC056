@@ -315,9 +315,15 @@ function renderRecords() {
   let previousDate = null;
   for (const r of list) {
     const date = r.start ? r.start.slice(0, 10) : "날짜 알 수 없음";
+    if (date !== previousDate) {
+      const heading = document.createElement("li");
+      heading.className = "rec-date";
+      heading.textContent = date;
+      ul.appendChild(heading);
+      previousDate = date;
+    }
     const li = document.createElement("li");
-    li.className = `${r.id === currentId ? "active " : ""}${date !== previousDate ? "date-first" : ""}`;
-    if (date !== previousDate) li.dataset.date = date;
+    li.className = r.id === currentId ? "active" : "";
     li.innerHTML = `<div class="rec-name"></div><div class="rec-sub"></div>`;
     li.children[0].textContent = r.name;
     const sub = li.children[1];
@@ -329,7 +335,6 @@ function renderRecords() {
     for (const p of parts) { const s = document.createElement("span"); s.textContent = p; sub.appendChild(s); }
     li.onclick = () => openRecord(r.id);
     ul.appendChild(li);
-    previousDate = date;
   }
 }
 
