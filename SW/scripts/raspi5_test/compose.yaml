@@ -1,0 +1,27 @@
+x-test: &test
+  image: arms-raspi5-test:jammy-hailort-4.23.0
+  platform: linux/arm64
+  build:
+    context: .
+    args:
+      BUILD_JOBS: ${BUILD_JOBS:-2}
+  init: true
+  network_mode: none
+  # No privileged mode, host networking, GPIO, or flight-controller devices.
+  volumes:
+    - ${CAMERA_SHARED_DIR:-./shared}:/shared:ro
+    - ./outputs:/outputs
+    - ./models:/models:ro
+  environment:
+    PYTHONUNBUFFERED: "1"
+
+services:
+  camera:
+    <<: *test
+    command: ["python3", "camera_test.py", "--source", "bridge", "--bridge", "/shared/latest.frame", "--seconds", "30", "--snapshot", "/outputs/camera.jpg"]
+
+  hailo:
+    <<: *test
+    devices:
+      - ${HAILO_DEVICE:-/dev/hailo0}:/dev/hailo0
+    command: ["python3", "hailo_test.py", "--identify"]
