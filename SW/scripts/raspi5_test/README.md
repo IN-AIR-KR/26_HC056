@@ -101,12 +101,35 @@ HailoRT와 Python 의존성(`netifaces` 네이티브 확장 포함)은 빌드 �
 준비한다. 실행 이미지에서는 `--no-index --only-binary=:all:`로 로컬 wheel만
 설치하고, `pip check`, Python import, CLI 버전을 확인한다.
 
+### GUI 공통 준비 (미리보기를 사용할 경우)
+
+Pi의 **로그인된 데스크톱 터미널**에서 실행한다. Wayland에서는 Xwayland를 경유한다.
+`gui.sh`가 현재 세션의 X 인증 쿠키를 임시 파일에 준비하고 GUI용 Compose 설정과
+함께 실행한다. `xhost +`, privileged 모드, 실행 컨테이너의 host 네트워크는 사용하지 않는다.
+현재 X 디스플레이 접근 권한이므로 신뢰하는 이 테스트 이미지에만 사용한다.
+SSH X forwarding이나 GUI가 없는 서버 세션은 대상이 아니다.
+
+호스트에 xauth가 없으면:
+
+```bash
+sudo apt install xauth
+```
+
+GUI 설정만 추가한 경우 이미지 재빌드는 필요 없다. 창은 Docker 내부 OpenCV가 직접
+표시하므로 호스트 표시 프로그램은 필요하지 않다. 카메라 캡처 publisher는 별도로 유지한다.
+카메라 미리보기 실행은 **4번**, Hailo 추론 미리보기 실행은 **6번**에 설명한다.
+
+`No Xauthority cookie` 오류 시 `echo "$DISPLAY"`, `echo "$XAUTHORITY"`를 확인한다.
+`sudo ./gui.sh` 대신 데스크톱 사용자로 실행하고 Docker 사용 권한을 준비한다.
+Xwayland가 없다면 설치/세션 상태를 확인한다. 인증 쿠키 내용은 공유하지 않는다.
+컨테이너 종료 시 임시 인증 파일을 삭제하며 호스트 X 서버 접근 정책은 변경하지 않는다.
+
 ## 4. Docker에서 카메라 프레임 수신
 
 호스트 터미널 A에서 캡처를 유지한다:
 
 ```bash
-python3 camera_test.py --camera 0 --seconds 0 --preview --publish shared/latest.frame
+python3 camera_test.py --camera 0 --seconds 0 --publish shared/latest.frame
 ```
 
 터미널 B에서:
@@ -122,14 +145,28 @@ docker compose run --rm camera
 `--publish /dev/shm/arms-raspi5-test/latest.frame`으로 **함께 변경**한다.
 RAM 경로는 재부팅 후 다시 만들어야 한다.
 파일은 컨테이너를 지워도 남는다. 기본 Docker 시험은 headless다.
-Docker 창을 띄우기 위해 X11/Wayland 인증을 우회하거나 `xhost +`를 실행하지 않는다.
-현재 단계에서는 호스트 미리보기와 저장 이미지를 사용한다.
+Docker에서 카메라 창을 띄우는 방법은 아래 카메라 미리보기 항목을 참고한다.
 
 `frame_age_ms`는 호스트 capture 반환 시각부터의 시간이며 센서 노출 시작부터의
 엄밀한 지연은 아니다. `sensor_timestamp_ns`는 별도 메타데이터로 전달한다.
 컨테이너와 호스트는 같은 Linux 커널의 monotonic clock을 공유하는 전제다.
 
+### 카메라 미리보기 (추론 없음)
+
+3번의 GUI 준비를 완료하고 위의 호스트 publisher를 유지한 상태에서,
+터미널 B에서 카메라 수신 명령 대신 다음을 실행한다:
+
+```bash
+./gui.sh camera
+```
+
+30초간 **Docker가 받은 카메라 영상만** 표시한다. Hailo·HEF 모델은 사용하지 않는다.
+`q` 또는 Escape로 종료할 수 있다. 이 GUI 기본 명령은 스냅샷을 저장하지 않는다.
+스냅샷 저장은 위의 headless 명령을 사용한다.
+
 ## 5. Hailo 장치 확인 (Python 진입점)
+
+이 단계는 장치/펌웨어 통신 확인이며 카메라 영상, 모델 추론, 미리보기는 사용하지 않는다.
 
 호스트:
 
@@ -167,6 +204,30 @@ docker compose run --rm hailo python3 hailo_test.py \
   --hef /models/model.hef --source bridge --bridge /shared/latest.frame \
   --seconds 30 --metrics /outputs/hailo.json
 ```
+
+### Hailo 추론 미리보기
+
+위의 headless 추론 명령 대신 다음을 실행하면 Docker가 미리보기 창도 띄운다.
+3번의 GUI 준비, `models/model.hef`, 실행 중인 호스트 카메라 publisher가 필요하다.
+이미 실행 중인 publisher가 있으면 중복 시작하지 않는다.
+
+```bash
+./gui.sh hailo
+```
+
+30초간 실행한다. 시간/전체화면 옵션을 직접 지정하려면:
+
+```bash
+./gui.sh hailo python3 hailo_test.py \
+  --hef /models/model.hef --source bridge --bridge /shared/latest.frame \
+  --preview --fullscreen --seconds 60 --metrics /outputs/hailo.json
+```
+
+`q` 또는 Escape로 종료할 수 있다. 창을 HDMI/CVBS 중 원하는 화면으로 옮긴다.
+**추론은 실행하지만 미리보기에는 원본 입력 영상만 표시한다. YOLO bbox 해석/표시는
+현재 코드에 포함되지 않는다.**
+
+### 호스트에서 직접 추론 (선택)
 
 호스트에 `hailo_platform`이 설치돼 있다면 브리지 없이도 실행 가능하다
 (동일 카메라를 사용 중인 publisher를 먼저 종료):
@@ -225,7 +286,8 @@ python3 camera_test.py --source synthetic --seconds 0 --publish shared/latest.fr
 - Hailo 드라이버 버전 불일치: `modinfo hailo_pci`, `hailortcli --version`, 호스트 패키지
   버전을 비교. 호스트 `.so`나 Python 패키지를 Jammy 컨테이너에 마운트하지 않는다.
 - 카메라 부하에서 재부팅: 소프트웨어보다 전원·배선·열 상태를 먼저 확인.
-- `--preview` 오류: 우선 headless로 확인. 컨테이너 기본 구성은 GUI 소켓을 전달하지 않는다.
+- `--preview` 오류: 우선 headless로 확인. GUI는 `./gui.sh`로 실행해야 한다.
+  기본 `docker compose run`은 GUI 소켓을 전달하지 않는다.
 - `--seconds 0`에서 Ctrl+C 종료 시 요약 파일은 저장되지 않을 수 있다. 측정 기록에는
   유한한 `--seconds`를 사용한다.
 
