@@ -87,9 +87,19 @@ cp .env.example .env
 docker compose build camera
 ```
 
+`build.network: host`를 설정했고 `additional privileges requested`가 나오면
+Compose 파일을 그대로 읽는 Buildx Bake로 빌드 권한을 전달한다:
+
+```bash
+docker buildx bake -f compose.yaml --allow=network.host --load camera
+```
+
 두 서비스는 같은 이미지를 쓴다. 처음에는 HailoRT와 Python 바인딩을 컴파일하므로
 시간/메모리/다운로드 공간이 필요하다. 기본 병렬 작업 수는 2, 부족하면 `.env`에서
 `BUILD_JOBS=1`로 낮춘다. 이미지 안에 호스트 드라이버를 설치하지 않는다.
+HailoRT와 Python 의존성(`netifaces` 네이티브 확장 포함)은 빌드 단계에서 wheel로
+준비한다. 실행 이미지에서는 `--no-index --only-binary=:all:`로 로컬 wheel만
+설치하고, `pip check`, Python import, CLI 버전을 확인한다.
 
 ## 4. Docker에서 카메라 프레임 수신
 
@@ -207,6 +217,11 @@ python3 camera_test.py --source synthetic --seconds 0 --publish shared/latest.fr
 - `No fresh frame`: 호스트 publisher, `shared` 경로, 파일 권한 확인. 중단된 publisher의
   오래된 파일은 재사용하지 않고 타임아웃된다.
 - `hailo_platform` 없음: 호스트 패키지 상태 또는 Docker 빌드 로그 확인.
+- 빌드 중 `Could not resolve host`: GitHub/PyPI DNS 조회 실패다. Python 바인딩
+  빌드도 CMake를 통해 GitHub의 pybind11 소스를 추가로 받는다.
+- `netifaces` 설치 중 `aarch64-linux-gnu-gcc ... No such file or directory`:
+  컴파일러 없는 실행 단계에서 소스 패키지를 빌드한 오류다. 의존성 wheel을
+  빌드 단계에서 준비하는 수정된 Dockerfile을 사용한다.
 - Hailo 드라이버 버전 불일치: `modinfo hailo_pci`, `hailortcli --version`, 호스트 패키지
   버전을 비교. 호스트 `.so`나 Python 패키지를 Jammy 컨테이너에 마운트하지 않는다.
 - 카메라 부하에서 재부팅: 소프트웨어보다 전원·배선·열 상태를 먼저 확인.
@@ -220,8 +235,10 @@ python3 camera_test.py --source synthetic --seconds 0 --publish shared/latest.fr
 - 별도 프로세스의 합성 영상 → 최신 파일 → 수신 → JPEG 저장 확인
   (320×240, 요청 20FPS, 수신 약 19.6FPS).
 - 송신 중단 후 오래된 프레임 타임아웃, 손상된 프레임 거부 확인.
-- 작성 환경은 Mac이며 Docker 데몬에 연결되지 않아 **이미지 빌드는 미검증**이다.
-  Pi의 CSI·Hailo 장치 실행 및 Ubuntu ARM64 HailoRT 소스 빌드도 아직 미검증이다.
+- 초기 작성 환경(Mac)에서는 이미지 빌드를 검증하지 못했다.
+- 2026-10-27 ARM64 Docker에서 기존 HailoRT 컴파일 캐시를 재사용한 이미지 빌드로
+  `netifaces` wheel 생성, 오프라인 설치, `pip check`, OpenCV/NumPy/HailoRT import,
+  HailoRT CLI 4.23.0 확인을 통과했다. CSI·Hailo 장치 실행은 이 검증에 포함하지 않았다.
 
 ## 공식 참고 자료
 

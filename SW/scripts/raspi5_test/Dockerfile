@@ -21,6 +21,11 @@ RUN cmake -S /src/hailort -B /src/build -DCMAKE_BUILD_TYPE=Release \
     && cmake --install /src/build && ldconfig
 RUN python3 -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
     --wheel-dir /wheels /src/hailort/hailort/libhailort/bindings/python/platform
+# Resolve the built wheel's runtime dependencies here, where GCC and Python
+# headers are available (netifaces needs a native extension on ARM64).
+# Keep this separate so an existing HailoRT build remains cached.
+RUN python3 -m pip wheel --no-cache-dir --no-build-isolation \
+    --wheel-dir /wheels /wheels/hailort-*.whl
 
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
@@ -29,8 +34,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=hailort-build /usr/local/ /usr/local/
 COPY --from=hailort-build /wheels/ /tmp/wheels/
-RUN ldconfig && python3 -m pip install --no-cache-dir /tmp/wheels/*.whl \
+RUN ldconfig && python3 -m pip install --no-cache-dir --no-index \
+    --find-links=/tmp/wheels --only-binary=:all: /tmp/wheels/hailort-*.whl \
     && rm -rf /tmp/wheels \
+    && python3 -m pip check \
     && python3 -c "import cv2, numpy, hailo_platform" \
     && hailortcli --version
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
