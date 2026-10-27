@@ -36,9 +36,8 @@ SW/jetson_setting/startup/
    ```bash
    chmod +x ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/start_arms.sh
    ```
-4. **장치·권한** — CRSF UART(`/dev/ttyTHS1`, nvgetty 비활성), 서보 PWM(핀15 pinmux +
-   `/sys/class/pwm` 권한), ESP32 시리얼(dialout), 카메라(`/dev/video0`). 각 하위
-   README(서보/CRSF) 참고.
+4. **장치·권한** — CRSF UART(`/dev/ttyTHS1`, nvgetty 비활성), ESP32 시리얼(dialout),
+   카메라(`/dev/video0`). 각 하위 README(CRSF) 참고.
 5. **경로 확인** — 리포가 위 경로와 다르면 `start_arms.sh`의 `ARMS_ROOT`,
    `arms.service`/`arms-autostart.desktop`의 `Exec` 경로를 **본인 경로로 수정**.
 

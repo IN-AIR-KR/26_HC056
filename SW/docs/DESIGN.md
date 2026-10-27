@@ -165,22 +165,17 @@ graph TD
 
 ### 4.1 상태별 동작 정의
 
-| 상태       | 드론 동작                       | CRSF 출력                                                      | 서보 잠금장치              | UI 표시                   |
-| ---------- | ------------------------------- | -------------------------------------------------------------- | -------------------------- | ------------------------- |
-| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                              | **OPEN**(진입 시)          | 회색 테두리               |
-| **SEARCH** | 타겟 탐색 중                    | CH3=min, CH5=`auto_arm_states` 설정에 따름                    | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=`auto_arm_states` 설정에 따름 (클램프는 잠김)             | LOCK 유지                  | 주황색 박스, "Locking..." |
-| **TRACK**  | 위치 보정 추적                  | **CH5=arm** + PID → CH1/2 + track_throttle → CH3               | **OPEN**(LOCK→TRACK 엣지)  | 빨간 박스, "LOCKED"       |
-| **RTL**    | GPS Rescue 귀환 및 착륙 요청    | CH5=arm 유지(ARM 스위치가 올라간 경우), **CH7=RTL high**       | OPEN 유지                  | "RTL"                     |
+| 상태       | 드론 동작                       | CRSF 출력                                                | UI 표시                   |
+| ---------- | ------------------------------- | -------------------------------------------------------- | ------------------------- |
+| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                        | 회색 테두리               |
+| **SEARCH** | 타겟 탐색 중                    | CH3=min, CH5=`auto_arm_states` 설정에 따름              | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=`auto_arm_states` 설정에 따름                       | 주황색 박스, "Locking..." |
+| **TRACK**  | 위치 보정 추적                  | **CH5=arm** + PID → CH1/2 + track_throttle → CH3         | 빨간 박스, "LOCKED"       |
+| **RTL**    | GPS Rescue 귀환 및 착륙 요청    | CH5=arm 유지(ARM 스위치가 올라간 경우), **CH7=RTL high** | "RTL"                     |
 
 > **자동 모드 arm(CH5)은 상태머신 상태로 결정**(스위치와 분리). 기본은 `SEARCH`부터 상태를 진행하되
 > CH5 무장은 `control.auto_arm_states` 설정으로 정한다(현재 기본값 `[SEARCH, LOCK, TRACK, RTL]`).
-> LOCK에서는 클램프가 기체를 고정하고, TRACK 전이에서 서보가 열린다. 수동 모드 CH5 는 arm 스위치.
-
-> **서보 잠금장치(발사 클램프)**: 발사 전 기체를 발사기에 고정하고 발사 순간에만 놓아준다.
-> 방아쇠(launch 버튼)가 아니라 **상태 전이 엣지**로 제어한다(SEARCH 중 방아쇠를 눌러도 안 풀림).
-> · IDLE 진입 → OPEN(무조건 열림, 기체 장착/탈거) · IDLE→SEARCH(auto) → LOCK · LOCK→TRACK(발사) → OPEN.
-> 자세한 하드웨어/구현은 [7.8](#78-발사-잠금장치-서보-servo-lock) 참고.
+> 수동 모드 CH5 는 arm 스위치.
 
 ### 4.2 상태 전이 다이어그램
 
@@ -596,54 +591,7 @@ arms_control_node
   |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
   |     스로틀: hover→track (center_q 기반 추격 상승) → CH3
   |
-  +-- [ServoLock]  (발사 잠금장치, sysfs 하드웨어 PWM)
-        상태 전이 엣지 → lock() / open()
 ```
-
-### 7.8 발사 잠금장치 서보 (Servo Lock)
-
-발사 전 기체를 발사기에 고정(LOCK)하고 발사 순간에만 놓아주는(OPEN) 클램프 서보다.
-별도 노드/토픽 없이 **`arms_control_node`(C++) 내부에 통합**되어 있다 — 개폐 판정이 상태머신
-상태·모드 스위치에 달려 있어 제어 노드가 소유하는 것이 자연스럽기 때문이다. 구동은 `ServoLock`
-클래스(`include/arms_control/servo_lock.hpp`, `src/servo_lock.cpp`)가 담당한다.
-
-**제어 규칙 (상태 전이 엣지로만 판정)**
-
-| 트리거 (전이)                  | 동작                                       |
-| ------------------------------ | ------------------------------------------ |
-| IDLE 진입 (어느 상태에서든)    | OPEN — IDLE 은 무조건 열림(기체 장착/탈거) |
-| IDLE → SEARCH (auto, 상승엣지) | LOCK — 발사기에 고정                       |
-| LOCK → TRACK (발사)            | OPEN — 기체를 놓아줌                       |
-
-- 방아쇠(launch 버튼)가 아니라 **LOCK→TRACK 전이**가 OPEN 트리거다(SEARCH 에서 방아쇠를 눌러도
-  안 풀림). SEARCH/LOCK/TRACK 은 auto 모드에서만 발생하므로 전이만으로 판정 가능.
-- LOCK→SEARCH(표적 소실)·TRACK→IDLE(수동 인계) 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
-- 판정은 `control_loop` 말미에서 in-tick 전이(arm/disarm) 반영 후 최신 `sm_->state()` 로 한다.
-
-**하드웨어 (Jetson Orin Nano)**
-
-- 물리 **핀 15 = GPIO12 / GP88_PWM1 → `3280000.pwm` → `/sys/class/pwm/pwmchip0` 채널 0**
-  (Jetson.GPIO `gpio_pin_data.py` 기준, 본 기기 sysfs 실측 확인).
-- 원본 파이썬 드라이버(`arms_command/servo/servo_motor.py`, Jetson.GPIO)와 **동일한 신호**를 C++ 에서
-  sysfs 로 직접 쓴다: 50Hz(period 20ms), 90°=1.5ms(LOCK 기본), 180°=2.5ms(OPEN 기본).
-- 시퀀스: `export` → `duty_cycle=0` → `period` → `duty_cycle` → `enable=1`. duty 는 값이 바뀔 때만 기록.
-- 노드 종료 시 unexport/disable 하지 않는다 → 마지막 잠금 위치 유지(종료·크래시에 클램프가 풀리지 않게).
-- **전제**: jetson-io 로 핀15 PWM1 pinmux 설정 + `/sys/class/pwm` 쓰기 권한(`99-gpio.rules` udev).
-  (README_SERVO_TEST.md 의 파이썬 경로와 동일 요건.) 미충족/비-Jetson/SITL 에서는 경고 1회 후 no-op.
-
-**파라미터** (`arms_control_node`, `control_params.yaml` / 실기체 `hw_overrides.yaml` 오버레이)
-
-```yaml
-servo:
-  enabled: false # 기본 off(SITL). 실기체는 hw_overrides.yaml 이 true 로 덮어씀
-  chip_path: "/sys/class/pwm/pwmchip0"
-  channel: 0
-  period_ns: 20000000 # 50Hz
-  lock_duty_ns: 1500000 # 90°  = LOCK (기본)
-  open_duty_ns: 2500000 # 180° = OPEN
-```
-
-> 조립 방향(어느 각도가 잠금인지)이 반대면 `lock_duty_ns`/`open_duty_ns` 값을 스왑한다.
 
 ## 8. 조종 입력 (arms_command)
 
@@ -870,8 +818,7 @@ nodes:
 
 nodes:
   - arms_control_node  (arms_control)   상태머신 + PID + CRSF → /dev/ttyTHS1
-      파라미터: config/hw_overrides.yaml 오버레이 (crsf.port, servo.enabled,
-                sitl_auto_launch=false, 실기체 PID)
+      파라미터: config/hw_overrides.yaml 오버레이 (sitl_auto_launch=false, 실기체 PID)
   - arms_ui_node       (arms_ui)
 
 # arms_command/launch/command.launch.py  (별도 실행)

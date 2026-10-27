@@ -19,7 +19,6 @@ add_library(arms_control_lib
   src/pid_controller.cpp
   src/pn_guidance.cpp
   src/state_machine.cpp
-  src/servo_lock.cpp
 )
 
 target_include_directories(arms_control_lib PUBLIC
