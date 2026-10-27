@@ -30,7 +30,7 @@ SW/
 │       │       └── px4/airframes/  # PX4 airframe (4022_gz_arms_drone)
 │       ├── arms_ui/            # 오퍼레이터 UI
 │       └── arms_msgs/          # 커스텀 메시지
-├── scripts/            # 테스트/도구 스크립트 (crsf / joy / servo / detection_analysis / yolo 학습)
+├── scripts/            # 테스트/도구 스크립트 (crsf / joy / detection_analysis / yolo 학습)
 ├── setup_sim.sh        # 최초 셋업 (한 번)
 └── kill_all.sh         # 비상용 전체 종료
 ```

@@ -267,6 +267,21 @@ const V = { t: 0, playing: false, speed: 1, shown: -1, want: -1, loading: false,
 
 const $ = (id) => document.getElementById(id);
 
+function setContentLoading(show) {
+  const overlay = $("content-loading");
+  if (!show) {
+    overlay.hidden = true;
+    return;
+  }
+  const content = $("content").getBoundingClientRect();
+  const topbar = $("topbar").getBoundingClientRect();
+  overlay.style.left = `${Math.max(0, content.left)}px`;
+  overlay.style.right = `${Math.max(0, window.innerWidth - content.right)}px`;
+  overlay.style.top = `${Math.max(0, topbar.bottom)}px`;
+  overlay.style.bottom = "0";
+  overlay.hidden = false;
+}
+
 function loadLS(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }
 function saveLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 무시 */ } }
 
@@ -304,29 +319,40 @@ async function loadRecords() {
   if (want && records.some((r) => r.id === want) && want !== currentId) openRecord(want);
 }
 function renderRecords() {
-  const q = $("rec-filter").value.trim().toLowerCase();
   const ul = $("rec-list");
   ul.innerHTML = "";
-  const list = records.filter((r) => !q || r.name.toLowerCase().includes(q));
-  if (!list.length) {
-    ul.innerHTML = `<li class="empty">${records.length ? "검색 결과 없음" : "이 폴더에 기록(.db3)이 없음"}</li>`;
+  if (!records.length) {
+    ul.innerHTML = `<li class="empty">이 폴더에 기록(.db3)이 없음</li>`;
     return;
   }
-  for (const r of list) {
+  let previousDate = null;
+  for (const r of records) {
+    const date = r.start ? r.start.slice(0, 10) : "날짜 알 수 없음";
+    if (date !== previousDate) {
+      const heading = document.createElement("li");
+      heading.className = "rec-date";
+      heading.textContent = date;
+      ul.appendChild(heading);
+      previousDate = date;
+    }
     const li = document.createElement("li");
-    li.className = (r.id === currentId ? "active " : "") + (r.control_count ? "" : "no-control-debug");
+    li.className = r.id === currentId ? "active" : "";
     li.innerHTML = `<div class="rec-name"></div><div class="rec-sub"></div>`;
-    li.children[0].textContent = r.name;
+    const name = li.children[0];
+    name.append(document.createTextNode(r.name));
+    if (r.guidance) {
+      const badge = document.createElement("span");
+      badge.className = "guidance-badge guidance-" + r.guidance.toLowerCase();
+      badge.textContent = r.guidance;
+      name.appendChild(badge);
+    }
     const sub = li.children[1];
     const parts = [
       r.start ? r.start.replace("T", " ").slice(5, 16) : null,
-      fmtDur(r.duration), fmtSize(r.size),
+      r.duration != null ? fmtDur(r.duration) : null,
+      fmtSize(r.size),
     ].filter(Boolean);
     for (const p of parts) { const s = document.createElement("span"); s.textContent = p; sub.appendChild(s); }
-    const s = document.createElement("span");
-    if (r.control_count) s.textContent = `control ${r.control_count}`;
-    else { s.textContent = "control diagnostics 없음"; s.className = "warn"; }
-    sub.appendChild(s);
     li.onclick = () => openRecord(r.id);
     ul.appendChild(li);
   }
@@ -340,15 +366,19 @@ async function openRecord(id) {
   $("rec-title").textContent = records.find((r) => r.id === id)?.name ?? id;
   $("rec-meta").textContent = "불러오는 중…";
   $("errors").innerHTML = "";
+  setContentLoading(true);
   try {
     rec = await api("/api/record?id=" + encodeURIComponent(id));
   } catch (e) {
+    if (currentId !== id) return;
+    setContentLoading(false);
     $("rec-meta").textContent = "";
     $("errors").innerHTML = `<div></div>`;
     $("errors").firstChild.textContent = "불러오기 실패: " + e.message;
     return;
   }
   if (currentId !== id) return;   // 로딩 중 다른 기록을 눌렀음
+  setContentLoading(false);
   const topics = Object.keys(rec.topics);
   $("rec-meta").textContent =
     `${fmtDur(rec.duration)} · 토픽 ${topics.length}개 · control diagnostics ${rec.topics[T]?.t.length ?? 0}개`;
@@ -1189,8 +1219,6 @@ function bind() {
   });
   applyLayout();
   resetVideo();
-  $("btn-refresh").onclick = () => loadRecords();
-  $("rec-filter").oninput = renderRecords;
   const applyHelp = () => {
     document.body.classList.toggle("hide-help", !showHelp);
     $("btn-help").textContent = showHelp ? "항목 설명 숨기기" : "항목 설명 보기";

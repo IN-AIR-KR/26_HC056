@@ -13,7 +13,6 @@
 
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/pn_guidance.hpp"
-#include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
 #include "arms_msgs/msg/attitude_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
@@ -110,14 +109,6 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.prearm_throttle_max", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.prearm_stick_tol", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.operator_input_timeout_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
-
-    // 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs). SITL 은 enabled=false.
-    declare_required_parameter("servo.enabled", rclcpp::ParameterType::PARAMETER_BOOL);
-    declare_required_parameter("servo.chip_path", rclcpp::ParameterType::PARAMETER_STRING);
-    declare_required_parameter("servo.channel", rclcpp::ParameterType::PARAMETER_INTEGER);
-    declare_required_parameter("servo.period_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
-    declare_required_parameter("servo.lock_duty_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
-    declare_required_parameter("servo.open_duty_ns", rclcpp::ParameterType::PARAMETER_INTEGER);
 
     // PID 유도는 ACRO(각속도)를 쓴다. PN은 별도 guidance_mode에서 Stabilized
     // 목표 자세를 쓰며, PID 각속도를 각도로 오해하는 예전 분기는 유지하지 않는다.
@@ -322,17 +313,6 @@ class ArmsControlNode : public rclcpp::Node {
     tau_ease_start_ = get_parameter("control.tau_ease_start").as_double();
     tau_ease_full_ = get_parameter("control.tau_ease_full").as_double();
     tau_ease_min_scale_ = get_parameter("control.tau_ease_min_scale").as_double();
-    // ---- 발사 잠금장치 서보 ----
-    ServoLock::Params servo_params;
-    servo_params.enabled     = get_parameter("servo.enabled").as_bool();
-    servo_params.chip_path   = get_parameter("servo.chip_path").as_string();
-    servo_params.channel     = static_cast<int>(get_parameter("servo.channel").as_int());
-    servo_params.period_ns   = static_cast<long>(get_parameter("servo.period_ns").as_int());
-    servo_params.lock_duty_ns = static_cast<long>(get_parameter("servo.lock_duty_ns").as_int());
-    servo_params.open_duty_ns = static_cast<long>(get_parameter("servo.open_duty_ns").as_int());
-    servo_ = std::make_unique<ServoLock>(servo_params, log_fn);
-    servo_->init();
-
     // 런타임 파라미터 변경 콜백
     param_cb_handle_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params) {
@@ -1328,28 +1308,6 @@ class ArmsControlNode : public rclcpp::Node {
     msg.io_connected = io_status_received_ && vehicle_telemetry_connected_;
     pub_state_->publish(msg);
 
-    // ---- 발사 잠금장치 서보 ----
-    //   상태 전이 엣지로만 판정한다(방아쇠 버튼이 아니라 LOCK→TRACK 전이가 열림 트리거).
-    //     · IDLE 진입            → OPEN (무조건 열림, 기체 장착/탈거)
-    //     · IDLE→SEARCH (auto)   → LOCK (상승엣지, 발사기 고정)
-    //     · LOCK→TRACK (발사)    → OPEN (기체 놓아줌)
-    //   in-tick 전이(arm/disarm 등) 이후의 최신 상태로 판정한다.
-    State servo_state = sm_->state();
-    if (!servo_init_) {
-      servo_init_ = true;
-      servo_->open();  // 시작 상태 IDLE → OPEN
-    } else if (servo_state != servo_prev_state_) {
-      if (servo_state == State::IDLE) {
-        servo_->open();
-      } else if (servo_prev_state_ == State::IDLE &&
-                 servo_state == State::SEARCH && !joy_manual_mode_) {
-        servo_->lock();
-      } else if (servo_prev_state_ == State::LOCK &&
-                 servo_state == State::TRACK) {
-        servo_->open();
-      }
-    }
-    servo_prev_state_ = servo_state;
   }
 
   // ----------------------------------------------------------------
@@ -1358,11 +1316,6 @@ class ArmsControlNode : public rclcpp::Node {
   std::unique_ptr<StateMachine> sm_;
   std::unique_ptr<PIDController> pid_roll_;
   std::unique_ptr<PIDController> pid_pitch_;
-  std::unique_ptr<ServoLock> servo_;
-
-  // 서보 전이감지용 직전 상태 (제어 루프 상태와 별개로 서보 전이만 추적).
-  State servo_prev_state_{State::IDLE};
-  bool  servo_init_{false};
 
   double track_throttle_{0.66};
   double lead_gain_{0.0};

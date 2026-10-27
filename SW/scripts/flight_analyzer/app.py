@@ -12,6 +12,7 @@ ROS 없이 동작한다(sqlite3 + rosbags 로 직접 읽음) → 노트북에 ba
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -20,7 +21,7 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_file
 
 import bag_reader
 
@@ -28,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 ENV_PATH = HERE / ".env"
 LOG_ROOT_ENV = "FLIGHT_ANALYZER_LOG_ROOT"
 
-app = Flask(__name__, static_folder=None)
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 state = {"root": None}
 _cache = OrderedDict()                 # (경로, mtime, 크기) → 로드 결과. 최근 4개만 유지
 _cache_lock = threading.Lock()
@@ -76,25 +77,94 @@ def _record_path(rec_id: str) -> Path:
 
 
 def _records(root: Path) -> list:
-    """데이터 폴더 안의 기록(.db3 를 가진 폴더) 목록. 폴더 자체가 기록이어도 된다."""
-    cands = []
-    if bag_reader.find_db3(root):
-        cands.append(root)
-    for d in root.iterdir():
-        if d.is_dir() and not d.name.startswith(".") and bag_reader.find_db3(d):
-            cands.append(d)
+    """기록 목록은 디렉터리·파일 정보만으로 빠르게 만든다.
+
+    이전에는 목록을 열 때마다 모든 bag DB를 열어 topic별 COUNT/MIN/MAX를 계산했다.
+    기록 수가 많으면 첫 화면만 보는데도 수 초가 걸린다. 목록에는 폴더명과 DB 크기만
+    싣고, 길이·토픽 수·제어 메시지 수는 사용자가 기록을 선택한 뒤 load_record()에서
+    계산한다.
+    """
+    def db_files(record: Path) -> list[Path]:
+        # auto_save 형식(<record>/bag/*.db3)과, 복사한 일반 rosbag 디렉터리 모두 지원.
+        candidates = [record / "bag", record]
+        return [p for directory in candidates if directory.is_dir()
+                for p in directory.glob("*.db3") if p.is_file()]
+
+    def looks_like_record(record: Path) -> bool:
+        files = db_files(record)
+        if not files:
+            return False
+        # 표준 rosbag은 metadata.yaml을 갖고, auto_save 기록은 bag/ 아래 DB를 둔다.
+        # metadata가 없는 강제 종료 bag도 auto_save 폴더 구조이면 목록에 남긴다.
+        return (record / "metadata.yaml").is_file() or (record / "bag").is_dir() or \
+            (record / "manifest.json").is_file()
+
+    def metadata_summary(record: Path) -> tuple[str | None, float | None]:
+        """rosbag2의 작은 metadata.yaml에서 시작 시각·길이만 읽는다.
+
+        YAML 파서를 추가하지 않고 rosbag2가 고정 형식으로 쓰는 두 nanosecond 필드만
+        찾는다. metadata가 없는 미정상 종료 bag은 목록에는 남기되 두 값만 비워 둔다.
+        """
+        metadata_paths = (record / "bag" / "metadata.yaml", record / "metadata.yaml")
+        path = next((p for p in metadata_paths if p.is_file()), None)
+        if path is None:
+            return None, None
+        section = None
+        start_ns = duration_ns = None
+        try:
+            for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if line == "starting_time:":
+                    section = "starting_time"
+                elif line == "duration:":
+                    section = "duration"
+                elif section == "starting_time" and line.startswith("nanoseconds_since_epoch:"):
+                    start_ns = int(line.split(":", 1)[1].strip())
+                elif section == "duration" and line.startswith("nanoseconds:"):
+                    duration_ns = int(line.split(":", 1)[1].strip())
+        except (OSError, ValueError):
+            return None, None
+        start = (datetime.fromtimestamp(start_ns / 1e9).isoformat(timespec="seconds")
+                 if start_ns is not None else None)
+        duration = duration_ns / 1e9 if duration_ns is not None else None
+        return start, duration
+
+    def guidance_badge(record: Path) -> str | None:
+        """Manifest schema와 해당 비행의 설정 사본으로 guidance 표기를 결정한다."""
+        manifest = _read_manifest(record)
+        try:
+            schema = int(manifest.get("topic_schema_version"))
+        except (TypeError, ValueError):
+            return None
+        labels = {
+            2: ("PID", "SEMI_PN", "SEMI_CHIENSE"),
+            3: ("PID", "PNG", "CHINESE"),
+        }.get(schema)
+        if labels is None:
+            return None
+        params = _manifest_path(record).parent / "control_params.yaml"
+        try:
+            content = params.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        match = re.search(r"^\s*guidance_mode\s*:\s*([0-2])\s*(?:#.*)?$", content, re.MULTILINE)
+        return labels[int(match.group(1))] if match else None
+
+    candidates = [root] if looks_like_record(root) else []
+    candidates.extend(
+        d for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and looks_like_record(d))
     out = []
-    for d in cands:
-        s = bag_reader.record_summary(d)
+    for d in candidates:
+        files = db_files(d)
+        start, duration = metadata_summary(d)
         out.append({
             "id": "." if d == root else d.relative_to(root).as_posix(),
             "name": d.name,
-            "start": (datetime.fromtimestamp(s["start_ns"] / 1e9).isoformat(timespec="seconds")
-                      if s["start_ns"] else None),
-            "duration": s["duration"],
-            "size": s["size"],
-            "control_count": s["counts"].get("/arms/control/diagnostics", 0),
-            "counts": s["counts"],
+            "size": sum(p.stat().st_size for p in files),
+            "start": start,
+            "duration": duration,
+            "guidance": guidance_badge(d),
         })
     out.sort(key=lambda r: r["name"], reverse=True)   # <YYYYmmdd_HHMMSS> → 최신이 위
     return out
@@ -103,12 +173,7 @@ def _records(root: Path) -> list:
 # ---------------------------------------------------------------- pages
 @app.get("/")
 def index():
-    return send_from_directory(HERE / "static", "index.html")
-
-
-@app.get("/static/<path:name>")
-def static_files(name):
-    return send_from_directory(HERE / "static", name)
+    return app.send_static_file("index.html")
 
 
 # ---------------------------------------------------------------- api
