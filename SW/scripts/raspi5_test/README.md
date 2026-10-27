@@ -227,6 +227,13 @@ docker compose run --rm hailo python3 hailo_test.py \
 **추론은 실행하지만 미리보기에는 원본 입력 영상만 표시한다. YOLO bbox 해석/표시는
 현재 코드에 포함되지 않는다.**
 
+미리보기는 기본 960×540 범위 안에 종횡비를 유지해 표시하며 영상을 자르거나 확대하지 않는다.
+`--preview-width`, `--preview-height`로 표시 크기만 바꿀 수 있다. 카메라 캡처 해상도와
+NPU 입력 크기는 바뀌지 않는다. GUI Compose에서는 Qt 자동 배율도 끈다.
+이 표시 수정 후에는 `docker compose build camera`로 이미지를 다시 빌드해야 한다.
+화면의 창 크기가 아니라 **촬영 화각 자체**가 좁다면 Picamera2와 rpicam의 센서 모드/크롭
+선택이 다른지 별도로 비교해야 한다. 이 수정은 센서 화각을 변경하지 않는다.
+
 ### 호스트에서 직접 추론 (선택)
 
 호스트에 `hailo_platform`이 설치돼 있다면 브리지 없이도 실행 가능하다

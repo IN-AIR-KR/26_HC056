@@ -123,6 +123,8 @@ def add_camera_arguments(parser):
     parser.add_argument("--seconds", type=float, default=30, help="0 = until Ctrl+C")
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--fullscreen", action="store_true")
+    parser.add_argument("--preview-width", type=int, default=960)
+    parser.add_argument("--preview-height", type=int, default=540)
 
 
 def validate_camera_arguments(args):
@@ -130,3 +132,19 @@ def validate_camera_arguments(args):
         raise ValueError("width, height, fps, timeout must be positive; seconds >= 0")
     if args.camera < 0:
         raise ValueError("camera index must be nonnegative")
+    if min(args.preview_width, args.preview_height) <= 0:
+        raise ValueError("preview dimensions must be positive")
+
+
+def preview_image(image, width, height):
+    """Fit the entire image into a preview, without crop or upscaling.
+
+    This affects display only, never the camera, bridge, or NPU input.
+    """
+    import cv2
+    scale = min(1.0, width / image.shape[1], height / image.shape[0])
+    if scale == 1.0:
+        return image
+    return cv2.resize(image, (max(1, round(image.shape[1] * scale)),
+                              max(1, round(image.shape[0] * scale))),
+                      interpolation=cv2.INTER_AREA)

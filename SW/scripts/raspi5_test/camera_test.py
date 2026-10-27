@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from frames import FrameSource, add_camera_arguments, publish_frame, validate_camera_arguments
+from frames import FrameSource, add_camera_arguments, publish_frame, validate_camera_arguments, preview_image
 
 
 def main():
@@ -35,6 +35,7 @@ def main():
     try:
         if args.preview:
             cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window, args.preview_width, args.preview_height)
             if args.fullscreen:
                 cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         while args.seconds == 0 or time.monotonic() - start < args.seconds:
@@ -54,7 +55,7 @@ def main():
                                   "frame_age_ms": round(age, 2), "shape": list(image.shape)}), flush=True)
                 interval_count, last_report = 0, now
             if args.preview:
-                cv2.imshow(window, image)
+                cv2.imshow(window, preview_image(image, args.preview_width, args.preview_height))
                 if cv2.waitKey(1) & 0xff in (27, ord("q")):
                     break
     finally:

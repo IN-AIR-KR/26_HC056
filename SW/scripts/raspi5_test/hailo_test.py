@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from frames import FrameSource, add_camera_arguments, validate_camera_arguments
+from frames import FrameSource, add_camera_arguments, validate_camera_arguments, preview_image
 
 
 def describe(value):
@@ -74,6 +74,7 @@ def main():
                                  args.bridge, args.timeout)
             if args.preview:
                 cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(window, args.preview_width, args.preview_height)
                 if args.fullscreen:
                     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
             with InferVStreams(group, in_params, out_params) as pipeline, group.activate():
@@ -109,7 +110,7 @@ def main():
                                 (time.monotonic_ns()-meta["captured_monotonic_ns"]) / 1e6, 2)}), flush=True)
                         interval_count, last_report = 0, now
                     if args.preview:
-                        cv2.imshow(window, image)
+                        cv2.imshow(window, preview_image(image, args.preview_width, args.preview_height))
                         if cv2.waitKey(1) & 0xff in (27, ord("q")):
                             break
                 elapsed = time.monotonic() - start
