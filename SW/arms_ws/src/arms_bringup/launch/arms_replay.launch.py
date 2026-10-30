@@ -159,7 +159,9 @@ def generate_launch_description():
             parameters=[
                 str(control_config),
                 # 자동 track 비활성 (LOCK 이 자동으로 TRACK 안 감 → LAUNCH 버튼 눌러야 TRACK).
-                {"mission.sitl_auto_launch": False},
+                {"mission.sitl_auto_launch": False,
+                 # 재생 영상 header 는 녹화 당시 시각이다 → 수신 시각 기준 유지.
+                 "control.pn.stamp_source": "receipt"},
             ],
         ),
         Node(

@@ -164,9 +164,37 @@ void test_rtl_paths() {
   CHECK(sm.state() == State::RTL);
 }
 
+// 주입한 시계(SITL 의 /clock 시뮬 시간에 해당)로만 timeout 이 흐르는지 본다. 벽시계로 아무리
+// 기다려도 시뮬 시간이 안 가면 소실 판정이 나면 안 된다(RTF 0.2 에서 벽시계 2 s = 시뮬 0.4 s).
+void test_injected_clock_drives_timeouts() {
+  double sim_t = 100.0;
+  StateMachine sm(fast_params(), nullptr, [&sim_t]() { return sim_t; });
+  sm.arm();
+  for (int i = 0; i < 6; ++i) {        // 시뮬 0.06 s 동안 검출 → LOCK (lock_duration 0.05)
+    sm.on_detection(target());
+    sm.tick_detection_timeout();
+    sim_t += 0.01;
+  }
+  CHECK(sm.state() == State::LOCK);
+  sm.on_launch_button();
+  CHECK(sm.state() == State::TRACK);
+  sm.on_detection(target());
+  sleep_sec(0.3);                      // 벽시계 0.3 s (> timeout 0.15) 이지만 시뮬 시간 정지
+  sm.tick_detection_timeout();
+  CHECK(sm.state() == State::TRACK);
+  sim_t += 0.14;                       // 시뮬 0.14 s < 0.15
+  sm.tick_detection_timeout();
+  CHECK(sm.state() == State::TRACK);
+  sim_t += 0.02;                       // 시뮬 0.16 s > 0.15 → 소실
+  sm.tick_detection_timeout();
+  CHECK(sm.state() == State::IDLE);
+  CHECK(sm.consume_manual_handover_request());
+}
+
 }  // namespace
 
 int main() {
+  test_injected_clock_drives_timeouts();
   test_gating_in_idle();
   test_low_confidence_never_locks();
   test_lock_loss_returns_to_search();

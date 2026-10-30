@@ -30,9 +30,16 @@ std::string to_string(State s)
   return "UNKNOWN";
 }
 
-StateMachine::StateMachine(const SMParams & params, LogFn log_fn)
-: params_(params), log_fn_(std::move(log_fn))
+StateMachine::StateMachine(const SMParams & params, LogFn log_fn, ClockFn clock_fn)
+: params_(params), log_fn_(std::move(log_fn)), clock_fn_(std::move(clock_fn))
 {}
+
+double StateMachine::now_sec() const
+{
+  if (clock_fn_) return clock_fn_();
+  return std::chrono::duration<double>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // ---------------------------------------------------------------------------
 // External events
@@ -54,7 +61,7 @@ void StateMachine::on_detection(
   //   위치 급변(튐) 차단은 detection 노드의 상시 연관 게이트(track.jump_gate)가
   //   담당한다. control 은 detection 결과를 신뢰한다(단일 표적만 발행됨).
   detection_held_ = false;
-  auto now = Clock::now();
+  const double now = now_sec();
   last_detection_time_  = now;
   last_detection_valid_ = true;
 
@@ -68,8 +75,7 @@ void StateMachine::on_detection(
       lock_start_time_    = now;
       lock_timer_running_ = true;
     }
-    lock_elapsed_sec_ =
-      std::chrono::duration<double>(now - lock_start_time_).count();
+    lock_elapsed_sec_ = now - lock_start_time_;
 
     if (lock_elapsed_sec_ >= params_.lock_duration_sec) {
       transition(State::LOCK, "연속 검출 " + fmt_sec(lock_elapsed_sec_) +
@@ -78,8 +84,7 @@ void StateMachine::on_detection(
     }
   } else if (state_ == State::LOCK || state_ == State::TRACK) {
     if (lock_timer_running_) {
-      lock_elapsed_sec_ =
-        std::chrono::duration<double>(now - lock_start_time_).count();
+      lock_elapsed_sec_ = now - lock_start_time_;
     }
     target_locked_ = true;
   }
@@ -92,9 +97,8 @@ void StateMachine::tick_detection_timeout()
     return;
   }
 
-  const auto now = Clock::now();
   const double elapsed = last_detection_valid_
-    ? std::chrono::duration<double>(now - last_detection_time_).count()
+    ? now_sec() - last_detection_time_
     : std::numeric_limits<double>::infinity();
   const double timeout = state_ == State::TRACK
     ? params_.track_target_lost_timeout_sec

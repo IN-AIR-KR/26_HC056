@@ -4,25 +4,29 @@ px4_sitl.launch.py — PX4 SITL + Gazebo(arms_drone) 를 ros2 launch 안에서 �
 시뮬레이터에 관한 건 전부 여기(arms_sim) 담당. arms_bringup/arms_sitl.launch.py 가
 이 파일을 include 해서 ROS 스택과 함께 원클릭으로 올린다.
 
-  - 기동 전 정리: 남아있는 px4 / gz sim 프로세스 kill, 월드·모델 심볼릭 링크 갱신
+  - 기동 전 정리: '같은 영역'(PX4 인스턴스 + GZ_PARTITION)의 잔재만 정리. 그 영역에 살아 있는
+    다른 SITL 세션이 있으면 아무것도 죽이지 않고 기동을 거부한다 (arms_sim/sitl_procs.py).
+    월드·모델 심볼릭 링크 갱신
   - PX4 바이너리 직접 실행 (make 안 거침 → 빌드는 setup_sim.sh 에서만)
         build/px4_sitl_default/bin/px4 -d -s etc/init.d-posix/rcS <build>/etc   (cwd=rootfs)
       -d = 데몬 모드(pxh 셸 없음). 터미널 stdin 이 없어도 안 죽는다.
   - 부팅 후 PX4 파라미터 세팅 (페일세이프 해제, ACRO 각속도, 최대 기울기)
-  - 종료(Ctrl+C) 시 PX4 가 백그라운드로 띄운 gz sim 까지 같이 정리
+  - 종료(Ctrl+C) 시 이 런치가 띄운 PX4 와 (영역에 다른 PX4 가 없으면) gz sim 만 정리
 
 인자:
   px4_dir     PX4-Autopilot 경로   (기본: $PX4_DIR, 없으면 ~/PX4-Autopilot)
   world       Gazebo 월드 이름     (기본: arms_sitl)
   model       PX4 SITL 모델 이름   (기본: gz_arms_drone → airframe 4022)
   set_params  부팅 후 param set 실행 여부 (기본: true)
+  instance    PX4 인스턴스 번호 (기본 0). N>0 이면 MAVLink 포트가 +N, 기체 이름 arms_drone_N,
+              작업 폴더 build/px4_sitl_default/instance_N. 다른 SITL 과 같은 PC 에서 돌릴 때
+              GZ_PARTITION 환경변수(gz 격리) + ROS_DOMAIN_ID(ROS 격리)와 함께 쓴다.
 
 주의: airframe(assets/px4/airframes/4022_gz_arms_drone) 수정은 PX4 ROMFS 재빌드가 필요
       → setup_sim.sh 다시 실행.
 """
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 from launch import LaunchDescription
@@ -34,6 +38,7 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 from arms_sim.launcher_geometry import spawn_pose_str
+from arms_sim import sitl_procs
 
 # 자동 disarm / 페일세이프 끄기 (GCS/RC 없는 SITL 자율비행 셋업).
 #   COM_DISARM_PRFLT 0  = arm 후 이륙 지연 자동 disarm 해제 (가만히 둬도 안 멈춤)
@@ -51,6 +56,10 @@ PX4_PARAMS = {
     "MC_ACRO_R_MAX": 400,
     "MC_ACRO_P_MAX": 400,
     "MPC_MAN_TILT_MAX": 65,
+    # Stabilized 추력 곡선: 스틱 중앙 = MPC_THR_HOVER '파라미터'(2). 기본(0)은 호버 추력
+    #   추정값을 써서 시점마다 중앙값이 달라진다. sitl_bridge 가 자동 유도 추력을 이 곡선의
+    #   역함수로 스틱에 싣는다 (arms_flight_io/sitl_bridge_node.py thrust_to_stabilized_stick).
+    "MPC_THR_CURVE": 2,
     "MPC_TILTMAX_AIR": 65,
     # 견착 발사기: 앙각 30° 이하(수직 기준 60° 이상 기울기)에서도 ARM/발사돼야 한다.
     #   PX4 고장감지기(FD)는 기본 60° 넘게 기울면 'Attitude failure' 로 ARM 을 거부하고
@@ -65,10 +74,9 @@ PX4_PARAMS = {
 KILL_PATTERNS = ["px4_sitl_default/bin/px4", "gz sim"]
 
 
-def _kill_stale():
-    for pat in KILL_PATTERNS:
-        subprocess.run(["pkill", "-9", "-f", pat],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def _scope(context):
+    instance = int(LaunchConfiguration("instance").perform(context))
+    return instance, os.environ.get("GZ_PARTITION", "")
 
 
 def _link(src: Path, dst: Path):
@@ -106,8 +114,13 @@ def _setup(context, *args, **kwargs):
     if not world_sdf.exists():
         raise RuntimeError(f"월드 파일 없음: {world_sdf}")
 
-    # 남아있는 이전 인스턴스 정리 (Ctrl+C 로 안 죽은 gz sim 등)
-    _kill_stale()
+    # 같은 영역(인스턴스+GZ_PARTITION)의 잔재만 정리. 살아 있는 다른 세션이면 기동 거부.
+    instance, partition = _scope(context)
+    ok, why = sitl_procs.kill_stale(instance, partition)
+    if not ok:
+        raise RuntimeError(
+            f"{why}\n  다른 세션을 그대로 두고 같이 돌리려면: export GZ_PARTITION=<고유이름> "
+            f"ROS_DOMAIN_ID=<다른번호> 후 instance:=1 (arms_sitl.launch.py px4_instance:=1)")
 
     # 월드/모델을 PX4 트리에 링크 → PX4 가 PX4_GZ_WORLD 로 찾고, 항상 레포 최신이 반영됨.
     px4_worlds.mkdir(parents=True, exist_ok=True)
@@ -116,7 +129,14 @@ def _setup(context, *args, **kwargs):
     for m in models_dir.iterdir():
         if m.is_dir():
             _link(m, px4_models / m.name)
-    rootfs.mkdir(parents=True, exist_ok=True)
+    # 인스턴스별 작업 폴더: 파라미터·dataman·로그 파일을 다른 인스턴스와 공유하지 않는다
+    #   (PX4 Tools/simulation/sitl_multiple_run.sh 와 같은 방식).
+    workdir = rootfs if instance == 0 else build_dir / f"instance_{instance}"
+    workdir.mkdir(parents=True, exist_ok=True)
+    if instance != 0 and (rootfs / "gz_env.sh").exists():
+        # rcS 가 작업 폴더의 gz_env.sh 를 source 해 GZ_SIM_RESOURCE_PATH(PX4 기본 모델 경로)를
+        # 잡는다. 없으면 월드의 model://x500_base 를 못 찾아 Gazebo 월드 로드가 실패한다.
+        _link(rootfs / "gz_env.sh", workdir / "gz_env.sh")
 
     env = dict(os.environ)
     env.update({
@@ -138,10 +158,12 @@ def _setup(context, *args, **kwargs):
     })
 
     actions = [
-        LogInfo(msg=f"PX4 SITL: {px4_bin}  model={model}  world={world}"),
+        LogInfo(msg=f"PX4 SITL: {px4_bin}  model={model}  world={world}  instance={instance} "
+                    f"GZ_PARTITION='{partition}' ({why})"),
         ExecuteProcess(
-            cmd=[str(px4_bin), "-d", "-s", "etc/init.d-posix/rcS", str(build_dir / "etc")],
-            cwd=str(rootfs), env=env, name="px4", output="screen",
+            cmd=[str(px4_bin), "-i", str(instance), "-d", "-s", "etc/init.d-posix/rcS",
+                 str(build_dir / "etc")],
+            cwd=str(workdir), env=env, name="px4", output="screen",
         ),
     ]
 
@@ -151,10 +173,14 @@ def _setup(context, *args, **kwargs):
             script = "".join(f"param set {k} {v}\\n" for k, v in PX4_PARAMS.items())
             # mavlink_shell.py 는 heartbeat 올 때까지 기다리므로 PX4 부팅 완료를 기다릴 필요는
             # 없지만, 부팅 로그와 섞이지 않게 잠깐 지연. 실패해도 스택은 계속 뜬다.
+            # 인스턴스 0 은 기존과 같이 GCS 포트(14550)로 받는다. N>0 은 14550 에 다른
+            #   인스턴스(다른 세션)도 송신하므로, 이 인스턴스의 GCS 링크 수신 포트(18570+N)로
+            #   직접 보낸다 — 남의 PX4 파라미터를 바꾸지 않게.
+            port = "udp:127.0.0.1:14550" if instance == 0 else f"udpout:127.0.0.1:{18570 + instance}"
             actions.append(TimerAction(period=15.0, actions=[
                 ExecuteProcess(
                     cmd=["bash", "-c",
-                         f"printf '{script}' | python3 '{shell_py}' udp:127.0.0.1:14550 "
+                         f"printf '{script}' | python3 '{shell_py}' {port} "
                          f">/dev/null 2>&1 && echo 'PX4 param set 완료: "
                          f"{' '.join(f'{k}={v}' for k, v in PX4_PARAMS.items())}'"],
                     name="px4_params", output="screen",
@@ -171,7 +197,8 @@ def _setup(context, *args, **kwargs):
         parameters=[str(share / "config" / "sim_params.yaml"), {
             "px4_dir": str(px4_dir), "world": world, "model": model,
             # PX4 가 spawn 하는 인스턴스 이름 (모델명 + _<instance>) — reset 후 재생성 확인용
-            "drone_model": "arms_drone_0",
+            "drone_model": f"arms_drone_{instance}",
+            "px4_instance": instance,
         }],
     ))
 
@@ -179,7 +206,8 @@ def _setup(context, *args, **kwargs):
 
 
 def _on_shutdown(event, context):
-    _kill_stale()
+    instance, partition = _scope(context)
+    sitl_procs.kill_own(instance, partition, os.getpid())
 
 
 def generate_launch_description():
@@ -192,6 +220,8 @@ def generate_launch_description():
         DeclareLaunchArgument("model", default_value="gz_arms_drone", description="PX4 SITL 모델"),
         DeclareLaunchArgument("set_params", default_value="true",
                               description="부팅 후 PX4 param set 실행"),
+        DeclareLaunchArgument("instance", default_value="0",
+                              description="PX4 인스턴스 번호 (격리 실행 시 1 이상)"),
         OpaqueFunction(function=_setup),
         RegisterEventHandler(OnShutdown(on_shutdown=_on_shutdown)),
     ])

@@ -126,7 +126,8 @@ def generate_launch_description():
         Node(
             package="arms_control", executable="arms_control_node",
             namespace="arms", name="arms_control_node", output="screen",
-            parameters=[str(control_config)],
+            # HITL 은 실카메라(벽시계)와 HIL PX4 자세를 섞으므로 수신 시각 기준 유지.
+            parameters=[str(control_config), {"control.pn.stamp_source": "receipt"}],
         ),
         OpaqueFunction(function=_sitl_bridge),
         # 실기체와 같은 ESP32 UART 입력. HITL에서도 가상 조종기 GUI는 쓰지 않는다.

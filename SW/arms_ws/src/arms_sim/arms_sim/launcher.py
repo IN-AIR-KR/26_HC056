@@ -53,7 +53,7 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import Empty, String
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
-from arms_msgs.msg import MissionState, OperatorInput
+from arms_msgs.msg import AttitudeTelemetry, MissionState, OperatorInput
 
 from arms_sim import launcher_geometry as G
 
@@ -73,7 +73,7 @@ except Exception as _e:
     _GZ_OK = False
 
 WORLD = "arms_sitl"
-DRONE = "arms_drone_0"
+DRONE = "arms_drone_0"   # 기본값. 실제 이름은 drone_model 파라미터(PX4 인스턴스 N → arms_drone_N)
 T_DETACH = "/arms_sim/launcher/detach"
 T_ATTACH = "/arms_sim/launcher/attach"
 T_STATE = "/arms_sim/launcher/state"
@@ -97,6 +97,14 @@ class Launcher(Node):
         self.declare_parameter("attach_fallback_sec", 1.5)
         # 비충돌 시험용: false 면 TRACK 진입·수동 스로틀에도 분리하지 않는다(드론은 발사관에 남음).
         self.declare_parameter("release_enabled", True)
+        self.declare_parameter("drone_model", DRONE)
+        # 초기 자세 정렬: set_pose(순간이동)로 기울이면 자이로가 회전을 못 봐서 PX4 EKF 자세가
+        #   수직 쪽에 남는다(50° 실측: 기대 0/-40/90 vs PX4 -6.4/-32.3/93.6). 각도 적용·재장전
+        #   뒤 DISARM 상태면 sitl_bridge 에 EKF 재정렬을 요청하고, 정렬 전에는 분리하지 않는다.
+        self.declare_parameter("realign_estimator", True)
+        self.declare_parameter("release_requires_aligned_attitude", True)
+        self.declare_parameter("attitude_align_tol_deg", 8.0)
+        self._drone = str(self.get_parameter("drone_model").value)
 
         self._lock = threading.Lock()
         self._reload_lock = threading.Lock()
@@ -122,6 +130,9 @@ class Launcher(Node):
         self._launched_at = None          # (elev, az) 발사 순간 각도
         self._angle_generation = 0
         self._angle_worker_running = False
+        self._att = None                  # (roll, pitch, yaw) PX4 ATTITUDE [deg]
+        self._att_t = 0.0                 # 수신 시각(monotonic)
+        self._align_since = None          # 재정렬 요청 시각 (정렬 완료 로그용)
 
         self.add_on_set_parameters_callback(self._on_set_params)
 
@@ -130,6 +141,8 @@ class Launcher(Node):
         self.create_subscription(MissionState, "mission/state", self._on_mission, 10)
         self.create_subscription(OperatorInput, "operator/input", self._on_operator, 10)
         self.create_subscription(Empty, "sim/launcher/reload_manual", self._on_reload_manual, 10)
+        self.create_subscription(AttitudeTelemetry, "vehicle/attitude", self._on_attitude, 10)
+        self._reinit_cli = self.create_client(Trigger, "sitl/reinit_estimator")
 
         if not _GZ_OK:
             self.get_logger().error(
@@ -237,7 +250,7 @@ class Launcher(Node):
 
     def _on_poses(self, msg):
         for p in msg.pose:
-            if p.name == DRONE:
+            if p.name == self._drone:
                 with self._lock:
                     if self._drone_seen_t is None:
                         self._drone_seen_t = time.monotonic()
@@ -306,11 +319,16 @@ class Launcher(Node):
                 if armed:
                     return
                 ok, msg = self._do_reload()
-                (self.get_logger().info if ok else self.get_logger().error)(
-                    f"발사기 각도 적용: {msg}")
+                if ok:
+                    self.get_logger().info(f"발사기 각도 적용: {msg}")
+                else:
+                    self.get_logger().error(f"발사기 각도 적용: {msg}")
                 with self._lock:
-                    if generation == self._angle_generation:
-                        return
+                    done = generation == self._angle_generation
+                if done:
+                    if ok:
+                        self._request_realign(f"각도 적용 {self._el:.0f}°/{self._az:.0f}°")
+                    return
                 first_update = False
         finally:
             with self._lock:
@@ -325,6 +343,19 @@ class Launcher(Node):
                 f"발사 차단 — {why} (release_enabled=false, 비충돌 시험 구성)",
                 throttle_duration_sec=2.0)
             return
+        err = self._attitude_error()
+        tol = float(self.get_parameter("attitude_align_tol_deg").value)
+        if self.get_parameter("release_requires_aligned_attitude").value:
+            if err is None:
+                self.get_logger().warn(
+                    "PX4 자세 수신 없음 — 자세 정렬을 확인하지 못한 채 분리한다",
+                    throttle_duration_sec=2.0)
+            elif err > tol:
+                self.get_logger().error(
+                    f"발사 차단 — {why}: PX4 자세가 발사관 기하와 {err:.1f}° 다르다(허용 {tol:.0f}°). "
+                    f"EKF 정렬 전 분리하면 자세 제어가 틀린 기준으로 돈다. 재장전/정렬 대기",
+                    throttle_duration_sec=2.0)
+                return
         self._gz_detach.publish(_GzEmpty())
         with self._lock:
             self._attached = False          # 플러그인이 "detached" 로 곧 확인해준다
@@ -339,9 +370,37 @@ class Launcher(Node):
             f"VFOV {math.degrees(G.camera_vfov_rad()):.1f}°)")
 
     # ── 재장전 ────────────────────────────────────────────────────────────
+    def _on_attitude(self, msg):
+        self._att = (float(msg.roll_deg), float(msg.pitch_deg), float(msg.yaw_deg))
+        self._att_t = time.monotonic()
+
+    def _attitude_error(self):
+        """PX4 자세와 현재 발사관 기하(기대 PX4 Euler)의 최대 축 오차[deg]. 자세 미수신이면 None."""
+        if self._att is None or time.monotonic() - self._att_t > 1.0:
+            return None
+        exp = G.expected_px4_euler_deg(self._el, self._az)
+        return max(abs(G.angle_difference_deg(m, e)) for m, e in zip(self._att, exp))
+
+    def _request_realign(self, why):
+        if not self.get_parameter("realign_estimator").value or self._armed:
+            return
+        if not self._reinit_cli.service_is_ready():
+            self.get_logger().warn(f"EKF 재정렬 서비스 없음(sitl_bridge?) — {why} 후 정렬 생략")
+            return
+        err = self._attitude_error()
+        self._align_since = time.monotonic()
+        self.get_logger().info(
+            f"EKF 재정렬 요청 ({why}) — 요청 전 자세 오차 "
+            f"{'미수신' if err is None else f'{err:.1f}°'}")
+        self._reinit_cli.call_async(Trigger.Request()).add_done_callback(
+            lambda f: self.get_logger().info(
+                f"EKF 재정렬 응답: {f.result().message if f.result() else f.exception()}"))
+
     def _srv_reload(self, _req, res):
         ok, msg = self._do_reload()
         res.success, res.message = ok, msg
+        if ok:
+            self._request_realign("재장전")
         return res
 
     def _on_reload_manual(self, _msg):
@@ -350,7 +409,11 @@ class Launcher(Node):
             self.get_logger().warn("재장전 거부: ARM 상태다. 먼저 DISARM 해라 (또는 실험 RESET).")
             return
         ok, msg = self._do_reload()
-        (self.get_logger().info if ok else self.get_logger().error)(f"재장전: {msg}")
+        if ok:
+            self.get_logger().info(f"재장전: {msg}")
+            self._request_realign("수동 재장전")
+        else:
+            self.get_logger().error(f"재장전: {msg}")
 
     def _wait_plugin(self, want, timeout):
         deadline = time.monotonic() + timeout
@@ -434,7 +497,7 @@ class Launcher(Node):
 
             # 2) 발사 후 분리된 드론만 같은 발사 자세로 즉시 되돌린다.
             t0 = time.monotonic()
-            if not self._set_pose(DRONE, target, quat):
+            if not self._set_pose(self._drone, target, quat):
                 return False, "set_pose 서비스 실패"
             if not self._pose_near(target, t0, 3.0):
                 return False, "set_pose 후 드론이 목표 위치에 안 옴"
@@ -473,6 +536,25 @@ class Launcher(Node):
             text = "대기: 드론 장착 전"
         elif attached:
             text = f"장전됨 · 앙각 {self._el:.0f}° 방위 {self._az:.0f}°"
+            err = self._attitude_error()
+            tol = float(self.get_parameter("attitude_align_tol_deg").value)
+            if err is None:
+                text += " · PX4 자세 미수신"
+            elif err <= tol:
+                text += f" · 자세정렬 OK({err:.1f}°)"
+                if self._align_since is not None:
+                    self.get_logger().info(
+                        f"EKF 자세 정렬 완료: 오차 {err:.1f}° "
+                        f"({time.monotonic() - self._align_since:.1f}s 소요)")
+                    self._align_since = None
+            else:
+                text += f" · 자세 불일치 {err:.1f}°"
+                # 최초 기울임은 PX4 연결 전에 일어나 재정렬 요청이 실패할 수 있다.
+                #   장착·DISARM 상태에서 불일치가 남아 있으면 20 s 간격으로 다시 요청한다.
+                if (not self._armed and self._reload_lock.locked() is False
+                        and (self._align_since is None
+                             or time.monotonic() - self._align_since > 20.0)):
+                    self._request_realign(f"장착 상태 자세 불일치 {err:.1f}°")
         elif launched:
             text = f"발사됨 · 앙각 {launched[0]:.0f}° 방위 {launched[1]:.0f}°"
         else:

@@ -69,3 +69,32 @@ def test_target_behind_camera_is_not_in_fov():
     c = G.camera_position(50.0, 0.0)
     pr = G.project_target(50.0, 0.0, (c[0] - 10.0, c[1], c[2] - 10.0))
     assert not pr["in_fov"]
+
+
+def test_enu_to_ned_conversion_matches_px4_conventions():
+    # 단위 쿼터니언(기체 FLU = 월드 ENU): 기수가 East → PX4 yaw 90°, 수평.
+    r, p, y = G.enu_flu_quat_to_px4_euler_deg((0.0, 0.0, 0.0, 1.0))
+    assert (r, p) == pytest.approx((0.0, 0.0), abs=1e-9) and y == pytest.approx(90.0)
+    # ENU yaw +90°(기수 North) → PX4 yaw 0°.
+    s = math.sin(math.pi / 4)
+    assert G.enu_flu_quat_to_px4_euler_deg((0.0, 0.0, s, s))[2] == pytest.approx(0.0, abs=1e-9)
+    # FLU 기준 +Y 축 회전(기수 아래로) → FRD pitch 음수(기수 하강).
+    th = math.radians(20.0)
+    q = (0.0, math.sin(th / 2), 0.0, math.cos(th / 2))
+    assert G.enu_flu_quat_to_px4_euler_deg(q)[1] == pytest.approx(-20.0, abs=1e-9)
+    # FLU +X 축 회전(왼쪽 날개 올라감 = 오른쪽으로 기움) → FRD roll 양수.
+    q = (math.sin(th / 2), 0.0, 0.0, math.cos(th / 2))
+    assert G.enu_flu_quat_to_px4_euler_deg(q)[0] == pytest.approx(20.0, abs=1e-9)
+
+
+def test_angle_difference_wraps():
+    assert G.angle_difference_deg(179.0, -179.0) == pytest.approx(-2.0)
+    assert G.angle_difference_deg(-179.0, 179.0) == pytest.approx(2.0)
+
+
+def test_validate_px4_attitude_reports_observed_50deg_mismatch():
+    # 이전 SITL 50° 실측값: 기대 (0, -40, 90) 대비 최대 7.7° 차이 → 3° 허용치에서 불합격.
+    r = G.validate_px4_attitude(50.0, 0.0, -6.4, -32.3, 93.6)
+    assert not r["valid"]
+    assert r["max_error_deg"] == pytest.approx(7.7, abs=1e-6)
+    assert G.validate_px4_attitude(50.0, 0.0, 0.5, -39.0, 90.4)["valid"]

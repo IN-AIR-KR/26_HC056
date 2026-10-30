@@ -6,6 +6,12 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
     ros2 launch arms_bringup arms_sitl.launch.py detection:=docker   # 검출을 컨테이너로
     ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true     # 에피소드별 bag 녹화
     ros2 launch arms_bringup arms_sitl.launch.py launch_elev:=50 diag:=true  # 50° 발사 + 진단 모니터
+    # 다른 SITL 세션과 같은 PC 에서 격리 실행 (ROS·gz·PX4 포트 모두 분리, 서로 안 죽임):
+    GZ_PARTITION=arms_iso ROS_DOMAIN_ID=42 ros2 launch arms_bringup arms_sitl.launch.py px4_instance:=1
+
+시간축: sim_time:=true(기본)이면 Gazebo /clock 을 브리지하고 control·sitl_bridge·referee 를
+use_sim_time 으로 띄운다. PX4 는 Gazebo 와 lockstep 이라 기체가 느끼는 시간 = 시뮬 시간이다.
+timeout·제어주기·표적 속도·GT LOS-rate 를 벽시계로 재면 RTF(0.1~0.5)만큼 어긋난다.
 
 이거 하나로 다음을 전부 띄운다:
   - PX4 SITL + Gazebo       (arms_sim/px4_sitl.launch.py include, px4:=false 로 생략)  [arms_sim]
@@ -156,6 +162,7 @@ def generate_launch_description():
     if pj_layout.exists():
         pj_cmd += ["--layout", str(pj_layout)]
     px4_launch = Path(get_package_share_directory("arms_sim")) / "launch" / "px4_sitl.launch.py"
+    _sim_time = ParameterValue(LaunchConfiguration("sim_time"), value_type=bool)
 
     actions = [
         DeclareLaunchArgument("px4", default_value="true",
@@ -201,12 +208,26 @@ def generate_launch_description():
                               description="angled_launch_monitor(타임스탬프·FPS·지연·상태전이·GT 진단) 기동"),
         DeclareLaunchArgument("diag_jsonl", default_value="",
                               description="진단 JSONL 저장 경로 (빈값=저장 안 함)"),
+        DeclareLaunchArgument("sim_time", default_value="true",
+                              description="Gazebo /clock 브리지 + control/sitl_bridge/referee use_sim_time"),
+        DeclareLaunchArgument("px4_instance", default_value="0",
+                              description="PX4 인스턴스(격리 실행 시 1 이상, GZ_PARTITION·ROS_DOMAIN_ID 와 함께)"),
+        DeclareLaunchArgument("gui", default_value="true",
+                              description="패널·가상 조종기·UI 창 기동 여부 (자동 시험은 false)"),
 
         # PX4 SITL + Gazebo — 시뮬레이터 쪽은 전부 arms_sim 담당
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(px4_launch)),
             condition=IfCondition(LaunchConfiguration("px4")),
-            launch_arguments={"px4_dir": LaunchConfiguration("px4_dir")}.items(),
+            launch_arguments={"px4_dir": LaunchConfiguration("px4_dir"),
+                              "instance": LaunchConfiguration("px4_instance")}.items(),
+        ),
+        # 시뮬 시계 (gz /clock → ROS /clock). use_sim_time 노드들의 시간축.
+        Node(
+            package="ros_gz_bridge", executable="parameter_bridge",
+            name="arms_clock_bridge", output="screen",
+            arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+            condition=IfCondition(LaunchConfiguration("sim_time")),
         ),
         # 카메라 브리지 — 상방 카메라 → /arms/image_raw
         Node(
@@ -224,7 +245,8 @@ def generate_launch_description():
             # 호스트 CPU YOLO는 검출이 ~3 Hz(간격 0.3~0.5 s)라, 기본 0.20 s 신선도
             # 게이트에 걸려 TRACK 추력이 0.48↔0 으로 끊기고 기체가 떨어졌다. SITL만 늘린다.
             parameters=[str(control_config),
-                        {"control.pn.max_measurement_age_sec": 0.6,
+                        {"use_sim_time": _sim_time,
+                         "control.pn.max_measurement_age_sec": 0.6,
                          "control.pn.use_ground_truth": ParameterValue(
                              LaunchConfiguration("use_gt"), value_type=bool)}],
         ),
@@ -232,25 +254,31 @@ def generate_launch_description():
         Node(
             package="arms_flight_io", executable="sitl_bridge_node",
             namespace="arms", name="arms_sitl_bridge_node", output="screen",
-            parameters=[str(io_config), {"connection":   "udpin:0.0.0.0:14540",
-                         "send_rate_hz": 50.0}],
+            # PX4 인스턴스 N 의 onboard 링크는 14540+N 으로 송신한다.
+            parameters=[str(io_config), {
+                "connection": PythonExpression(
+                    ["'udpin:0.0.0.0:' + str(14540 + int(", LaunchConfiguration("px4_instance"), "))"]),
+                "send_rate_hz": 50.0, "use_sim_time": _sim_time}],
         ),
         # SITL 가상 운용자 입력.
         Node(
             package="arms_operator", executable="arms_operator_gui_node",
             namespace="arms", name="arms_operator_gui_node", output="screen",
+            condition=IfCondition(LaunchConfiguration("gui")),
         ),
         # 튜닝/심판 콘솔 (파라미터·referee 제어). SITL 전용, /arms/command 발행 안 함.
         Node(
             package="arms_sim", executable="panel",
             namespace="arms", name="arms_panel_node", output="screen",
+            condition=IfCondition(LaunchConfiguration("gui")),
         ),
         # 표적 심판 (풍선/드론 비행 + 명중 판정). SITL 전용.
         #   node name = balloon_referee (panel 의 REFEREE_NODE 와 일치必).
         Node(
             package="arms_sim", executable="referee",
             namespace="arms", name="balloon_referee", output="screen",
-            parameters=[str(sim_config)],
+            # 표적 이동 속도와 GT LOS-rate 를 시뮬 시간[s]으로 계산한다(PX4 물리와 같은 시간축).
+            parameters=[str(sim_config), {"use_sim_time": _sim_time}],
         ),
         # 견착 발사기 (앙각/방위 조절 + LOCK→TRACK 에 분리 발사 + RESET 재장전). SITL 전용.
         #   node name = arms_launcher (panel 의 LAUNCHER_NODE 와 일치必).
@@ -261,6 +289,8 @@ def generate_launch_description():
                 "elevation_deg": ParameterValue(LaunchConfiguration("launch_elev"), value_type=float),
                 "azimuth_deg": ParameterValue(LaunchConfiguration("launch_az"), value_type=float),
                 "release_enabled": ParameterValue(LaunchConfiguration("release"), value_type=bool),
+                "drone_model": ParameterValue(
+                    ["arms_drone_", LaunchConfiguration("px4_instance")], value_type=str),
             }],
         ),
         # 각도 발사 진단 모니터 (관찰 전용, 제어 토픽 발행 없음). SITL 전용.
@@ -276,6 +306,7 @@ def generate_launch_description():
             package="arms_ui", executable="arms_ui_node",
             namespace="arms", name="arms_ui_node", output="screen",
             parameters=[str(ui_config)],
+            condition=IfCondition(LaunchConfiguration("gui")),
         ),
         # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image) → compressed(/arms/ui_image/compressed).
         #   arms.launch.py 와 같은 구성. 녹화기(auto_save)가 이 compressed 를 녹화한다.

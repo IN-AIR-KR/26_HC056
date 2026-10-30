@@ -61,6 +61,11 @@ if(BUILD_TESTING)
     ENV
       ARMS_CONTROL_NODE_EXE=$<TARGET_FILE:arms_control_node>
       ARMS_CONTROL_PARAMS=${CMAKE_CURRENT_SOURCE_DIR}/config/control_params.yaml)
+  ament_add_pytest_test(control_sim_time_integration test/test_sim_time_integration.py
+    TIMEOUT 120
+    ENV
+      ARMS_CONTROL_NODE_EXE=$<TARGET_FILE:arms_control_node>
+      ARMS_CONTROL_PARAMS=${CMAKE_CURRENT_SOURCE_DIR}/config/control_params.yaml)
 endif()
 
 # -----------------------------------------------------------------------

@@ -86,6 +86,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.pn.max_lateral_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.max_measurement_age_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.use_ground_truth", rclcpp::ParameterType::PARAMETER_BOOL);
+    // 측정 시각 기준: "header"=메시지 header.stamp(촬영·추정 시각), "receipt"=이 노드 수신 시각.
+    //   header 는 발행자와 같은 시계(SITL: /clock 시뮬 시간)를 쓸 때만 의미가 있다.
+    declare_required_parameter("control.pn.stamp_source", rclcpp::ParameterType::PARAMETER_STRING);
     declare_required_parameter("control.pn.camera.r_bc", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
 
     declare_required_parameter("mission.sitl_auto_launch", rclcpp::ParameterType::PARAMETER_BOOL);
@@ -209,7 +212,9 @@ class ArmsControlNode : public rclcpp::Node {
     auto log_fn = [this](const std::string& msg) {
       RCLCPP_INFO(get_logger(), "%s", msg.c_str());
     };
-    sm_ = std::make_unique<StateMachine>(sm_params, log_fn);
+    // timeout 은 ROS clock 기준(SITL use_sim_time 이면 PX4 lockstep 과 같은 시뮬 시간).
+    sm_ = std::make_unique<StateMachine>(sm_params, log_fn,
+                                         [this]() { return now().seconds(); });
 
     // ----------------------------------------------------------------
     // PID controllers
@@ -291,6 +296,13 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("control.pn.max_lateral_accel_mps2").as_double();
     pn_measurement_age_sec_ = get_parameter("control.pn.max_measurement_age_sec").as_double();
     pn_use_ground_truth_ = get_parameter("control.pn.use_ground_truth").as_bool();
+    {
+      const auto src = get_parameter("control.pn.stamp_source").as_string();
+      if (src != "header" && src != "receipt") {
+        throw std::runtime_error("control.pn.stamp_source must be 'header' or 'receipt': " + src);
+      }
+      pn_stamp_from_header_ = (src == "header");
+    }
     pn_params_.max_throttle = track_throttle_;
     pn_params_.hover_throttle = hover_throttle_;
     pn_camera_.fx = cam_fx_;
@@ -474,18 +486,22 @@ class ArmsControlNode : public rclcpp::Node {
     sub_detections_ = create_subscription<arms_msgs::msg::DetectionArray>(
         "perception/detections", best_effort_qos,
         [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
+          const rclcpp::Time receipt = now();
+          // 측정 시각 = 영상 촬영 시각(header). 검출 지연 동안 기체가 돈 만큼 LOS 가
+          // 틀어지지 않도록 그 시각의 자세와 짝짓고, 신선도도 촬영 시각부터 잰다.
+          const rclcpp::Time sample = measurement_time(msg->header, receipt, "detection");
           sm_->on_detection(msg->detections);
-          update_looming(msg);
+          update_looming(msg, sample);
           if (msg->detections.empty()) return;
           const auto best = std::max_element(
               msg->detections.begin(), msg->detections.end(),
               [](const auto &a, const auto &b) { return a.confidence < b.confidence; });
           // PN은 perception이 확정·평활한 표적 상태를 사용한다. raw detector는
           // 한 프레임 miss가 흔해 출력까지 끊기므로, target validity와 KF coast가
-          // 적용된 이 토픽을 seeker track으로 취급한다. Gazebo 이미지와 PX4
-          // MAVLink는 서로 다른 time base를 쓰므로 동기화에는 이 노드의 수신
-          // 시각을 사용한다. 원본 image header는 rosbag/영상 동기화용으로 보존한다.
-          const auto sample = now();
+          // 적용된 이 토픽을 seeker track으로 취급한다.
+          //   예전에는 Gazebo 이미지(시뮬 시간)와 PX4 자세(벽시계 수신)의 시간축이 달라
+          //   수신 시각으로 맞췄다. SITL 이 /clock(use_sim_time)을 쓰면 둘 다 시뮬 시간이라
+          //   header 로 바로 맞출 수 있다(stamp_source=header). 실기체는 receipt 유지.
           pn::Quaternion attitude;
           if (!pn_attitudes_.interpolate(
                   sample.seconds(), pn_measurement_age_sec_, attitude)) {
@@ -503,9 +519,12 @@ class ArmsControlNode : public rclcpp::Node {
           pn::Vec3 gt_rate;
           double gt_speed = 0.0;
           if (pn_use_ground_truth_) {
+            // GT 는 '지금'의 상대 상태이므로 현재 시각 기준으로 나이를 잰다.
+            // gt_received_ 를 먼저 본다: 한 번도 안 받았으면 gt_receipt_time_ 은 기본값이라
+            // 빼면 안 된다(시계 종류가 달라 rclcpp 가 예외를 던진다).
+            const double gt_age = gt_received_ ? (receipt - gt_receipt_time_).seconds() : -1.0;
             const bool gt_fresh = gt_received_ && latest_gt_.valid &&
-                (sample - gt_receipt_time_).seconds() >= 0.0 &&
-                (sample - gt_receipt_time_).seconds() <= pn_measurement_age_sec_;
+                gt_age >= 0.0 && gt_age <= pn_measurement_age_sec_;
             if (!gt_fresh) {
               // 진단: GT 모드에서는 GT가 신선하지 않으면 영상 추정으로 대체하지 않고 갱신 자체를 건너뛴다.
               ++gt_skip_count_;
@@ -531,7 +550,7 @@ class ArmsControlNode : public rclcpp::Node {
         [this](arms_msgs::msg::GuidanceGroundTruth::SharedPtr msg) {
           if (!msg->valid) return;
           latest_gt_ = *msg;
-          gt_receipt_time_ = now();
+          gt_receipt_time_ = measurement_time(msg->header, now(), "ground_truth");
           gt_received_ = true;
         });
 
@@ -540,7 +559,7 @@ class ArmsControlNode : public rclcpp::Node {
     sub_attitude_ = create_subscription<arms_msgs::msg::AttitudeTelemetry>(
         "vehicle/attitude", rclcpp::SensorDataQoS(),
         [this](arms_msgs::msg::AttitudeTelemetry::SharedPtr msg) {
-          const auto stamp = now();
+          const auto stamp = measurement_time(msg->header, now(), "attitude");
           pn_attitudes_.push(
               stamp.seconds(), pn::Quaternion::from_euler(
                                   msg->roll_deg * pn::kDegToRad,
@@ -664,17 +683,22 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     last_tick_ = now();
     auto period = std::chrono::duration<double>(1.0 / control_rate_hz_);
-    timer_ = create_wall_timer(
+    // ROS clock 타이머: SITL(use_sim_time)에서는 시뮬 시간 50 Hz 로 돌아 PX4 lockstep 과
+    // 같은 주기로 명령이 나가고, dt 도 그 시간축에서 일정하다. 실기체는 벽시계와 같다.
+    timer_ = rclcpp::create_timer(
+        this, get_clock(),
         std::chrono::duration_cast<std::chrono::nanoseconds>(period),
         std::bind(&ArmsControlNode::control_loop, this));
 
     log_ground_truth_mode("기동");
     RCLCPP_INFO(get_logger(),
                 "arms_control_node started. guidance_mode=%d(%s) track_lost_timeout=%.2fs "
-                "detection_timeout=%.2fs pn_max_age=%.2fs (모든 timeout 은 벽시계 기준)",
+                "detection_timeout=%.2fs pn_max_age=%.2fs stamp_source=%s — timeout·제어주기 "
+                "시간축: %s",
                 guidance_mode_, guidance_mode_ == 1 ? "PN" : "PID",
                 sm_params.track_target_lost_timeout_sec, sm_params.detection_timeout_sec,
-                pn_measurement_age_sec_);
+                pn_measurement_age_sec_, pn_stamp_from_header_ ? "header" : "receipt",
+                get_parameter("use_sim_time").as_bool() ? "시뮬 시간(/clock)" : "벽시계");
   }
 
  private:
@@ -684,7 +708,27 @@ class ArmsControlNode : public rclcpp::Node {
   // 비전 looming: bbox 크기의 팽창률로 충돌까지 시간 τ 를 추정해 종말 RTL 판정에 넘긴다.
   //   τ = s/ṡ = d/v_closing. 초점거리·표적 실제크기가 소거되므로 카메라 스펙·표적
   //   크기 모두에 무관하다.
-  void update_looming(const arms_msgs::msg::DetectionArray::SharedPtr & msg) {
+  // 메시지 header 시각을 검증해 측정 시각으로 쓴다. 비어 있거나(0), 미래이거나, 너무 오래된
+  // (시계가 다른 발행자) 값이면 수신 시각으로 대신하고 원인을 남긴다.
+  rclcpp::Time measurement_time(const std_msgs::msg::Header &header, const rclcpp::Time &receipt,
+                                const char *what) {
+    if (!pn_stamp_from_header_) return receipt;
+    const rclcpp::Time stamp(header.stamp, receipt.get_clock_type());
+    const double lag = (receipt - stamp).seconds();
+    if (stamp.nanoseconds() > 0 && lag >= -kMaxFutureStampSec && lag <= kMaxStampLagSec) {
+      return lag < 0.0 ? receipt : stamp;
+    }
+    ++stamp_fallback_count_;
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "[time] %s header.stamp 사용 불가(%s, lag=%.3fs) → 수신 시각 사용 (누적 %zu회). "
+        "발행자와 시계가 다르면 use_sim_time/stamp_source 설정 확인",
+        what, stamp.nanoseconds() == 0 ? "0" : (lag < 0.0 ? "미래" : "너무 오래됨"),
+        lag, stamp_fallback_count_);
+    return receipt;
+  }
+
+  void update_looming(const arms_msgs::msg::DetectionArray::SharedPtr & msg,
+                      const rclcpp::Time & t) {
     if (msg->detections.empty()) {
       loom_init_ = false;
       tau_sec_ = std::numeric_limits<double>::infinity();  // 표적 소실 → 급함 없음(추력 제약 해제)
@@ -693,7 +737,6 @@ class ArmsControlNode : public rclcpp::Node {
     // 검출 노드는 표적 1개만 발행. sphere/compact 표적이라 지름∝크기, 한 축 clip 대비 max.
     const auto & b = msg->detections.front();
     double s = std::max(b.width, b.height);
-    rclcpp::Time t = now();
     if (!loom_init_) {                       // 첫 프레임: 초기화만 (rate 계산 불가)
       loom_s_ema_ = s;
       loom_rate_ema_ = 0.0;
@@ -1074,14 +1117,19 @@ class ArmsControlNode : public rclcpp::Node {
           idbg.guidance_x = pn_out.acceleration_pn_ned.y;
           idbg.guidance_y = pn_out.acceleration_pn_ned.x;
         } else {
+          // 유도 입력이 없거나 오래됐다: 유도 명령은 내지 않고 수평 자세 + 호버 추력으로
+          // 버틴다. 예전에는 추력 0 을 보내 표적 소실 timeout(→ 수동 인계)까지 기체가
+          // 자유낙하했다(SITL 50° 기록: 인계 직전 1.4 s 연속 추력 0).
+          //   이 값은 유도가 아니라 '자세 안정화 유지'다. hover_throttle 은 PX4 MPC_THR_HOVER
+          //   와 같은 물리 추력이며, flight_io 가 Stabilized 추력 곡선에 맞게 변환한다.
           roll_rate_cmd = 0.0;
           pitch_rate_cmd = 0.0;
-          thrust = 0.0F;
-          // 진단: 이 틱은 Stabilized 자세 0°·추력 0으로 나간다(명령 초기화). 원인 구분용 로그.
+          thrust = static_cast<float>(hover_throttle_);
+          idbg.cmd_active = false;
           RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-              "[PN] TRACK 중 PN 출력 %s → 자세 0°/추력 0 명령 (age=%.2fs, gate=%.2fs, "
+              "[PN] TRACK 중 PN 출력 %s → 수평 자세·호버 추력 %.2f 유지 (age=%.2fs, gate=%.2fs, "
               "attitude skip=%zu, GT skip=%zu, GT=%s)",
-              pn_out.valid ? "오래됨" : "무효",
+              pn_out.valid ? "오래됨" : "무효", hover_throttle_,
               pn_out.valid ? now_t.seconds() - pn_out.stamp_sec : -1.0,
               pn_measurement_age_sec_, pn_attitude_skip_count_, gt_skip_count_,
               pn_use_ground_truth_ ? "ON" : "OFF");
@@ -1459,11 +1507,17 @@ class ArmsControlNode : public rclcpp::Node {
   pn::Guidance pn_guidance_{};
   pn::AttitudeBuffer pn_attitudes_{};
   arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
-  rclcpp::Time gt_receipt_time_{};
+  rclcpp::Time gt_receipt_time_{0, 0, RCL_ROS_TIME};
   bool gt_received_{false};
   // 진단 카운터: PN 갱신을 건너뛴 원인별 누적 횟수 (명령에는 영향 없음)
   std::size_t pn_attitude_skip_count_{0};
   std::size_t gt_skip_count_{0};
+  std::size_t stamp_fallback_count_{0};
+  bool pn_stamp_from_header_{false};
+  // 노드마다 /clock 을 받아 처리하는 시점이 달라 다른 노드의 stamp 가 수십 ms '미래'로 보인다
+  // (SITL 실측 -0.064 s). 그 범위는 수신 시각으로 잘라 쓴다 — 더 신선하게 취급하는 일은 없다.
+  static constexpr double kMaxFutureStampSec = 0.25;
+  static constexpr double kMaxStampLagSec = 5.0;       // 이보다 오래되면 시계가 다르다고 본다
   // 카메라 tan 좌표 근사값. calibrated=true면 control.camera 내부파라미터를 쓴다.
   double camera_hfov_deg_{43.6028};
   double camera_aspect_{0.6666667};

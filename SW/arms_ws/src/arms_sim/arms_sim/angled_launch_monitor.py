@@ -144,6 +144,10 @@ class AngledLaunchMonitor(Node):
         self._det_compute = WindowStats()
         self._det_yolo = WindowStats()
         self._last_tgt_wall = None
+        # control 은 이제 ROS clock(SITL=시뮬 시간)으로 소실/신선도를 잰다 → 같은 시간축의
+        #   간격도 남긴다(검출 header = 촬영 시각, 시뮬 시간).
+        self._tgt_gap_sim = WindowStats()
+        self._last_tgt_stamp = None
         self._last_det = None          # (x, y, w, h, conf)
         self._att_rate = RateWindow(win)
         self._att = None               # (roll, pitch, yaw)
@@ -264,6 +268,9 @@ class AngledLaunchMonitor(Node):
             if self._last_tgt_wall is not None:
                 self._tgt_gap.add(wall - self._last_tgt_wall)
             self._last_tgt_wall = wall
+            if self._last_tgt_stamp is not None and st > self._last_tgt_stamp:
+                self._tgt_gap_sim.add(st - self._last_tgt_stamp)
+            self._last_tgt_stamp = st
 
     def _on_det_status(self, msg):
         if len(msg.data) >= 11:
@@ -362,7 +369,7 @@ class AngledLaunchMonitor(Node):
                "expected_rpy_deg": [round(v, 1) for v in exp],
                "boresight_elev_deg": ang[0]}
         if self._att is not None:
-            err = [((m - e + 180.0) % 360.0) - 180.0 for m, e in zip(self._att, exp)]
+            err = [G.angle_difference_deg(m, e) for m, e in zip(self._att, exp)]
             out["px4_rpy_deg"] = [round(v, 1) for v in self._att]
             out["err_rpy_deg"] = [round(v, 1) for v in err]
         tgt = self._target_park()
@@ -518,6 +525,7 @@ class AngledLaunchMonitor(Node):
                           "queue_transport_mean_s": (round(queue_s, 3)
                                                      if queue_s is not None else None),
                           "target_gap_wall_s": tgt_gap,
+                          "target_gap_sim_s": self._tgt_gap_sim.summary(),
                           "since_last_target_s": (round(wall - self._last_tgt_wall, 2)
                                                   if self._last_tgt_wall else None),
                           "last": self._last_det},
@@ -554,9 +562,10 @@ class AngledLaunchMonitor(Node):
             self.get_logger().warn(
                 "[GT] use_ground_truth=true 인데 sim/guidance_ground_truth 가 안 온다 → "
                 "PN 갱신이 전부 건너뛰어진다(표적이 숨김 상태이거나 referee 미기동?)")
-        if lost_to and tgt_gap and tgt_gap["max"] > 0.5 * float(lost_to):
+        gap_sim = summary["detection"]["target_gap_sim_s"]
+        if lost_to and gap_sim and gap_sim["max"] > 0.5 * float(lost_to):
             self.get_logger().warn(
-                f"[det] 표적 검출 간격 최대 {tgt_gap['max']:.2f}s 가 TRACK 소실 timeout "
+                f"[det] 표적 검출 간격 최대 {gap_sim['max']:.2f}s(시뮬) 가 TRACK 소실 timeout "
                 f"{lost_to}s 의 절반을 넘었다 — 검출 주기가 상태머신 여유를 잠식")
         rail = summary["rail"]
         if rail and "err_rpy_deg" in rail and self._launcher_status.startswith("장전됨") \
@@ -565,6 +574,7 @@ class AngledLaunchMonitor(Node):
                 f"[att] 장착 상태 PX4 자세가 발사기 기하와 다르다: 기대 {rail['expected_rpy_deg']} "
                 f"실제 {rail['px4_rpy_deg']} (EKF heading/자력계 확인)")
         self._tgt_gap.clear()
+        self._tgt_gap_sim.clear()
         self._det_proc.clear()
         self._det_compute.clear()
         self._det_yolo.clear()

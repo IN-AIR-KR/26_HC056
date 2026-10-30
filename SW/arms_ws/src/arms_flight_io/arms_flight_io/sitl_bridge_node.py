@@ -15,6 +15,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
+from std_srvs.srv import Trigger
+
 from arms_msgs.msg import AttitudeTelemetry, FlightCommand, GpsTelemetry, IoStatus
 
 try:
@@ -38,7 +40,30 @@ FORCE_DISARM_MAGIC = 21196.0
 # heartbeat(시뮬 시간 1Hz)만 보면 Gazebo RTF가 0.5 아래로 떨어질 때 벽시계 간격이 2s를
 # 넘어 연결이 깜빡이고, control 이 그걸 io fault 로 보고 ARM 직후 RTL 로 빠졌다.
 # 그래서 30Hz ATTITUDE 를 포함한 모든 수신으로 판단한다.
+#   시간축: ROS clock. SITL 런치는 use_sim_time(/clock) 이라 PX4 lockstep 과 같은 시뮬
+#   시간으로 잰다 — RTF 0.1~0.3 에서도 '시뮬 2 s 동안 무수신'일 때만 끊김이다(예전 벽시계
+#   2 s 는 RTF 0.2 에서 시뮬 0.4 s 에 해당해 ARM 직후 RTL 을 일으켰다).
 HB_TIMEOUT_SEC = 2.0
+# /clock 이 멈추면(Gazebo 정지) 시뮬 시간도 멈춘다. 그때도 끊김을 알 수 있게 벽시계 상한을 둔다.
+HB_WALL_BACKSTOP_SEC = 15.0
+# PX4 Stabilized 모드 추력 곡선 (mc_att_control throttle_curve, MPC_THR_CURVE=2):
+#   stick -1/0/+1 → MPC_MANTHR_MIN / MPC_THR_HOVER / MPC_THR_MAX.
+# 자동 유도(stabilized_mode)의 FlightCommand.throttle 은 물리 추력(호버=MPC_THR_HOVER)이므로
+# 이 곡선의 역함수로 스틱 값을 만든다. 수동(manual_mode)은 조종 스틱 그대로 보낸다.
+THR_CURVE_PARAMS = {"MPC_MANTHR_MIN": 0.08, "MPC_THR_HOVER": 0.32, "MPC_THR_MAX": 1.0}
+SERIAL_CONTROL_DEV_SHELL = 10
+SERIAL_CONTROL_FLAG_RESPOND = 2
+SERIAL_CONTROL_FLAG_EXCLUSIVE = 4
+
+
+def thrust_to_stabilized_stick(thrust, thr_min, hover, thr_max):
+    """물리 추력[0,1] → PX4 Stabilized 스틱[-1,1] (throttle_curve 의 역함수)."""
+    t = min(max(float(thrust), 0.0), thr_max)
+    if t >= hover:
+        return min(1.0, (t - hover) / max(thr_max - hover, 1e-6))
+    if t <= thr_min:
+        return -1.0
+    return -1.0 + (t - thr_min) / max(hover - thr_min, 1e-6)
 GPS_RAW_INT_MESSAGE_ID = 24
 GPS_STREAM_INTERVAL_US = 200_000  # 5 Hz: UI 표시에는 충분하고 MAVLink 부하는 작다.
 ATTITUDE_MESSAGE_ID = 30
@@ -82,7 +107,9 @@ class ArmsSITLCommNode(Node):
         # PX4 재기동(패널 RESET) 감지용. heartbeat 이 끊겼다 돌아오면 그건 '새 PX4'이고,
         # 갓 부팅한 PX4 는 ACRO 가 아니다 — 모드를 다시 넣어주지 않으면 위 주석의
         # '조용히 기울기 명령으로 오해석' 상태로 계속 난다.
-        self._last_rx   = 0.0          # 마지막 MAVLink 수신 시각 (monotonic)
+        self._last_rx   = None         # 마지막 MAVLink 수신 시각 (ROS clock [s])
+        self._last_rx_wall = None      # 같은 수신의 벽시계 시각 (monotonic, 상한 판정용)
+        self._thr_curve = dict(THR_CURVE_PARAMS)   # PX4 PARAM_VALUE 로 갱신
         self._reiniting = False        # _initial_setup 재실행 중복 방지
         self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
         # Track A preserves the established telemetry/logging API.
@@ -90,6 +117,8 @@ class ArmsSITLCommNode(Node):
         self._attitude_pub = self.create_publisher(AttitudeTelemetry, "vehicle/attitude", 10)
         self._status_pub = self.create_publisher(IoStatus, "io/status", 10)
         self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
+        # 발사기를 기울인 뒤 EKF 를 현재 자세로 다시 정렬시키는 서비스 (DISARM 상태에서만).
+        self.create_service(Trigger, "sitl/reinit_estimator", self._srv_reinit_estimator)
 
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
@@ -143,6 +172,7 @@ class ArmsSITLCommNode(Node):
         self._send_set_mode(PX4_CUSTOM_MAIN_MODE_ACRO)
         self._request_gps_stream()
         self._request_attitude_stream()
+        self._request_thr_curve_params()
         time.sleep(0.5)
 
         self._connected = True
@@ -177,12 +207,14 @@ class ArmsSITLCommNode(Node):
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type=['HEARTBEAT', 'GPS_RAW_INT', 'ATTITUDE'],
-                                           blocking=True, timeout=1.0)
-                now = time.monotonic()
+                msg = self._mav.recv_match(
+                    type=['HEARTBEAT', 'GPS_RAW_INT', 'ATTITUDE', 'PARAM_VALUE'],
+                    blocking=True, timeout=1.0)
+                now = self._ros_now()
+                wall = time.monotonic()
                 if msg is None:
                     # heartbeat 끊김 = PX4 가 내려갔다 (패널 RESET 이거나 죽음).
-                    if self._connected and now - self._last_rx > HB_TIMEOUT_SEC:
+                    if self._connected and self._rx_gap_exceeded(now, wall):
                         self._connected = False
                         self.get_logger().warn(
                             "PX4 MAVLink 수신 끊김 — 재기동 대기 (RESET?)")
@@ -195,15 +227,19 @@ class ArmsSITLCommNode(Node):
                 #   직후엔 _initial_setup 이 EKF 를 기다리며 자느라 _connected 가
                 #   아직 False 다. 그걸 재기동으로 오해하면 기동할 때마다 모드를
                 #   두 번 넣는다.
-                if self._last_rx > 0.0 and (now - self._last_rx) > HB_TIMEOUT_SEC:
+                if self._last_rx is not None and self._rx_gap_exceeded(now, wall):
                     self._restore_mode()
-                self._last_rx = now
+                if now is not None:
+                    self._last_rx = now
+                self._last_rx_wall = wall
                 if t == 'HEARTBEAT':
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
                 elif t == 'GPS_RAW_INT':
                     self._publish_gps(msg)
                 elif t == 'ATTITUDE':
                     self._publish_attitude(msg)
+                elif t == 'PARAM_VALUE':
+                    self._on_param_value(msg)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
@@ -246,8 +282,29 @@ class ArmsSITLCommNode(Node):
                 "PX4 ATTITUDE stream active → vehicle/attitude "
                 f"(roll={att.roll_deg:.1f}, pitch={att.pitch_deg:.1f}, yaw={att.yaw_deg:.1f} deg)")
 
+    def _ros_now(self):
+        """ROS clock [s]. use_sim_time 인데 /clock 이 아직 없으면 None."""
+        ns = self.get_clock().now().nanoseconds
+        return ns * 1e-9 if ns > 0 else None
+
+    def _rx_age(self, now, wall):
+        if self._last_rx_wall is None:
+            return float('inf')
+        if now is not None and self._last_rx is not None:
+            return max(0.0, now - self._last_rx)
+        return wall - self._last_rx_wall
+
+    def _rx_gap_exceeded(self, now, wall):
+        if self._last_rx_wall is None:
+            return False
+        return (self._rx_age(now, wall) > HB_TIMEOUT_SEC
+                or wall - self._last_rx_wall > HB_WALL_BACKSTOP_SEC)
+
     def _publish_status(self):
-        age = time.monotonic() - self._last_rx if self._last_rx else float('inf')
+        now, wall = self._ros_now(), time.monotonic()
+        age = self._rx_age(now, wall)
+        if self._last_rx_wall is not None and wall - self._last_rx_wall > HB_WALL_BACKSTOP_SEC:
+            age = max(age, HB_TIMEOUT_SEC + 1.0)
         status = IoStatus()
         status.header.stamp = self.get_clock().now().to_msg()
         status.source = "px4"
@@ -336,9 +393,18 @@ class ArmsSITLCommNode(Node):
         def axis(v):
             return int(1500 + max(-1.0, min(1.0, v)) * 500)
         us = [1500] * 8
+        if command.stabilized_mode and not command.manual_mode:
+            # 자동 Stabilized: 물리 추력 → PX4 추력 곡선 역변환 스틱. 이게 없으면
+            #   호버(0.32)가 스틱 0.32(=-0.36)로 나가 실제 추력 ≈0.23 이 됐다.
+            c = self._thr_curve
+            stick = thrust_to_stabilized_stick(command.throttle, c["MPC_MANTHR_MIN"],
+                                               c["MPC_THR_HOVER"], c["MPC_THR_MAX"])
+            thr_us = int(1500 + stick * 500)
+        else:
+            # 수동 스틱 passthrough / ACRO(추력 = (stick+1)/2 로 선형) 는 그대로.
+            thr_us = int(1000 + max(0.0, min(1.0, command.throttle)) * 1000)
         us[0], us[1], us[2], us[3] = (axis(command.roll), axis(command.pitch),
-                                      int(1000 + max(0.0, min(1.0, command.throttle)) * 1000),
-                                      axis(command.yaw))
+                                      thr_us, axis(command.yaw))
         us[4] = 2000 if command.arm else 1000
         us[5] = 2000 if (command.manual_mode or command.stabilized_mode) else 1000
         us[6] = 2000 if command.rtl_request else 1000
@@ -405,6 +471,67 @@ class ArmsSITLCommNode(Node):
         except Exception as e:
             self.get_logger().warn(
                 f"RC_MAP_KILL_SW clear failed: {e}", throttle_duration_sec=5.0)
+
+    def _request_thr_curve_params(self):
+        """Stabilized 추력 곡선 파라미터를 PX4 에서 읽어 역변환에 쓴다(기본값은 airframe 값)."""
+        if self._mav is None:
+            return
+        for name in THR_CURVE_PARAMS:
+            try:
+                self._mav.mav.param_request_read_send(
+                    self._mav.target_system, self._mav.target_component,
+                    name.encode(), -1)
+            except Exception as e:
+                self.get_logger().warn(f"{name} 읽기 요청 실패: {e}", throttle_duration_sec=5.0)
+
+    def _on_param_value(self, msg):
+        name = msg.param_id.rstrip("\x00") if isinstance(msg.param_id, str) \
+            else msg.param_id.decode(errors="replace").rstrip("\x00")
+        if name in self._thr_curve:
+            value = float(msg.param_value)
+            if abs(value - self._thr_curve[name]) > 1e-4:
+                self.get_logger().info(
+                    f"PX4 {name}={value:.3f} (기본 {self._thr_curve[name]:.3f}) → Stabilized "
+                    f"추력 역변환에 반영")
+            self._thr_curve[name] = value
+
+    def _shell(self, line):
+        """PX4 nsh 셸에 한 줄을 보낸다 (MAVLink SERIAL_CONTROL, mavlink_shell.py 와 같은 방식)."""
+        data = list((line + "\n").encode())
+        while data:
+            chunk, data = data[:70], data[70:]
+            n = len(chunk)
+            self._mav.mav.serial_control_send(
+                SERIAL_CONTROL_DEV_SHELL,
+                SERIAL_CONTROL_FLAG_EXCLUSIVE | SERIAL_CONTROL_FLAG_RESPOND,
+                0, 0, n, chunk + [0] * (70 - n))
+
+    def _srv_reinit_estimator(self, _req, res):
+        """EKF2 를 재시작해 현재(정지) 자세로 다시 정렬시킨다.
+
+        발사기는 set_pose(순간이동)로 기체를 기울인다. 각속도가 없으니 자이로가 회전을
+        못 보고, PX4 1.18 EKF2 는 GPS 수평 보정 중 중력 벡터 융합을 끈다(isHorizontalAidingActive).
+        그래서 기울인 뒤 PX4 자세가 수직 쪽에 남아 수십 초에 걸쳐 일부만 수렴했다.
+        재시작한 EKF 는 정지 상태 가속도로 기울기를, 자력계로 heading 을 새로 잡는다.
+        """
+        if self._mav is None or not self._connected:
+            res.success, res.message = False, "PX4 미연결"
+            return res
+        if self._armed or self._ch5_high:
+            res.success, res.message = False, "ARM 상태에서는 EKF 재정렬 금지"
+            return res
+        try:
+            self._shell("ekf2 stop")
+            time.sleep(0.5)
+            self._shell("ekf2 start")
+            time.sleep(0.2)
+            self._mav.mav.serial_control_send(SERIAL_CONTROL_DEV_SHELL, 0, 0, 0, 0, [0] * 70)
+        except Exception as e:
+            res.success, res.message = False, f"MAVLink shell 실패: {e}"
+            return res
+        self.get_logger().warn("EKF2 재시작 요청(발사기 자세 변경 후 재정렬) — 수렴까지 수 초")
+        res.success, res.message = True, "ekf2 restart 요청 완료"
+        return res
 
     def _request_gps_stream(self):
         """PX4에 GPS_RAW_INT 주기 전송을 요청한다.

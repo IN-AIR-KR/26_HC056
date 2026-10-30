@@ -22,6 +22,7 @@ PX4 는 원래 의도대로 PX4_GZ_STANDALONE + PX4_GZ_MODEL_NAME 으로 기존 
 """
 
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -34,6 +35,8 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
+
+from arms_sim import sitl_procs
 
 
 class SitlResetManager(Node):
@@ -58,6 +61,10 @@ class SitlResetManager(Node):
         # 발사기가 없을 때만 쓰는 예전 지면 출발 위치. 발사기가 있으면 reload 서비스가
         # 기체를 튜브에 재장전한다.
         self.require_parameter("spawn_pose", Parameter.Type.DOUBLE_ARRAY)
+        # 이 세션의 PX4 만 내렸다 올린다 (같은 PC 의 다른 SITL 세션 PX4 는 건드리지 않는다).
+        self.declare_parameter("px4_instance", 0)
+        self._instance = int(self.get_parameter("px4_instance").value)
+        self._partition = os.environ.get("GZ_PARTITION", "")
         self._busy = threading.Lock()
         self._reset_pub = self.create_publisher(Empty, "sim/reset_event", 10)
         # 견착 발사기(launcher 노드)의 재장전 서비스. 기체를 '지면'이 아니라 발사기
@@ -101,15 +108,19 @@ class SitlResetManager(Node):
             self._busy.release()
         return response
 
+    def _own_px4(self):
+        return sitl_procs.own_px4(self._instance, self._partition)
+
     def _stop_px4(self):
-        pattern = "px4_sitl_default/bin/px4"
-        subprocess.run(["pkill", "-TERM", "-f", pattern], check=False)
+        # 예전엔 pkill -f 로 PC 의 모든 PX4 를 죽였다(다른 세션 포함). 이제 같은 인스턴스·
+        # GZ_PARTITION 의 PX4 만 내린다.
+        sitl_procs.kill(self._own_px4(), signal.SIGTERM)
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            if subprocess.run(["pgrep", "-f", pattern], stdout=subprocess.DEVNULL).returncode:
+            if not self._own_px4():
                 return
             time.sleep(0.1)
-        subprocess.run(["pkill", "-KILL", "-f", pattern], check=False)
+        sitl_procs.kill(self._own_px4(), signal.SIGKILL)
         time.sleep(0.2)
 
     def _require_gazebo(self):
@@ -189,9 +200,12 @@ class SitlResetManager(Node):
             "PX4_GZ_STANDALONE": "1",
             "PX4_GZ_MODEL_NAME": self.get_parameter("drone_model").value,
         })
+        workdir = (build_dir / "rootfs" if self._instance == 0
+                   else build_dir / f"instance_{self._instance}")
         subprocess.Popen(
-            [str(px4_bin), "-d", "-s", "etc/init.d-posix/rcS", str(build_dir / "etc")],
-            cwd=str(build_dir / "rootfs"), env=env, start_new_session=True)
+            [str(px4_bin), "-i", str(self._instance), "-d", "-s", "etc/init.d-posix/rcS",
+             str(build_dir / "etc")],
+            cwd=str(workdir), env=env, start_new_session=True)
         self.get_logger().info("PX4 재기동: 살아있는 기체에 attach (Gazebo·센서 유지)")
 
     def _wait_for_px4(self, timeout=20.0):
@@ -201,12 +215,10 @@ class SitlResetManager(Node):
         않으면 패널은 '완료'라고 띄워놓고 실제로는 제어가 죽어 있는 상태가 된다.
         """
         drone = self.get_parameter("drone_model").value
-        pattern = "px4_sitl_default/bin/px4"
         deadline = time.monotonic() + timeout
         alive_since = None
         while time.monotonic() < deadline:
-            px4_up = subprocess.run(["pgrep", "-f", pattern],
-                                    stdout=subprocess.DEVNULL).returncode == 0
+            px4_up = bool(self._own_px4())
             if not px4_up:
                 if alive_since:   # 떴다가 죽었다 = attach 실패
                     raise RuntimeError(

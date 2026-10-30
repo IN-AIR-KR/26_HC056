@@ -113,6 +113,10 @@
         # SITL referee의 Gazebo ground truth LOS-rate/Vc로 PN을 검증한다.
         # 실기체에는 이 토픽이 없으므로 반드시 false를 유지한다.
         use_ground_truth: false
+        # 측정 시각 기준. header = 영상 촬영 시각(검출 header)·자세 추정 시각으로 신선도와
+        # 자세 보간을 계산한다(SITL: 모든 노드가 /clock 시뮬 시간을 쓸 때만 유효).
+        # receipt = 이 노드의 수신 시각(실기체 기본값, hw_overrides.yaml).
+        stamp_source: header
         camera:
           # OpenCV optical(right, down, forward) → PX4 body FRD.
           # 상방 카메라: optical forward는 body up(-z)다.

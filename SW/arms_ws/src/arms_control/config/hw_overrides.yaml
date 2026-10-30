@@ -43,5 +43,9 @@
       hover_throttle: 0.51
       track_throttle: 0.70
 
+      # 실기체 카메라 header 와 CRSF 자세가 같은 시계로 찍힌다는 검증 전까지는 수신 시각 기준.
+      pn:
+        stamp_source: receipt
+
       # 자동 모드에서 FC arm을 유지할 상태. 실험 목적에 따라 여기서 빠르게 바꾼다.
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "RTL"]

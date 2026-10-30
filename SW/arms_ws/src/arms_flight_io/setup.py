@@ -9,6 +9,7 @@ setup(
                 ("share/arms_flight_io", ["package.xml"]),
                 ("share/arms_flight_io/config", glob("config/*.yaml"))],
     install_requires=["setuptools"],
+    extras_require={"test": ["pytest"]},
     zip_safe=True,
     entry_points={"console_scripts": [
         "arms_crsf_io_node = arms_flight_io.crsf_io_node:main",

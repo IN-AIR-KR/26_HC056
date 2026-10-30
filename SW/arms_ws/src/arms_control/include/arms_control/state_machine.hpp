@@ -32,8 +32,12 @@ struct SMParams {
 class StateMachine {
 public:
   using LogFn = std::function<void(const std::string &)>;
+  // 현재 시각[s]. 기본은 steady_clock. control 노드는 ROS clock(SITL 에서는 /clock 시뮬
+  // 시간)을 넘겨, timeout 이 PX4 lockstep 과 같은 시간축에서 흐르게 한다.
+  using ClockFn = std::function<double()>;
 
-  explicit StateMachine(const SMParams & params, LogFn log_fn = nullptr);
+  explicit StateMachine(const SMParams & params, LogFn log_fn = nullptr,
+                        ClockFn clock_fn = nullptr);
 
   // ---------- external events ----------
   void on_detection(const std::vector<arms_msgs::msg::BoundingBox> & detections);
@@ -84,15 +88,15 @@ private:
   bool   target_locked_{false};
   bool   detection_held_{false};
 
-  using Clock     = std::chrono::steady_clock;
-  using TimePoint = std::chrono::time_point<Clock>;
+  double now_sec() const;
 
+  ClockFn clock_fn_;
   bool       lock_timer_running_{false};
-  TimePoint  lock_start_time_;
+  double     lock_start_time_{0.0};
 
   bool       last_detection_valid_{false};
   double     last_timeout_elapsed_sec_{0.0};   // 전이 로그용: 마지막 유효 검출 후 경과[s]
-  TimePoint  last_detection_time_;
+  double     last_detection_time_{0.0};
   // TRACK target-loss는 GPS Rescue가 아니라 조종사에게 즉시 수동 조종을 인계한다.
   bool manual_handover_requested_{false};
 };

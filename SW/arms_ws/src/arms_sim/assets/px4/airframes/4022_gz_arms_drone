@@ -81,6 +81,8 @@ param set-default SIM_GZ_EC_MAX4 1000
 # AUW 1.04kg + 추력 58.9N(모터 1.5kgf×4) → TWR≈5.77.
 # 호버: 모터당 필요 ω = √(1.04·9.81/4 / 1.4715e-5) ≈ 416 rad/s, ω = 150 + 850·u (EC_MIN/MAX) → u ≈ 0.313
 param set-default MPC_THR_HOVER 0.32
+# Stabilized 스틱 중앙 = MPC_THR_HOVER (sitl_bridge 의 자동 추력 역변환과 짝, px4_sitl.launch.py 도 설정)
+param set-default MPC_THR_CURVE 2
 
 # GCS 없는 standalone 비행 — failsafe 비활성화
 param set-default NAV_DLL_ACT 0       # 데이터링크 소실 무시 (GCS 없음)

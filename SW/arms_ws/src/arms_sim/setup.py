@@ -44,6 +44,7 @@ setup(
             "sitl_viz = arms_sim.sitl_viz:main",
             "launcher = arms_sim.launcher:main",
             "angled_launch_monitor = arms_sim.angled_launch_monitor:main",
+            "angled_stability_test = arms_sim.angled_stability_test:main",
         ],
     },
 )

@@ -12,7 +12,7 @@ PX4/Gazebo 는 필요 없다. 다른 ROS 그래프(SITL 등)와 섞이지 않게
   3. ARM 스위치 OFF → 즉시 CH5 disarm (비상 motor cut)
   4. flight I/O 단절(io/status) → RTL + rtl_request
   5. use_ground_truth=true 인데 GT 토픽이 없으면 PN 명령을 만들지 않음(추력 0)
-현행 동작 관찰(판정 없음, 출력만): 표적 소실 hold 구간에서 PN 신선도 게이트로 추력이 0 이 되는 시간.
+  6. 표적 소실 hold 구간(PN 입력이 오래됨)에서 추력 0(자유낙하)이 아니라 수평 자세·호버 추력 유지
 
 실행: colcon test --packages-select arms_control --pytest-args -s
 """
@@ -46,6 +46,7 @@ from arms_msgs.msg import (AttitudeTelemetry, BoundingBox, DetectionArray,  # no
                            FlightCommand, IoStatus, MissionState, OperatorInput, PnDebug)
 
 TRACK_LOST = 2.0     # control_params.yaml mission.track_target_lost_timeout_sec
+HOVER = 0.32         # control_params.yaml control.hover_throttle
 
 
 class Harness(Node):
@@ -219,15 +220,19 @@ def test_2_target_loss_hands_over_to_manual(h):
     time.sleep(1.5)
     assert h.state == "IDLE" and h.cmd.manual_mode and h.cmd.arm
 
-    # 관찰(판정 없음): 소실~인계 사이 자동 명령의 추력 0 시간
+    # 소실~인계 사이 자동 명령: PN 입력이 오래되면 추력 0 이 아니라 수평·호버 유지여야 한다.
     with h.lock:
-        hold = [(t, m) for t, s, m in h.cmd_log if t_lost <= t <= t_idle and not m.manual_mode]
-    zero = [t for t, m in hold if m.throttle <= 1e-3]
-    first_zero = (zero[0] - t_lost) if zero else None
-    report = {"track_lost_to_idle_s": round(dt, 3),
-              "hold_ticks": len(hold), "hold_zero_thrust_ticks": len(zero),
-              "first_zero_thrust_after_loss_s": round(first_zero, 3) if zero else None}
-    print("\n[관찰] 표적 소실 hold 구간:", json.dumps(report, ensure_ascii=False))
+        hold = [(t, m) for t, s, m in h.cmd_log
+                if t_lost + 0.4 <= t <= t_idle - 0.05 and not m.manual_mode]
+    assert len(hold) > 20, len(hold)
+    zero = [m for _, m in hold if m.throttle <= 1e-3]
+    assert not zero, f"hold 구간에 추력 0 명령 {len(zero)}틱 (자유낙하)"
+    assert all(m.stabilized_mode and m.arm for _, m in hold)
+    assert all(m.throttle == pytest.approx(HOVER, abs=1e-4) for _, m in hold)
+    assert all(abs(m.roll) < 1e-4 and abs(m.pitch) < 1e-4 for _, m in hold)
+    report = {"track_lost_to_idle_s": round(dt, 3), "hold_ticks": len(hold),
+              "hold_throttle": round(hold[-1][1].throttle, 3)}
+    print("\n[측정] 표적 소실 hold 구간:", json.dumps(report, ensure_ascii=False))
     h.target = False
 
 
@@ -256,8 +261,10 @@ def test_5_ground_truth_without_topic_blocks_pn(h):
     time.sleep(0.8)
     c = h.cmd
     assert c.arm and not c.manual_mode
-    assert c.throttle == pytest.approx(0.0, abs=1e-6), "GT 없이 PN 명령이 생성됐다"
-    assert h.pn is not None and not h.pn.command_active
+    # GT 가 없으면 PN 명령은 만들지 않고(command_active=false) 수평·호버 유지만 한다.
+    assert h.pn is not None and not h.pn.command_active, "GT 없이 PN 명령이 생성됐다"
+    assert c.throttle == pytest.approx(HOVER, abs=1e-4)
+    assert abs(c.roll) < 1e-4 and abs(c.pitch) < 1e-4
     assert any("[GT]" in line and "use_ground_truth=true" in line for line in h.node_log)
     h.arm = False
     h.set_param("control.pn.use_ground_truth", False)

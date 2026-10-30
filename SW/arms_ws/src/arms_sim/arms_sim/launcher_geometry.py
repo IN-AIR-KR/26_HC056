@@ -109,14 +109,14 @@ def body_axes_enu(elev_deg, az_deg):
     return tuple(tuple(r[i][j] for i in range(3)) for j in range(3))
 
 
-def expected_px4_euler_deg(elev_deg, az_deg):
-    """장착 자세를 PX4 ATTITUDE 규약(NED/FRD, ZYX Euler)으로 바꾼 (roll, pitch, yaw) [deg].
+def enu_flu_quat_to_px4_euler_deg(q):
+    """Gazebo/ROS 자세 쿼터니언(ENU 월드, FLU 기체; x,y,z,w) → PX4 ATTITUDE 규약
+    (NED 월드, FRD 기체, ZYX Euler) (roll, pitch, yaw) [deg].
 
-    PX4 gz 브리지는 Gazebo ENU/FLU 를 NED/FRD 로 바꿔 쓴다. 앙각 90°·방위 0° 이면
-    (0, 0, 90): 기수(body +X)가 월드 +X(=East) 를 본다. 앙각 E 로 기울이면 추력축이
-    기수 방향으로 넘어가므로 pitch = -(90°-E).
+    R_ned_frd = T_ned←enu · R_enu_flu · T_flu←frd,  T_ned←enu = [[0,1,0],[1,0,0],[0,0,-1]],
+    T_flu←frd = diag(1,-1,-1). PX4 gz_bridge 가 쓰는 변환과 같다.
     """
-    r = _quat_to_mat(drone_orientation(elev_deg, az_deg))
+    r = _quat_to_mat(q)
     t_ne = ((0, 1, 0), (1, 0, 0), (0, 0, -1))   # ENU → NED
     t_bf = (1, -1, -1)                          # FRD → FLU (대각)
     m = [[sum(t_ne[i][k] * r[k][j] for k in range(3)) * t_bf[j] for j in range(3)]
@@ -125,6 +125,15 @@ def expected_px4_euler_deg(elev_deg, az_deg):
     roll = math.atan2(m[2][1], m[2][2])
     yaw = math.atan2(m[1][0], m[0][0])
     return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
+
+
+def expected_px4_euler_deg(elev_deg, az_deg):
+    """장착 자세를 PX4 ATTITUDE 규약(NED/FRD, ZYX Euler)으로 바꾼 (roll, pitch, yaw) [deg].
+
+    앙각 90°·방위 0° 이면 (0, 0, 90): 기수(body +X)가 월드 +X(=East) 를 본다.
+    앙각 E 로 기울이면 추력축이 기수 방향으로 넘어가므로 pitch = -(90°-E).
+    """
+    return enu_flu_quat_to_px4_euler_deg(drone_orientation(elev_deg, az_deg))
 
 
 def camera_position(elev_deg, az_deg):
@@ -172,3 +181,49 @@ def project_target(elev_deg, az_deg, target_xyz):
             "y_center": 0.5 + v / (2.0 * tv),
             "in_fov": abs(u) <= th and abs(v) <= tv,
             "range_m": rng}
+
+
+def angle_difference_deg(actual, expected):
+    """두 각도의 차이를 계산한다. 결과 범위는 [-180, 180)도."""
+    return (actual - expected + 180.0) % 360.0 - 180.0
+
+
+def validate_px4_attitude(
+    elev_deg,
+    az_deg,
+    actual_roll,
+    actual_pitch,
+    actual_yaw,
+    tolerance_deg=3.0,
+):
+    """
+    발사대의 예상 자세와 PX4에서 측정한 자세를 비교한다.
+
+    이 함수는 진단 전용이며 드론을 움직이는 명령은 생성하지 않는다.
+    """
+
+    expected = expected_px4_euler_deg(elev_deg, az_deg)
+
+    actual = (
+        actual_roll,
+        actual_pitch,
+        actual_yaw,
+    )
+
+    errors = tuple(
+        angle_difference_deg(a, e)
+        for a, e in zip(actual, expected)
+    )
+
+    valid = all(
+        abs(error) <= tolerance_deg
+        for error in errors
+    )
+
+    return {
+        "valid": valid,
+        "expected": expected,
+        "actual": actual,
+        "errors_deg": errors,
+        "max_error_deg": max(abs(x) for x in errors),
+    }
