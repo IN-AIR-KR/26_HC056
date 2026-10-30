@@ -97,6 +97,8 @@ def generate_launch_description():
                               description="발행 fps"),
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
+        DeclareLaunchArgument("inference_backend", default_value="ultralytics",
+                              description="검출 runtime: ultralytics(.pt/.engine) | hailo(.hef)"),
         DeclareLaunchArgument(
             "model", default_value="/models/balloon_nano_v9.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
@@ -120,7 +122,10 @@ def generate_launch_description():
         actions.append(ExecuteProcess(
             cmd=["docker", "compose", "-f", detection_compose, "up", "-d"],
             output="screen",
-            additional_env={"ARMS_MODEL": LaunchConfiguration("model")},
+            additional_env={
+                "ARMS_MODEL": LaunchConfiguration("model"),
+                "ARMS_INFERENCE_BACKEND": LaunchConfiguration("inference_backend"),
+            },
             condition=IfCondition(LaunchConfiguration("start_detection")),
         ))
     else:

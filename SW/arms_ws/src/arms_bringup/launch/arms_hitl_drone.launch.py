@@ -41,6 +41,7 @@ def _detection_dir():
 def _detection(context, *args, **kwargs):
     mode = LaunchConfiguration("detection").perform(context).strip().lower()
     model = LaunchConfiguration("det_model").perform(context).strip()
+    backend = LaunchConfiguration("inference_backend").perform(context).strip().lower()
     docker_dir = _detection_dir()
     if mode == "docker":
         if docker_dir is None:
@@ -51,7 +52,11 @@ def _detection(context, *args, **kwargs):
             cmd=["docker", "compose", "-f", str(docker_dir / "docker-compose.jetson.yml"),
                  "up", "-d"],
             output="screen",
-            additional_env={"ARMS_MODEL": model, "ARMS_INPUT_COMPRESSED": "1"},
+            additional_env={
+                "ARMS_MODEL": model,
+                "ARMS_INFERENCE_BACKEND": backend,
+                "ARMS_INPUT_COMPRESSED": "1",
+            },
         )]
 
     if mode != "host":
@@ -65,7 +70,10 @@ def _detection(context, *args, **kwargs):
     return [Node(
         package="arms_detection", executable="arms_detection_node",
         namespace="arms", name="arms_detection_node", output="screen",
-        parameters=[str(config)], additional_env={"ARMS_MODEL": model},
+        parameters=[str(config), {
+            "inference.backend": backend,
+            "inference.model_path": model,
+        }],
     )]
 
 
@@ -114,6 +122,8 @@ def generate_launch_description():
                               description="detection placement: docker (Jetson default) or host"),
         DeclareLaunchArgument("det_model", default_value="/models/balloon_nano_v9.engine",
                               description="YOLO model path; /models/... is for Docker mode"),
+        DeclareLaunchArgument("inference_backend", default_value="ultralytics",
+                              description="검출 runtime: ultralytics(.pt/.engine) | hailo(.hef)"),
         DeclareLaunchArgument("auto_save", default_value="true",
                               description="record each ARM-on to ARM-off flight on the Jetson"),
         DeclareLaunchArgument("record_raw_video", default_value="false",

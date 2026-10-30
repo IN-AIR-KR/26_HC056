@@ -19,6 +19,8 @@
   <exec_depend>compressed_image_transport</exec_depend>
   <!-- SITL 영상 브리지 -->
   <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

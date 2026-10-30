@@ -6,12 +6,24 @@
 #
 # 이 파일은 검출 파라미터의 유일한 기본 원천이다. 누락된 키는 노드가 기동을 거부한다.
 #
-# ※ YOLO 모델 경로/conf/iou/imgsz/입력형식 등은 컨테이너·엔진에 종속되므로
-#   ROS 파라미터가 아니라 docker compose 의 environment(ARMS_*) 로 관리한다.
-#
-# yaml 만 고치고 `docker compose ... restart` 하면 반영된다(재빌드 불필요).
+# 모델 backend와 경로는 런치가 반드시 명시 주입한다. 누락 시 노드는 기동을 거부한다.
+# HEF 고유 NMS 형식은 아래 config가 단일 원천이며, smoke test 출력으로 맞춘다.
 /arms/arms_detection_node:
   ros__parameters:
+    inference:
+      confidence_threshold: 0.32
+      iou_threshold: 0.45
+      full_imgsz: 512
+      roi_imgsz: 320
+      hailo:
+        # HEF가 요구하는 입력 색 순서. Hailo model zoo의 일반 YOLO HEF는 RGB다.
+        input_color: rgb
+        # HEF가 출력하는 NMS tensor 이름. HEF가 출력 하나만 가진 경우 빈 값으로 둔다.
+        output_name: ""
+        # Hailo NMS의 known layout. raw feature-map HEF는 지원하지 않는다.
+        nms_format: classwise_yxyx_score
+        class_names: [balloon]
+
     # =====================================================================
     # 검출 처리
     # =====================================================================

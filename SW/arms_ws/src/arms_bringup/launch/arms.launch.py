@@ -55,6 +55,9 @@ def generate_launch_description():
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
+    csi_video_launch = (
+        Path(get_package_share_directory("arms_video")) / "launch" / "video_csi.launch.py"
+    )
     operator_launch = (
         Path(get_package_share_directory("arms_operator")) / "launch" / "operator.launch.py"
     )
@@ -65,6 +68,12 @@ def generate_launch_description():
                               description="ELRS CRSF serial port (USB-C CP2102=/dev/ttyUSB0, 40핀 UART=/dev/ttyTHS1)"),
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
+        DeclareLaunchArgument("video_source", default_value="usb",
+                              description="영상 소스: usb(기본) | csi(Pi host Unix socket)"),
+        DeclareLaunchArgument("csi_socket", default_value="/run/arms-csi/camera.sock",
+                              description="video_source:=csi일 때 host capture Unix socket 경로"),
+        DeclareLaunchArgument("inference_backend", default_value="ultralytics",
+                              description="검출 runtime: ultralytics(.pt/.engine) | hailo(.hef)"),
         DeclareLaunchArgument(
             "model", default_value="/models/balloon_nano_v9.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
@@ -94,7 +103,10 @@ def generate_launch_description():
         actions.append(ExecuteProcess(
             cmd=["docker", "compose", "-f", detection_compose, "up", "-d"],
             output="screen",
-            additional_env={"ARMS_MODEL": LaunchConfiguration("model")},
+            additional_env={
+                "ARMS_MODEL": LaunchConfiguration("model"),
+                "ARMS_INFERENCE_BACKEND": LaunchConfiguration("inference_backend"),
+            },
             condition=IfCondition(LaunchConfiguration("start_detection")),
         ))
     else:
@@ -106,6 +118,14 @@ def generate_launch_description():
         # Video capture (arms_video_node)
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(video_launch)),
+            condition=IfCondition(PythonExpression(
+                ["'", LaunchConfiguration("video_source"), "' == 'usb'"])),
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(csi_video_launch)),
+            condition=IfCondition(PythonExpression(
+                ["'", LaunchConfiguration("video_source"), "' == 'csi'"])),
+            launch_arguments={"csi_socket": LaunchConfiguration("csi_socket")}.items(),
         ),
         # 실기체 운용자 입력 (ESP32 UART → /arms/operator/input)
         IncludeLaunchDescription(

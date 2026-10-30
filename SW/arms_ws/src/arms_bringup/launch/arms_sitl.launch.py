@@ -80,6 +80,7 @@ def _detection(context, *args, **kwargs):
     """
     mode = LaunchConfiguration("detection").perform(context).strip().lower()
     model = LaunchConfiguration("det_model").perform(context).strip()
+    backend = LaunchConfiguration("inference_backend").perform(context).strip().lower()
     docker_dir = _detection_dir()
 
     if mode == "docker":
@@ -94,7 +95,11 @@ def _detection(context, *args, **kwargs):
             cmd=["docker", "compose", "-f",
                  str(docker_dir / f"docker-compose.{platform}.yml"), "up", "-d"],
             output="screen",
-            additional_env={"ARMS_MODEL": model, "ARMS_INPUT_COMPRESSED": "0"},
+            additional_env={
+                "ARMS_MODEL": model,
+                "ARMS_INFERENCE_BACKEND": backend,
+                "ARMS_INPUT_COMPRESSED": "0",
+            },
         )]
 
     actions = []
@@ -111,10 +116,10 @@ def _detection(context, *args, **kwargs):
     actions.append(Node(
         package="arms_detection", executable="arms_detection_node",
         namespace="arms", name="arms_detection_node", output="screen",
-        parameters=[str(det_config)],
-        # YOLO on/off 는 파라미터가 아니라 이 환경변수다 — 모델이 로드돼야 검출을
-        # 발행한다(HSV 단독 발행 금지). 노드 기동 시점에 한 번만 읽는다.
-        additional_env={"ARMS_MODEL": model},
+        parameters=[str(det_config), {
+            "inference.backend": backend,
+            "inference.model_path": model,
+        }],
     ))
     return actions
 
@@ -177,6 +182,10 @@ def generate_launch_description():
             description="YOLO 가중치. 다른 런치의 model:= 과 같은 컨테이너 경로(/models/x) "
                         "표기이며 host 모드에선 docker/models/x 로 자동 치환된다. "
                         "호스트 절대경로를 직접 줘도 된다."),
+        DeclareLaunchArgument(
+            "inference_backend", default_value="ultralytics",
+            description="검출 runtime: ultralytics(.pt/.engine) | hailo(.hef). "
+                        "hailo는 Pi HailoRT 환경에서만 사용."),
 
         DeclareLaunchArgument("auto_save", default_value="true",
                               description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "

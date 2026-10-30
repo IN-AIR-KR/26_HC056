@@ -28,6 +28,7 @@ services:
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
       # 랩탑 이미지는 PyTorch 라 .pt 를 그대로 쓴다(.engine 은 Jetson 전용).
       - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_nano_v9.pt}
+      - ARMS_INFERENCE_BACKEND=${ARMS_INFERENCE_BACKEND:-ultralytics}
       - ARMS_CONF=${ARMS_CONF:-0.32}
       - ARMS_IOU=${ARMS_IOU:-0.45}
       - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-512}
@@ -44,14 +45,14 @@ services:
       # 노드 소스를 바인드 마운트 → 코드 수정 시 이미지 재빌드 없이 컨테이너
       # 재시작(docker compose restart arms_detection)만으로 반영. Dockerfile 이
       # 같은 경로로 COPY 한 파일 위에 덮어씌운다. (의존성/Dockerfile 변경 때만 재빌드)
-      - ../arms_detection/arms_detection_node.py:/ros_ws/arms_detection_node.py:ro
+      - ../arms_detection/arms_detection:/ros_ws/arms_detection:ro
       # 검출 파라미터 config (--params-file 로 로드).
       - ../config:/params:ro
     # detection.yaml 을 --params-file 로 로드. override 는 ARMS_DET_CONFIG 로 위에 얹는다.
     command:
       - bash
       - -c
-      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args -r __ns:=/$$ROS_NAMESPACE --params-file /params/detection.yaml $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
+      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && PYTHONPATH=/ros_ws python3 -m arms_detection.arms_detection_node --ros-args -r __ns:=/$$ROS_NAMESPACE --params-file /params/detection.yaml -p inference.backend:=$$ARMS_INFERENCE_BACKEND -p inference.model_path:=$$ARMS_MODEL $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
     # 모델 로드·cold-start 실패는 설정/환경 오류다. 재시작 루프가 UI health를
     # 잠깐 online으로 보이게 하지 않도록, 수정 후 명시적으로 다시 기동한다.
     restart: "no"

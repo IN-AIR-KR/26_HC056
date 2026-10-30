@@ -1,0 +1,5 @@
+/arms/arms_video_csi_node:
+  ros__parameters:
+    socket_path: /run/arms-csi/camera.sock
+    frame_id: camera
+    reconnect_ms: 200

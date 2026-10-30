@@ -43,6 +43,7 @@ from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Float32MultiArray
 
 from arms_msgs.msg import BoundingBox, DetectionArray
+from arms_detection.inference_backends import HailoBackend, UltralyticsBackend
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +280,21 @@ class ArmsDetectionNode(Node):
         self.require_parameter("filter.jump_gate", Parameter.Type.DOUBLE)
         self.require_parameter("filter.max_age", Parameter.Type.INTEGER)
 
+        backend_name = str(self.require_parameter(
+            "inference.backend", Parameter.Type.STRING)).strip().lower()
+        model_path = str(self.require_parameter(
+            "inference.model_path", Parameter.Type.STRING)).strip()
+        self.require_parameter("inference.confidence_threshold", Parameter.Type.DOUBLE)
+        self.require_parameter("inference.iou_threshold", Parameter.Type.DOUBLE)
+        self.require_parameter("inference.full_imgsz", Parameter.Type.INTEGER)
+        self.require_parameter("inference.roi_imgsz", Parameter.Type.INTEGER)
+        self.require_parameter("inference.hailo.input_color", Parameter.Type.STRING)
+        self.require_parameter("inference.hailo.output_name", Parameter.Type.STRING)
+        self.require_parameter("inference.hailo.nms_format", Parameter.Type.STRING)
+        self.require_parameter("inference.hailo.class_names", Parameter.Type.STRING_ARRAY)
+        if not model_path:
+            raise RuntimeError("Required parameter 'inference.model_path' is empty")
+
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
 
@@ -290,36 +306,32 @@ class ArmsDetectionNode(Node):
         self._diag_hsv_proposals = []   # 파이프라인 후보(max_candidates) — hsv_debug_image 용
         self._diag_hsv_all = []         # 상위 10개 후보 — debug_image 전체 후보 뷰 용
 
-        # YOLO는 같은 프로세스에서 직접 추론한다. 모델 경로/파라미터는 컨테이너
-        # compose 또는 host 런치가 환경변수로 주입한다. 유효한 모델 없이 검출 노드가
-        # 살아 있으면 node-list 기반 health가 거짓 양성이 되므로 시작을 실패시킨다.
-        # 카메라 재학습 모델의 validation F1 최적점은 약 0.32다.
-        self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.32"))
-        self._yolo_iou  = float(os.environ.get("ARMS_IOU",  "0.45"))
-        legacy_imgsz = os.environ.get("ARMS_IMGSZ")
-        self._yolo_full_imgsz = int(os.environ.get(
-            "ARMS_FULL_IMGSZ", legacy_imgsz or "512"))
-        self._yolo_roi_imgsz = int(os.environ.get(
-            "ARMS_ROI_IMGSZ", legacy_imgsz or "320"))
-        model_path = os.environ.get("ARMS_MODEL", "").strip()
-        if not model_path:
-            raise RuntimeError("ARMS_MODEL is required for arms_detection_node")
-        # 고정 batch TensorRT engine은 여러 ndarray 입력을 못 받아 후보별 순차 추론한다.
-        # .pt 모델은 list 입력으로 한 번에 batch 추론한다.
-        self._yolo_batch_enabled = not model_path.lower().endswith(".engine")
+        self._detector = None
+        self._yolo_conf = float(self.get_parameter("inference.confidence_threshold").value)
+        self._yolo_iou = float(self.get_parameter("inference.iou_threshold").value)
+        self._yolo_full_imgsz = int(self.get_parameter("inference.full_imgsz").value)
+        self._yolo_roi_imgsz = int(self.get_parameter("inference.roi_imgsz").value)
         try:
-            from ultralytics import YOLO
-            self.get_logger().info(f"Loading YOLO model: {model_path}")
-            self._yolo = YOLO(model_path, task="detect")
-            # 시작 시 워밍업 predict 1회 — 엔진 로드·CUDA 컨텍스트·오토튜닝을 여기서
-            # 끝낸다. 여기서 실패하면 이후 프레임에서도 정상 추론할 수 없으므로 노드를
-            # 종료해 system health가 missing으로 표시되게 한다.
-            dummy = np.zeros((self._yolo_roi_imgsz, self._yolo_roi_imgsz, 3), np.uint8)
-            self._yolo.predict(dummy, imgsz=self._yolo_roi_imgsz, verbose=False)
-            self.get_logger().info("YOLO loaded + warmed up (in-process).")
+            if backend_name == "ultralytics":
+                self.get_logger().info(f"Loading Ultralytics model: {model_path}")
+                self._detector = UltralyticsBackend(
+                    model_path, self._yolo_conf, self._yolo_iou, self._yolo_roi_imgsz)
+            elif backend_name == "hailo":
+                self.get_logger().info(f"Loading Hailo HEF: {model_path}")
+                self._detector = HailoBackend(
+                    model_path=model_path,
+                    confidence=self._yolo_conf,
+                    class_names=self.get_parameter("inference.hailo.class_names").value,
+                    input_color=str(self.get_parameter("inference.hailo.input_color").value),
+                    output_name=str(self.get_parameter("inference.hailo.output_name").value),
+                    nms_format=str(self.get_parameter("inference.hailo.nms_format").value),
+                )
+            else:
+                raise RuntimeError("inference.backend must be 'ultralytics' or 'hailo'")
+            self.get_logger().info(f"{self._detector.name} model loaded + warmed up.")
         except Exception as exc:
             raise RuntimeError(
-                f"YOLO model load or cold-start warmup failed: {exc}") from exc
+                f"Inference backend load or cold-start warmup failed: {exc}") from exc
 
         # 입력 전송: ARMS_INPUT_COMPRESSED=1 이면 압축(CompressedImage)을 구독·디코드
         # → 컨테이너로 오는 UDP 데이터량 급감(조각 드롭↓). 아니면 raw Image.
@@ -344,7 +356,13 @@ class ArmsDetectionNode(Node):
         self.pub_detstatus = self.create_publisher(Float32MultiArray, "perception/status", 10)
 
         self.get_logger().info(
-            "arms_detection_node ready [HSV proposals → batched ROI YOLO + full fallback, KF filter]")
+            "arms_detection_node ready [HSV proposals → backend ROI verification + full fallback, KF filter]")
+
+    def destroy_node(self):
+        if self._detector is not None:
+            self._detector.close()
+            self._detector = None
+        return super().destroy_node()
 
     # ------------------------------------------------------------------
     # Subscriptions
@@ -453,7 +471,7 @@ class ArmsDetectionNode(Node):
 
     def _detect_acquire(self, bgr):
         """HSV 후보를 먼저 만들고 ROI들을 한 번의 YOLO batch로 검증한다."""
-        use_yolo = self._yolo is not None   # 모델 로드됐을 때만 YOLO. HSV 단독 발행은 금지.
+        use_yolo = self._detector is not None   # 모델 로드됐을 때만 YOLO. HSV 단독 발행은 금지.
         use_hsv = bool(self.get_parameter("use_hsv").value)
         hsv_started = time.perf_counter()
         proposals = self._detect_hsv_candidates(bgr) if use_hsv else []
@@ -514,7 +532,7 @@ class ArmsDetectionNode(Node):
         hsv_box = diag["hsv_box"]
         yolo_ran = bool(diag["yolo_ran"])
         use_hsv = bool(self.get_parameter("use_hsv").value)
-        yv = (-2.0 if self._yolo is None else       # 모델 없음(DEAD)
+        yv = (-2.0 if self._detector is None else   # 모델 없음(DEAD)
               (-1.0 if not yolo_ran else            # 이 프레임 미실행
                (float(yolo_box.confidence) if yolo_box else 0.0)))
         hv = (-1.0 if not use_hsv else
@@ -568,13 +586,8 @@ class ArmsDetectionNode(Node):
         """
         if not images:
             return []
-        if self._yolo is None:
+        if self._detector is None:
             return [None] * len(images)
-
-        # TensorRT 고정 batch 엔진은 batch 입력 대신 순차 실행한다. 기본 .pt 경로는
-        # 아래 list 입력으로 ROI 1~2개를 단일 batch 추론한다.
-        if len(images) > 1 and not self._yolo_batch_enabled:
-            return [self._detect_yolo(image, imgsz=imgsz) for image in images]
 
         sources = [np.ascontiguousarray(image) for image in images]
         input_size = int(imgsz or self._yolo_roi_imgsz)
@@ -583,9 +596,7 @@ class ArmsDetectionNode(Node):
             self._diag["yolo_inputs"] += len(sources)
         yolo_started = time.perf_counter()
         try:
-            results = self._yolo.predict(
-                sources, conf=self._yolo_conf, iou=self._yolo_iou,
-                imgsz=input_size, verbose=False)
+            results = self._detector.infer(sources, input_size)
         except Exception as e:
             if self._diag is not None:
                 self._diag["yolo_ms"] += (time.perf_counter() - yolo_started) * 1000.0
@@ -596,21 +607,18 @@ class ArmsDetectionNode(Node):
             self._diag["yolo_ms"] += (
                 time.perf_counter() - yolo_started) * 1000.0
         output = []
-        for image, result in zip(images, results):
-            h, w = image.shape[:2]
-            if len(result.boxes) == 0:
+        for result in results:
+            if result is None:
                 output.append(None)
                 continue
-            best = max(result.boxes, key=lambda box: float(box.conf[0]))
-            x1, y1, x2, y2 = best.xyxy[0].tolist()
             box = BoundingBox()
-            box.x_center = float((x1 + x2) / 2 / w)
-            box.y_center = float((y1 + y2) / 2 / h)
-            box.width = float((x2 - x1) / w)
-            box.height = float((y2 - y1) / h)
-            box.confidence = float(best.conf[0])
-            box.class_id = int(best.cls[0])
-            box.class_name = str(self._yolo.names[int(best.cls[0])])
+            box.x_center = result.x_center
+            box.y_center = result.y_center
+            box.width = result.width
+            box.height = result.height
+            box.confidence = result.confidence
+            box.class_id = result.class_id
+            box.class_name = result.class_name
             output.append(box)
         if self._diag is not None:
             self._diag["yolo_accepted"] += sum(box is not None for box in output)
