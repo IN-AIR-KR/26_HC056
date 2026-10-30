@@ -12,6 +12,8 @@ set -m
 ELEV="$(printf '%.1f' "${1:?앙각(deg) 필요}")"
 OUT="${2:-$HOME/arms_diag_logs/isolated}"
 PHASES="${3:-P1,P2,P3}"
+# START_ELEV 를 주면 그 각도로 띄우고 드라이버가 정렬 뒤 <앙각>으로 기울인다(PA 단계).
+START_ELEV="$(printf '%.1f' "${START_ELEV:-$ELEV}")"
 MIN_FREE_MB="${MIN_FREE_MB:-2500}"
 WS="$(cd "$(dirname "$0")/../../arms_ws" && pwd)"
 mkdir -p "$OUT"
@@ -31,7 +33,7 @@ echo "격리: ROS_DOMAIN_ID=$ROS_DOMAIN_ID GZ_PARTITION=$GZ_PARTITION PX4 instan
 
 ros2 launch arms_bringup arms_sitl.launch.py px4_instance:=1 gui:=false rviz:=false \
   auto_save:=false diag:=true diag_jsonl:="$OUT/${STAMP}_elev${ELEV}_monitor.jsonl" \
-  launch_elev:="$ELEV" > "$LOG" 2>&1 &
+  launch_elev:="$START_ELEV" > "$LOG" 2>&1 &
 LAUNCH_PID=$!
 cleanup() {
   # 자기 런치의 프로세스 그룹에만 보낸다 (다른 세션은 다른 그룹이다).
@@ -60,5 +62,5 @@ trap cleanup EXIT
 ) &
 
 ros2 run arms_sim angled_stability_test --ros-args -p elev:="$ELEV" -p phases:="$PHASES" \
-  -p drone_model:=arms_drone_1 -p out:="$OUT/${STAMP}_elev${ELEV}_test.jsonl" \
+  -p drone_model:=arms_drone_1 -p start_elev:="$START_ELEV" -p out:="$OUT/${STAMP}_elev${ELEV}_test.jsonl" \
   2>&1 | tee "$OUT/${STAMP}_elev${ELEV}_test.log"

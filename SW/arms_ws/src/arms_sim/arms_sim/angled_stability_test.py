@@ -68,6 +68,8 @@ class StabilityTest(Node):
         self.declare_parameter("world", "arms_sitl")
         self.declare_parameter("phases", "P1,P2,P3")
         self.declare_parameter("flight_sim_sec", 12.0)
+        # PA 단계용: 런치는 start_elev(기본 90°)로 띄우고, 정렬 뒤 elev 로 기울인다(패널 조작과 같음).
+        self.declare_parameter("start_elev", -1.0)
         self.elev = float(self.get_parameter("elev").value)
         self.az = float(self.get_parameter("az").value)
         self.drone = str(self.get_parameter("drone_model").value)
@@ -230,9 +232,11 @@ class StabilityTest(Node):
 
     # ── 시험 단계 ─────────────────────────────────────────────────────────
     def p0_ready(self):
+        start = float(self.get_parameter("start_elev").value)
+        e0 = start if start >= 0.0 else self.elev
         ok = self.wait(lambda: self.io is not None and self.io.vehicle_telemetry_connected
                        and self.launcher_status.startswith("장전됨")
-                       and f"앙각 {self.elev:.0f}°" in self.launcher_status
+                       and f"앙각 {e0:.0f}°" in self.launcher_status
                        and self.att is not None and self.sim is not None, 300.0)
         self.rec("ready", ok=ok, launcher=self.launcher_status)
         return ok
@@ -253,6 +257,33 @@ class StabilityTest(Node):
                  aligned_after_wall_s=aligned_at and round(aligned_at[0], 1),
                  aligned_after_sim_s=aligned_at and round(aligned_at[1], 1))
         return aligned_at is not None
+
+    def pa_tilt_after_alignment(self):
+        """부팅·정렬 뒤 발사관을 기울인다(패널과 같은 파라미터 경로). 재정렬을 끈 채로 오차를
+        재고(문제 재현), 켠 뒤 수렴을 잰다(수정 검증)."""
+        start = float(self.get_parameter("start_elev").value)
+        aligned0 = self.wait(lambda: "자세정렬 OK" in self.launcher_status, 90.0)
+        self.rec("pa_start", start_elev=start, aligned_at_start=aligned0, **self.att_errors())
+        self.set_params(LAUNCHER, {"realign_estimator": False})
+        self.set_params(LAUNCHER, {"elevation_deg": self.elev, "azimuth_deg": self.az})
+        self.wait(lambda: self.launcher_status.startswith("장전됨")
+                  and f"앙각 {self.elev:.0f}°" in self.launcher_status, 60.0)
+        t_tilt = self.sim
+        series = []
+        while self.sim is not None and self.sim - t_tilt < 15.0 and rclpy.ok():
+            e = self.att_errors()
+            if "px4_minus_expected" in e:
+                series.append((round(self.sim - t_tilt, 2), e["px4_minus_expected"]))
+            time.sleep(0.5)
+        worst = max((max(abs(v) for v in err) for _, err in series), default=None)
+        self.rec("pa_no_realign", after_tilt_sim_s=15.0, worst_err_deg=worst,
+                 first=series[:1], last=series[-1:], **self.att_errors())
+        self.set_params(LAUNCHER, {"realign_estimator": True})
+        t_on = self.sim
+        ok = self.wait(lambda: "자세정렬 OK" in self.launcher_status, 120.0)
+        self.rec("pa_realign", ok=ok, align_sim_s=(self.sim - t_on) if ok else None,
+                 **self.att_errors(), launcher=self.launcher_status)
+        return ok
 
     def p2_auto_safety(self):
         self.set_params(LAUNCHER, {"release_enabled": False})
@@ -405,7 +436,8 @@ class StabilityTest(Node):
             return
         results = {}
         for p in phases:
-            fn = {"P1": self.p1_rail, "P2": self.p2_auto_safety, "P3": self.p3_manual_flight}[p]
+            fn = {"PA": self.pa_tilt_after_alignment, "P1": self.p1_rail,
+                  "P2": self.p2_auto_safety, "P3": self.p3_manual_flight}[p]
             try:
                 results[p] = bool(fn())
             except Exception as e:   # 시험 드라이버 예외도 기록하고 다음 단계로
