@@ -82,12 +82,12 @@
 
     <!-- 표적 A: 풍선 (빨간 구) — 기본 -->
     <model name="target_ball">
-      <!-- referee가 set_pose로만 이동시키는 시각 표적이다. 정적으로 두어 RESET 뒤
-           이전 패스의 선형/각속도가 물리 엔진에 남지 않게 한다. -->
-      <static>true</static>
+      <static>false</static>
       <pose>0 0 -100 0 0 0</pose>
       <link name="link">
         <!-- 지름 0.5 m (collision·visual 반지름 0.25 를 같이 바꿀 것. sitl_viz 마커 지름도) -->
+        <gravity>false</gravity>
+        <kinematic>true</kinematic>
         <inertial>
           <mass>0.05</mass>
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
@@ -118,10 +118,11 @@
     <!-- 표적 B: 적 드론 (PX4 x500 외형, model://x500_base 메시 참조).
          이름에 'drone'/'x500' 안 넣음 → referee 자기드론(arms_drone) 식별과 안 겹침. -->
     <model name="target_uav">
-      <!-- target_ball과 같이 referee가 pose만 갱신하는 정적 표적이다. -->
-      <static>true</static>
+      <static>false</static>
       <pose>0 0 -100 0 0 0</pose>
       <link name="link">
+        <gravity>false</gravity>
+        <kinematic>true</kinematic>
         <inertial>
           <mass>0.05</mass>
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>

@@ -176,6 +176,7 @@ class BalloonReferee(Node):
         self._prev_enabled = True
         # 한 번이라도 발사됐는지. 발사 전(초기 대기)엔 숨기고, 발사 후 정지는 제자리 멈춤.
         self._launched_once = False
+        self._force_hold_target = False
         self._new_pass()
         # /arms/mission_state 는 구독하지 않는다. 예전에는 종말 상태를 보고
         # 명중을 선언했는데, 그러면 심판이 응시자의 답을 보고 채점하는 셈이라
@@ -206,6 +207,9 @@ class BalloonReferee(Node):
         self._ball_pos = (0.0, 0.0, HIDE_Z)
         self._prev_enabled = True
         self._launched_once = False
+        # Kinematic 표적은 set_pose만으로 이전 링크 속도가 즉시 사라지지 않을 수
+        # 있다. 다음 [비행 시작] 전까지 매 tick 같은 대기 pose를 강제한다.
+        self._force_hold_target = True
         self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
         # Gazebo dynamic pose 알림은 비동기라 reset 직후에는 이전 패스의 좌표가
         # 잠시 남을 수 있다. 그 좌표를 새 대기 위치와 미분하면 가짜 표적 속도가
@@ -238,7 +242,7 @@ class BalloonReferee(Node):
         ox, oy, _ = self._pose_at(PARK_T, pz)
         return (px + bx - ox, py + by - oy, pz)
 
-    def _park_at_start(self):
+    def _park_at_start(self, force=False):
         """발사 전 대기: 선택된 표적을 '화면에 보이는' 지점(PARK_T)에 세워둔다.
 
         예전엔 지하(HIDE_Z)로 숨겨서, [비행 시작] 을 눌러야 비로소 나타났다. 매번
@@ -248,13 +252,12 @@ class BalloonReferee(Node):
         진행도 t 도 같이 옮겨둔다 — tick 은 정지했던 t 에서 이어서 재개하므로,
         이렇게 해야 [비행 시작] 순간에 순간이동이 없다.
 
-        멱등이다 — 이미 그 자리면 아무것도 보내지 않는다. 그래서 대기 중 매 tick
-        불러도 gz 로 나가는 트래픽이 0 이고, 패널에서 고도 슬라이더를 움직이면
-        세워둔 표적도 따라 올라간다.
+        기본은 멱등이라 이미 그 자리면 아무것도 보내지 않는다. RESET 직후에는
+        force=True로 매 tick 같은 pose를 보내 잔여 링크 속도를 억제한다.
         """
         pose = self._park_point()
         self._last_park_req = pose
-        if self._ball_pos == pose and self.t == PARK_T:
+        if not force and self._ball_pos == pose and self.t == PARK_T:
             return
         set_pose(self.target_model, *pose)
         other = MODEL_DRONE if self.target_model == MODEL_BALLOON else MODEL_BALLOON
@@ -423,7 +426,9 @@ class BalloonReferee(Node):
         #     Gazebo 가 마지막 위치를 유지하므로 사라지지 않고 제자리에 정지.
         if not enabled:
             # 패널에서 X/Y/고도를 바꾸면 비행 후 정지 상태여도 새 위치로 옮긴다.
-            if not self._launched_once or self._park_point() != self._last_park_req:
+            if self._force_hold_target:
+                self._park_at_start(force=True)
+            elif not self._launched_once or self._park_point() != self._last_park_req:
                 self._park_at_start()   # 멱등 — 이미 제자리면 no-op
             self._prev_enabled = False
             # 정지 풍선에서도 드론은 접근하므로 GT LOS-rate/접근속도는 계속 유효하다.
@@ -434,6 +439,7 @@ class BalloonReferee(Node):
         #   정지했던 그 자리(t)에서 이어서 재개한다. (t 를 리셋하지 않음)
         #   최초 발사는 __init__ 에서 t=0 이라 자동으로 먼 시작점부터 시작.
         if not self._prev_enabled:
+            self._force_hold_target = False
             self.hit = False
             self.pause_until = 0.0
             self._launched_once = True
@@ -441,7 +447,7 @@ class BalloonReferee(Node):
         self._prev_enabled = True
 
         # 명중해도 표적은 원래 궤적을 그대로 계속 난다. 인위적으로 튕겨내던
-        # 연출은 없앴다 — 표적은 static 충돌체라 물리적으로 밀리지 않고,
+        # 연출은 없앴다 — 표적은 kinematic 충돌체라 물리적으로 밀리지 않고,
         # 부딪힌 쪽인 드론이 튕겨 나가는 게 실제로 일어나는 일이다.
         # self.hit 은 한 패스에 한 번만 로그하려는 플래그로만 남는다.
 
