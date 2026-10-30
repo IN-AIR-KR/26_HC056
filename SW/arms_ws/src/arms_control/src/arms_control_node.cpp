@@ -383,6 +383,8 @@ class ArmsControlNode : public rclcpp::Node {
               pn_params_.max_lateral_accel_mps2 = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.use_ground_truth") {
               pn_use_ground_truth_ = p.as_bool();
+              gt_skip_count_ = 0;
+              log_ground_truth_mode("변경");
             }
             else if (n == "control.gain_shaping")
               gain_shaping_ = p.as_bool();
@@ -487,6 +489,13 @@ class ArmsControlNode : public rclcpp::Node {
           pn::Quaternion attitude;
           if (!pn_attitudes_.interpolate(
                   sample.seconds(), pn_measurement_age_sec_, attitude)) {
+            // 진단: 이 경우 PN은 갱신되지 않는다(조용히 건너뛰던 경로).
+            ++pn_attitude_skip_count_;
+            if (guidance_mode_ == 1) {
+              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                  "[PN] 검출 수신 시각에 맞는 vehicle/attitude 없음(> %.2fs) → PN 갱신 생략 "
+                  "(누적 %zu회)", pn_measurement_age_sec_, pn_attitude_skip_count_);
+            }
             return;
           }
           const pn::Vec3 *gt_los_rate = nullptr;
@@ -497,7 +506,15 @@ class ArmsControlNode : public rclcpp::Node {
             const bool gt_fresh = gt_received_ && latest_gt_.valid &&
                 (sample - gt_receipt_time_).seconds() >= 0.0 &&
                 (sample - gt_receipt_time_).seconds() <= pn_measurement_age_sec_;
-            if (!gt_fresh) return;
+            if (!gt_fresh) {
+              // 진단: GT 모드에서는 GT가 신선하지 않으면 영상 추정으로 대체하지 않고 갱신 자체를 건너뛴다.
+              ++gt_skip_count_;
+              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                  "[GT] use_ground_truth=true 인데 sim/guidance_ground_truth 가 %s → PN 갱신 생략 "
+                  "(누적 %zu회)",
+                  gt_received_ ? "오래됨" : "수신된 적 없음", gt_skip_count_);
+              return;
+            }
             gt_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
                        latest_gt_.los_rate_z};
             gt_speed = latest_gt_.closing_speed_mps;
@@ -618,7 +635,7 @@ class ArmsControlNode : public rclcpp::Node {
     // arm 스위치가 새 기체로 이어지지 않도록 제어 상태를 안전한 IDLE로 비운다.
     sub_reset_ = create_subscription<std_msgs::msg::Empty>(
         "sim/reset_event", 10, [this](std_msgs::msg::Empty::SharedPtr) {
-          sm_->disarm();
+          sm_->disarm("실험 RESET");
           pid_roll_->reset();
           pid_pitch_->reset();
           filt_err_x_ = filt_err_y_ = 0.0;
@@ -651,7 +668,13 @@ class ArmsControlNode : public rclcpp::Node {
         std::chrono::duration_cast<std::chrono::nanoseconds>(period),
         std::bind(&ArmsControlNode::control_loop, this));
 
-    RCLCPP_INFO(get_logger(), "arms_control_node started.");
+    log_ground_truth_mode("기동");
+    RCLCPP_INFO(get_logger(),
+                "arms_control_node started. guidance_mode=%d(%s) track_lost_timeout=%.2fs "
+                "detection_timeout=%.2fs pn_max_age=%.2fs (모든 timeout 은 벽시계 기준)",
+                guidance_mode_, guidance_mode_ == 1 ? "PN" : "PID",
+                sm_params.track_target_lost_timeout_sec, sm_params.detection_timeout_sec,
+                pn_measurement_age_sec_);
   }
 
  private:
@@ -806,6 +829,20 @@ class ArmsControlNode : public rclcpp::Node {
         x = (xd - dx) / rad;
         y = (yd - dy) / rad;
       }
+    }
+  }
+
+  // GT 사용 여부와 실제 데이터 소스를 한 줄로 남긴다. SITL GT는 PN의 LOS-rate·접근속도만
+  // 덮어쓰며, PN 갱신 시점·LOS 방향·거리는 여전히 검출 bbox와 vehicle/attitude에서 온다.
+  void log_ground_truth_mode(const char *why) {
+    if (pn_use_ground_truth_) {
+      RCLCPP_WARN(get_logger(),
+                  "[GT] (%s) control.pn.use_ground_truth=true — PN LOS-rate/closing speed = "
+                  "Gazebo GT(sim/guidance_ground_truth). 갱신 트리거·LOS 방향·range 는 검출 bbox"
+                  "+attitude 그대로. 실기체에서는 반드시 false.", why);
+    } else {
+      RCLCPP_INFO(get_logger(),
+                  "[GT] (%s) control.pn.use_ground_truth=false — PN 입력은 영상+자세 추정값", why);
     }
   }
 
@@ -1040,6 +1077,14 @@ class ArmsControlNode : public rclcpp::Node {
           roll_rate_cmd = 0.0;
           pitch_rate_cmd = 0.0;
           thrust = 0.0F;
+          // 진단: 이 틱은 Stabilized 자세 0°·추력 0으로 나간다(명령 초기화). 원인 구분용 로그.
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+              "[PN] TRACK 중 PN 출력 %s → 자세 0°/추력 0 명령 (age=%.2fs, gate=%.2fs, "
+              "attitude skip=%zu, GT skip=%zu, GT=%s)",
+              pn_out.valid ? "오래됨" : "무효",
+              pn_out.valid ? now_t.seconds() - pn_out.stamp_sec : -1.0,
+              pn_measurement_age_sec_, pn_attitude_skip_count_, gt_skip_count_,
+              pn_use_ground_truth_ ? "ON" : "OFF");
         }
       }
 
@@ -1098,7 +1143,7 @@ class ArmsControlNode : public rclcpp::Node {
         RCLCPP_INFO(get_logger(), "SEARCH ON (IDLE → SEARCH)");
       } else if (!effective_arm) {
         if (state != State::IDLE) {
-          sm_->disarm();
+          sm_->disarm("ARM 스위치 OFF(자동)");
           RCLCPP_INFO(get_logger(), "SEARCH OFF → IDLE");
         }
         auto_armed_ = false;
@@ -1109,7 +1154,7 @@ class ArmsControlNode : public rclcpp::Node {
       //   미션이 멋대로 진행되는 것도 막는다. 자동으로 넘어오면 상태 스위치가 곧바로
       //   idle/search 를 제어한다(자동에선 스위치가 arm 과 분리되어 재토글 불필요).
       if (state != State::IDLE) {
-        sm_->disarm();
+        sm_->disarm("수동 모드 → 자동 상태머신 IDLE 고정");
         RCLCPP_INFO(get_logger(), "MANUAL → 자동 상태머신 IDLE 고정");
       }
       auto_armed_ = false;
@@ -1179,9 +1224,14 @@ class ArmsControlNode : public rclcpp::Node {
     // RTL로 옮겨 UI에 명확히 표시하고, 실제 귀환은 CH7의 FC GPS Rescue 매핑이 수행한다.
     const bool rtl_active = (joy_rtl_ || joy_command_lost_ || io_fault_) && base_ch5_armed;
     if (rtl_active && state != State::RTL) {
-      sm_->request_rtl();
+      std::string why;
+      if (joy_rtl_) why += "RTL 스위치 ";
+      if (joy_command_lost_) why += "조종 입력 단절 ";
+      if (io_fault_) why += "flight I/O 단절 ";
+      sm_->request_rtl(why);
       state = sm_->state();
-      RCLCPP_WARN(get_logger(), "RTL requested — FC GPS Rescue AUX asserted");
+      RCLCPP_WARN(get_logger(), "RTL requested — FC GPS Rescue AUX asserted (원인: %s)",
+                  why.c_str());
     }
     const bool rtl_handover = (state == State::RTL);
     const bool manual_out = effective_manual_mode || rtl_handover;
@@ -1411,6 +1461,9 @@ class ArmsControlNode : public rclcpp::Node {
   arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
   rclcpp::Time gt_receipt_time_{};
   bool gt_received_{false};
+  // 진단 카운터: PN 갱신을 건너뛴 원인별 누적 횟수 (명령에는 영향 없음)
+  std::size_t pn_attitude_skip_count_{0};
+  std::size_t gt_skip_count_{0};
   // 카메라 tan 좌표 근사값. calibrated=true면 control.camera 내부파라미터를 쓴다.
   double camera_hfov_deg_{43.6028};
   double camera_aspect_{0.6666667};

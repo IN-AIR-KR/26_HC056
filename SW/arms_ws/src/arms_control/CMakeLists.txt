@@ -51,6 +51,16 @@ if(BUILD_TESTING)
   add_executable(pn_guidance_smoke test/pn_guidance_smoke.cpp)
   target_link_libraries(pn_guidance_smoke arms_control_lib)
   add_test(NAME pn_guidance_smoke COMMAND pn_guidance_smoke)
+  add_executable(state_machine_safety_test test/state_machine_safety_test.cpp)
+  target_link_libraries(state_machine_safety_test arms_control_lib)
+  add_test(NAME state_machine_safety_test COMMAND state_machine_safety_test)
+  # 실제 노드 바이너리 + 가짜 입력으로 자동→수동 인계·안전 전이를 본다 (PX4/Gazebo 불필요).
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(control_handover_integration test/test_handover_integration.py
+    TIMEOUT 120
+    ENV
+      ARMS_CONTROL_NODE_EXE=$<TARGET_FILE:arms_control_node>
+      ARMS_CONTROL_PARAMS=${CMAKE_CURRENT_SOURCE_DIR}/config/control_params.yaml)
 endif()
 
 # -----------------------------------------------------------------------

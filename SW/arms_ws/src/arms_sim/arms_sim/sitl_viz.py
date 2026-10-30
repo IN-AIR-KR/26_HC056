@@ -45,6 +45,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tf2_ros import TransformBroadcaster
 from arms_msgs.msg import PnDebug
 
+from arms_sim import launcher_geometry as G
+
 MODEL_BALLOON = "target_ball"
 MODEL_DRONE = "target_uav"
 # 이 z 아래로 내려간 모델은 '숨긴 것'으로 본다. referee 가 안 쓰는 표적을
@@ -122,6 +124,10 @@ class SitlViz(Node):
         self._max_pts = int(self.get_parameter("path_max_points").value)
         self._min_dist = float(self.get_parameter("path_min_dist").value)
         self._aim_len = float(self.get_parameter("aim_line_m").value)
+        # 카메라 화각 사각뿔: 광축(body +Z)과 HFOV/VFOV 경계. 0 이면 끔.
+        #   기울인 발사에서 표적이 화면 안에 있는지 rviz 에서 바로 본다.
+        self.declare_parameter("camera_frustum_m", 15.0)
+        self._frustum_len = float(self.get_parameter("camera_frustum_m").value)
 
         # gz 콜백은 gz transport 스레드에서 온다. 거기서 바로 발행하지 않고 최신 포즈만
         # 담아두고, ROS 타이머가 꺼내 발행한다(=발행률도 여기서 제한된다).
@@ -243,6 +249,8 @@ class SitlViz(Node):
             markers.markers.append(self._drone_marker(now, drone))
             if self._aim_len > 0.0:
                 markers.markers.append(self._aim_marker(now, drone))
+            if self._frustum_len > 0.0:
+                markers.markers.append(self._frustum_marker(now, drone))
         if target:
             self._send_tf(now, target)
             markers.markers.append(self._target_marker(now, target))
@@ -338,6 +346,43 @@ class SitlViz(Node):
         m.points = [p0, p1]
         m.scale.x = 0.12          # LINE_STRIP 은 scale.x 가 선 두께
         m.color.r, m.color.g, m.color.b, m.color.a = 0.2, 1.0, 0.4, 0.8
+        return m
+
+    def _frustum_marker(self, stamp, entity):
+        """상방 카메라 화각 사각뿔 (body 좌표로 주고 회전은 rviz 가 한다).
+
+        model.sdf 의 upward_camera: 광학 중심 body (0,0,0.15), 광축 body +Z,
+        이미지 가로(오른쪽) = body -Y, 이미지 세로(아래) = body +X.
+        → 가로 반화각은 body Y 로, 세로 반화각은 body X 로 벌어진다.
+        화면 '위쪽'(body -X) 가장자리 가운데에 짧은 표시선을 그어 영상 방향을 구분한다.
+        """
+        _, pos, ori = entity
+        m = self._base_marker(stamp, "camera_fov", 0)
+        m.type = Marker.LINE_LIST
+        m.pose.position.x, m.pose.position.y, m.pose.position.z = pos
+        m.pose.orientation = Quaternion(x=ori[0], y=ori[1], z=ori[2], w=ori[3])
+        L = self._frustum_len
+        th = math.tan(G.CAM_HFOV_RAD / 2.0) * L
+        tv = math.tan(G.camera_vfov_rad() / 2.0) * L
+
+        def P(x, y, z):
+            p = Point()
+            p.x, p.y, p.z = x, y, z
+            return p
+
+        apex = P(0.0, 0.0, G.CAM_OFFSET_Z)
+        z = G.CAM_OFFSET_Z + L
+        # (body X = 이미지 아래, body Y = 이미지 왼쪽)
+        corners = [P(-tv, th, z), P(-tv, -th, z), P(tv, -th, z), P(tv, th, z)]
+        pts = []
+        for c in corners:
+            pts += [apex, c]
+        for i in range(4):
+            pts += [corners[i], corners[(i + 1) % 4]]
+        pts += [P(-tv, 0.0, z), P(-tv - 0.15 * tv, 0.0, z)]   # 화면 위쪽 표시
+        m.points = pts
+        m.scale.x = 0.04
+        m.color.r, m.color.g, m.color.b, m.color.a = 0.3, 0.8, 1.0, 0.7
         return m
 
     def _pn_acceleration_marker(self, stamp, drone, pn_debug, received_sec):

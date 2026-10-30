@@ -44,9 +44,9 @@ public:
   // 비전 looming(τ) 기반 종말 RTL 판정. alignment_error는 카메라 tan 좌표계의 크기다.
   void on_intercept(double tau_sec, double bbox_size, double alignment_error);
   void on_hit();   // 심판 직격 명중(/arms/hit) → RTL
-  void request_rtl();  // 조종기/페일세이프의 명시적 귀환 요청
+  void request_rtl(const std::string & reason = "");  // 조종기/페일세이프의 명시적 귀환 요청
   void arm();
-  void disarm();
+  void disarm(const std::string & reason = "");
   void set_tau_rtl(double t)       { params_.tau_rtl_sec = t; }      // 런타임 τ 임계 조정
   void set_loom_s_min(double s)    { params_.loom_s_min = s; }       // 런타임 최소크기 게이트
   /** TRACK target-loss 시 1회 발생하는 수동 조종 인계 요청을 가져온다. */
@@ -68,7 +68,8 @@ public:
   bool        is_detection_held()   const { return detection_held_; }
 
 private:
-  void transition(State next);
+  // reason 은 로그에만 쓴다(전이 규칙에는 영향 없음).
+  void transition(State next, const std::string & reason = "");
   void on_detection_timeout();
   const arms_msgs::msg::BoundingBox * best_detection(
     const std::vector<arms_msgs::msg::BoundingBox> & dets) const;
@@ -90,6 +91,7 @@ private:
   TimePoint  lock_start_time_;
 
   bool       last_detection_valid_{false};
+  double     last_timeout_elapsed_sec_{0.0};   // 전이 로그용: 마지막 유효 검출 후 경과[s]
   TimePoint  last_detection_time_;
   // TRACK target-loss는 GPS Rescue가 아니라 조종사에게 즉시 수동 조종을 인계한다.
   bool manual_handover_requested_{false};

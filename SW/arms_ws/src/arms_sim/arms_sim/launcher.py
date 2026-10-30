@@ -95,11 +95,17 @@ class Launcher(Node):
         self.declare_parameter("manual_release_hold_sec", 0.2)
         # 플러그인 상태 토픽이 안 오는 경우의 폴백: 드론이 보인 뒤 이 시간이 지나면 장착 간주.
         self.declare_parameter("attach_fallback_sec", 1.5)
+        # 비충돌 시험용: false 면 TRACK 진입·수동 스로틀에도 분리하지 않는다(드론은 발사관에 남음).
+        self.declare_parameter("release_enabled", True)
 
         self._lock = threading.Lock()
         self._reload_lock = threading.Lock()
-        self._el = G.ELEV_SPAWN_DEG
-        self._az = G.AZ_SPAWN_DEG
+        # 런치에서 준 초기 각도(elevation_deg/azimuth_deg)를 쓴다. 스폰은 항상 수직이고,
+        #   최초 장착이 확인되면 이 각도와 스폰 각도가 다를 때 _start_angle_worker 가 기울인다.
+        self._el = min(max(float(self.get_parameter("elevation_deg").value),
+                           G.ELEV_MIN_DEG), G.ELEV_MAX_DEG)
+        self._az = min(max(float(self.get_parameter("azimuth_deg").value),
+                           G.AZ_MIN_DEG), G.AZ_MAX_DEG)
         self._attached = False            # 플러그인이 확인해준(또는 폴백) 장착 여부
         self._rig_ready = False           # 최초 장착 완료(이후부터 사용자 각도 적용)
         self._plugin_state = None         # 플러그인이 알려준 마지막 "attached"/"detached"
@@ -137,12 +143,15 @@ class Launcher(Node):
             # 서비스는 gz 가 될 때만 만든다 → RESET 쪽이 '서비스 없음'으로 정확히 실패한다.
             self.create_service(Trigger, "sim/launcher/reload", self._srv_reload)
 
+        if not self.get_parameter("release_enabled").value:
+            self.get_logger().warn("release_enabled=false — 비충돌 시험: 드론을 분리(발사)하지 않는다")
         rate = float(self.get_parameter("rate_hz").value)
         self._dt = 1.0 / max(rate, 1.0)
         self.create_timer(self._dt, self._tick)
         self.create_timer(0.25, self._publish_status)
         self.get_logger().info(
             f"launcher ready: 피벗 높이 {G.PIVOT_Z:.2f}m, 피벗→무게중심 {G.CG_DIST:.3f}m. "
+            f"초기 각도 앙각 {self._el:.1f}° 방위 {self._az:.1f}° (장착 확인 후 적용). "
             f"각도 변경은 pose 재배치로 즉시 적용한다.")
 
     # ── 드론 포즈 구독 (필요할 때만 켠다: 순수 파이썬 protobuf 파싱이 무겁다) ──
@@ -311,12 +320,23 @@ class Launcher(Node):
     def _release(self, why):
         if not _GZ_OK:
             return
+        if not self.get_parameter("release_enabled").value:
+            self.get_logger().warn(
+                f"발사 차단 — {why} (release_enabled=false, 비충돌 시험 구성)",
+                throttle_duration_sec=2.0)
+            return
         self._gz_detach.publish(_GzEmpty())
         with self._lock:
             self._attached = False          # 플러그인이 "detached" 로 곧 확인해준다
             self._launched_at = (self._el, self._az)
+        # 초기 자세 기록: 실제 PX4 자세와 비교할 기대값(launcher_geometry)도 같이 남긴다.
+        #   광축(body +Z)은 튜브 축과 같으므로 카메라 앙각 = 발사 앙각.
+        roll, pitch, yaw = G.expected_px4_euler_deg(self._el, self._az)
         self.get_logger().info(
-            f"🚀 발사 — {why}. 앙각 {self._el:.1f}°, 방위 {self._az:.1f}°")
+            f"🚀 발사 — {why}. 앙각 {self._el:.1f}°, 방위 {self._az:.1f}° | "
+            f"기대 PX4 자세 roll={roll:.1f} pitch={pitch:.1f} yaw={yaw:.1f} deg, "
+            f"카메라 광축 앙각 {self._el:.1f}° (HFOV {math.degrees(G.CAM_HFOV_RAD):.1f}°, "
+            f"VFOV {math.degrees(G.camera_vfov_rad()):.1f}°)")
 
     # ── 재장전 ────────────────────────────────────────────────────────────
     def _srv_reload(self, _req, res):

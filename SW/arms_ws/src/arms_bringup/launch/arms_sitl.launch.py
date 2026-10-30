@@ -5,6 +5,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
     ros2 launch arms_bringup arms_sitl.launch.py px4:=false   # PX4 가 이미 떠 있을 때 스택만
     ros2 launch arms_bringup arms_sitl.launch.py detection:=docker   # 검출을 컨테이너로
     ros2 launch arms_bringup arms_sitl.launch.py auto_save:=true     # 에피소드별 bag 녹화
+    ros2 launch arms_bringup arms_sitl.launch.py launch_elev:=50 diag:=true  # 50° 발사 + 진단 모니터
 
 이거 하나로 다음을 전부 띄운다:
   - PX4 SITL + Gazebo       (arms_sim/px4_sitl.launch.py include, px4:=false 로 생략)  [arms_sim]
@@ -186,6 +187,20 @@ def generate_launch_description():
                               description="원본 camera/image_raw compressed 영상을 rosbag에 저장할지"),
         DeclareLaunchArgument("plotjuggler", default_value="false",
                               description="PlotJuggler 디버그 창을 기동할지"),
+        # ── 각도 발사 검증용 (기본값 = 기존 동작) ──────────────────────────
+        DeclareLaunchArgument("launch_elev", default_value="90.0",
+                              description="발사기 초기 앙각[deg] (90=수직 기준, 0~90). 스폰은 수직이고 "
+                                          "장착 확인 후 이 각도로 기울인다. 패널에서 바꿀 수도 있다."),
+        DeclareLaunchArgument("launch_az", default_value="0.0",
+                              description="발사기 초기 방위[deg] (0=+X, 반시계 +)"),
+        DeclareLaunchArgument("use_gt", default_value="false",
+                              description="control.pn.use_ground_truth 초기값 (패널 'PN 입력: Gazebo GT' 와 같은 파라미터)"),
+        DeclareLaunchArgument("release", default_value="true",
+                              description="false 면 발사기가 분리하지 않는다(비충돌 정지 시험)"),
+        DeclareLaunchArgument("diag", default_value="false",
+                              description="angled_launch_monitor(타임스탬프·FPS·지연·상태전이·GT 진단) 기동"),
+        DeclareLaunchArgument("diag_jsonl", default_value="",
+                              description="진단 JSONL 저장 경로 (빈값=저장 안 함)"),
 
         # PX4 SITL + Gazebo — 시뮬레이터 쪽은 전부 arms_sim 담당
         IncludeLaunchDescription(
@@ -209,7 +224,9 @@ def generate_launch_description():
             # 호스트 CPU YOLO는 검출이 ~3 Hz(간격 0.3~0.5 s)라, 기본 0.20 s 신선도
             # 게이트에 걸려 TRACK 추력이 0.48↔0 으로 끊기고 기체가 떨어졌다. SITL만 늘린다.
             parameters=[str(control_config),
-                        {"control.pn.max_measurement_age_sec": 0.6}],
+                        {"control.pn.max_measurement_age_sec": 0.6,
+                         "control.pn.use_ground_truth": ParameterValue(
+                             LaunchConfiguration("use_gt"), value_type=bool)}],
         ),
         # SITL I/O 어댑터 (FlightCommand → MAVLink RC override).
         Node(
@@ -240,6 +257,19 @@ def generate_launch_description():
         Node(
             package="arms_sim", executable="launcher",
             namespace="arms", name="arms_launcher", output="screen",
+            parameters=[{
+                "elevation_deg": ParameterValue(LaunchConfiguration("launch_elev"), value_type=float),
+                "azimuth_deg": ParameterValue(LaunchConfiguration("launch_az"), value_type=float),
+                "release_enabled": ParameterValue(LaunchConfiguration("release"), value_type=bool),
+            }],
+        ),
+        # 각도 발사 진단 모니터 (관찰 전용, 제어 토픽 발행 없음). SITL 전용.
+        Node(
+            package="arms_sim", executable="angled_launch_monitor",
+            namespace="arms", name="arms_angled_launch_monitor", output="screen",
+            parameters=[{"jsonl_path": ParameterValue(LaunchConfiguration("diag_jsonl"),
+                                                      value_type=str)}],
+            condition=IfCondition(LaunchConfiguration("diag")),
         ),
         # UI 오버레이
         Node(
@@ -303,6 +333,8 @@ def generate_launch_description():
                     "/arms/control/flight_command",
                     "/arms/io/status",
                     "/arms/sim/guidance_ground_truth",
+                    "/arms/sim/diag/summary",
+                    "/arms/sim/diag/events",
                 ],
                 "manifest.control_params_path": str(control_config),
                 "manifest.arg_px4": ParameterValue(LaunchConfiguration("px4"), value_type=str),

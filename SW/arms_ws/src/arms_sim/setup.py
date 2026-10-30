@@ -30,6 +30,7 @@ setup(
         *_tree("assets"),
     ],
     install_requires=["setuptools"],
+    extras_require={"test": ["pytest"]},
     zip_safe=True,
     maintainer="arms",
     maintainer_email="dev@arms.local",
@@ -42,6 +43,7 @@ setup(
             "sitl_reset_manager = arms_sim.sitl_reset_manager:main",
             "sitl_viz = arms_sim.sitl_viz:main",
             "launcher = arms_sim.launcher:main",
+            "angled_launch_monitor = arms_sim.angled_launch_monitor:main",
         ],
     },
 )

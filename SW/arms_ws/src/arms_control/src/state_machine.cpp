@@ -3,9 +3,20 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
+#include <string>
 
 namespace arms_control {
+
+namespace {
+std::string fmt_sec(double v)
+{
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.2f", v);
+  return buf;
+}
+}  // namespace
 
 std::string to_string(State s)
 {
@@ -61,7 +72,8 @@ void StateMachine::on_detection(
       std::chrono::duration<double>(now - lock_start_time_).count();
 
     if (lock_elapsed_sec_ >= params_.lock_duration_sec) {
-      transition(State::LOCK);
+      transition(State::LOCK, "연속 검출 " + fmt_sec(lock_elapsed_sec_) +
+                 "s >= lock_duration_sec");
       target_locked_ = true;
     }
   } else if (state_ == State::LOCK || state_ == State::TRACK) {
@@ -88,6 +100,7 @@ void StateMachine::tick_detection_timeout()
     ? params_.track_target_lost_timeout_sec
     : params_.detection_timeout_sec;
 
+  last_timeout_elapsed_sec_ = elapsed;
   if (elapsed < timeout) {
     // 빈 DetectionArray가 들어왔을 때의 hold 상태는 on_detection()이 유지한다.
     // 정상 검출 프레임 사이에서 I 항을 불필요하게 freeze하지 않는다.
@@ -104,7 +117,7 @@ void StateMachine::tick_detection_timeout()
 void StateMachine::on_launch_button()
 {
   if (state_ == State::LOCK) {
-    transition(State::TRACK);
+    transition(State::TRACK, "launch 요청");
   } else if (log_fn_) {
     log_fn_("[StateMachine] Launch button pressed in state " +
             to_string(state_) + " — ignored.");
@@ -120,7 +133,7 @@ void StateMachine::on_intercept(double tau_sec, double bbox_size, double alignme
   if (!(tau_sec > 0.0)) return;
   // ③ 곧 충돌(τ 작음) + 정면 정렬이면 추가 payload 단계 없이 바로 RTL.
   if (tau_sec < params_.tau_rtl_sec && alignment_error < params_.intercept_align_tol) {
-    transition(State::RTL);
+    transition(State::RTL, "looming tau=" + fmt_sec(tau_sec) + "s");
   }
 }
 
@@ -128,16 +141,16 @@ void StateMachine::on_hit()
 {
   // 심판이 실제 직격(거리)을 보고하면 TRACK에서 즉시 RTL.
   if (state_ == State::TRACK) {
-    transition(State::RTL);
+    transition(State::RTL, "심판 직격");
   }
 }
 
-void StateMachine::request_rtl()
+void StateMachine::request_rtl(const std::string & reason)
 {
   // RTL은 ARM 된 기체에 대해서만 control 노드가 호출한다. 현재 미션 단계와
   // 무관하게 유도를 멈추고 FC의 귀환 모드로 넘긴다.
   if (state_ != State::RTL) {
-    transition(State::RTL);
+    transition(State::RTL, reason.empty() ? "RTL 요청" : reason);
   }
 }
 
@@ -147,13 +160,13 @@ void StateMachine::arm()
     lock_timer_running_   = false;
     detection_held_       = false;
     last_detection_valid_ = false;
-    transition(State::SEARCH);
+    transition(State::SEARCH, "arm");
   }
 }
 
-void StateMachine::disarm()
+void StateMachine::disarm(const std::string & reason)
 {
-  transition(State::IDLE);
+  transition(State::IDLE, reason.empty() ? "disarm" : reason);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,11 +179,15 @@ void StateMachine::on_detection_timeout()
     // 추적 중 표적을 timeout까지 놓치면 재수색하거나 GPS Rescue로 넘기지 않는다.
     // 유도를 정지하고 control node가 조종사 스틱을 FC에 직접 전달하도록 요청한다.
     manual_handover_requested_ = true;
-    transition(State::IDLE);
+    transition(State::IDLE, "표적 소실 " + fmt_sec(last_timeout_elapsed_sec_) +
+               "s >= track_target_lost_timeout_sec → 유도 중단, 수동 인계 요청");
     return;
   }
   if (state_ == State::SEARCH || state_ == State::LOCK) {
-    if (state_ != State::SEARCH) transition(State::SEARCH);
+    if (state_ != State::SEARCH) {
+      transition(State::SEARCH, "검출 timeout " + fmt_sec(last_timeout_elapsed_sec_) +
+                 "s >= detection_timeout_sec");
+    }
     lock_timer_running_ = false;
     lock_elapsed_sec_   = 0.0;
   }
@@ -190,10 +207,11 @@ const arms_msgs::msg::BoundingBox * StateMachine::best_detection(
   return best;
 }
 
-void StateMachine::transition(State next)
+void StateMachine::transition(State next, const std::string & reason)
 {
   if (log_fn_) {
-    log_fn_("[StateMachine] " + to_string(state_) + " -> " + to_string(next));
+    log_fn_("[StateMachine] " + to_string(state_) + " -> " + to_string(next) +
+            (reason.empty() ? "" : " (" + reason + ")"));
   }
   state_ = next;
 }
