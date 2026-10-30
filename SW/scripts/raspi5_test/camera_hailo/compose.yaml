@@ -25,3 +25,4 @@ services:
     devices:
       - ${HAILO_DEVICE:-/dev/hailo0}:/dev/hailo0
     command: ["python3", "hailo_test.py", "--identify"]
+

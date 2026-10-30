@@ -1,0 +1,14 @@
+services:
+  elrs:
+    image: arms-raspi5-elrs:jammy
+    platform: linux/arm64
+    build:
+      context: .
+    init: true
+    network_mode: none
+    read_only: true
+    devices:
+      - ${ELRS_PORT:-/dev/ttyAMA0}:/dev/elrs
+    volumes:
+      - ./outputs:/outputs
+    command: ["python3", "elrs_monitor.py", "--port", "/dev/elrs"]

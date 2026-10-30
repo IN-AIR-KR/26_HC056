@@ -1,0 +1,8 @@
+__pycache__/
+shared/*
+!shared/.gitkeep
+models/*
+!models/.gitkeep
+outputs/*
+!outputs/.gitkeep
+.env
