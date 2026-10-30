@@ -206,7 +206,10 @@ def generate_launch_description():
         Node(
             package="arms_control", executable="arms_control_node",
             namespace="arms", name="arms_control_node", output="screen",
-            parameters=[str(control_config)],
+            # 호스트 CPU YOLO는 검출이 ~3 Hz(간격 0.3~0.5 s)라, 기본 0.20 s 신선도
+            # 게이트에 걸려 TRACK 추력이 0.48↔0 으로 끊기고 기체가 떨어졌다. SITL만 늘린다.
+            parameters=[str(control_config),
+                        {"control.pn.max_measurement_age_sec": 0.6}],
         ),
         # SITL I/O 어댑터 (FlightCommand → MAVLink RC override).
         Node(

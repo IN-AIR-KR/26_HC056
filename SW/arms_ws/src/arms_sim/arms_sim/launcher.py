@@ -366,13 +366,17 @@ class Launcher(Node):
         req.position.x, req.position.y, req.position.z = target
         req.orientation.x, req.orientation.y, req.orientation.z, req.orientation.w = quat
         # blocking 버전: 실제로 적용된 뒤 돌려준다. 없으면(구버전) 비차단으로 폴백.
-        for srv in (f"/world/{WORLD}/set_pose/blocking", f"/world/{WORLD}/set_pose"):
-            try:
-                ok, rep = _gz_node.request(srv, req, _GzPose, _GzBool, 1000)
-                if ok and getattr(rep, "data", True):
-                    return True
-            except Exception:
-                continue
+        #   호스트 검출(YOLO)이 CPU를 다 쓰면 Gazebo RTF가 0.3 근처까지 떨어지고, 이때
+        #   blocking 응답이 1 s를 넘겨 재장전·RESET이 실패했다(PX4만 죽은 채 남음).
+        #   한 스텝이 늦어도 기다릴 수 있게 timeout을 넉넉히 두고 한 번 더 시도한다.
+        for _ in range(2):
+            for srv in (f"/world/{WORLD}/set_pose/blocking", f"/world/{WORLD}/set_pose"):
+                try:
+                    ok, rep = _gz_node.request(srv, req, _GzPose, _GzBool, 3000)
+                    if ok and getattr(rep, "data", True):
+                        return True
+                except Exception:
+                    continue
         return False
 
     def _do_reload(self):
@@ -403,7 +407,7 @@ class Launcher(Node):
             was_attached = self._attached or self._plugin_state == "attached"
             self._gz_detach.publish(_GzEmpty())
             if was_attached and feedback:
-                if not self._wait_plugin("detached", 1.0):
+                if not self._wait_plugin("detached", 2.0):
                     return False, "분리 확인 실패 (플러그인 응답 없음)"
             else:
                 time.sleep(0.1)
@@ -412,13 +416,13 @@ class Launcher(Node):
             t0 = time.monotonic()
             if not self._set_pose(DRONE, target, quat):
                 return False, "set_pose 서비스 실패"
-            if not self._pose_near(target, t0, 1.5):
+            if not self._pose_near(target, t0, 3.0):
                 return False, "set_pose 후 드론이 목표 위치에 안 옴"
 
             # 3) 물리기 → 플러그인 확인 → 위치 재확인
             self._gz_attach.publish(_GzEmpty())
             if feedback:
-                if not self._wait_plugin("attached", 1.0):
+                if not self._wait_plugin("attached", 2.0):
                     return False, "재장착 확인 실패 (플러그인이 attached 라고 안 함)"
             else:
                 time.sleep(0.3)

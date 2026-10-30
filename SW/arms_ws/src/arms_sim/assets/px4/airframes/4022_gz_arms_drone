@@ -34,6 +34,14 @@ PX4_SIM_MODEL=${PX4_SIM_MODEL:=arms_drone}
 
 param set-default SIM_GZ_EN 1
 
+# 지자계: Gazebo magnetometer 대신 PX4 sensor_mag_sim(지상진실 자세 + WMM)을 쓴다.
+#   gz magnetometer 는 '좌우가 뒤집힌' 좌표계로 발행하고 GZBridge 는 x/y 를 맞바꿔
+#   보정하는데, 이 보정은 yaw 회전에서만 맞고 roll/pitch 가 있으면 틀린다.
+#   수직 장착(앙각 90°)에선 드러나지 않지만, 견착 발사기로 30° 기울이면 heading 이
+#   ~100° 틀어지고, 발사 후 수평이 되면서 EKF yaw 가 크게 휘어 PN 관성 LOS 를 망친다.
+param set-default SIM_GZ_EN_MAG 0
+param set-default SENS_EN_MAGSIM 1
+
 param set-default CA_AIRFRAME 0
 param set-default CA_ROTOR_COUNT 4
 

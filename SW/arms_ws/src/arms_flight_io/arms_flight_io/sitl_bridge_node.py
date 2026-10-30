@@ -34,9 +34,10 @@ ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed 
 # MAV_CMD_COMPONENT_ARM_DISARM param2 magic value.  PX4 accepts a regular
 # disarm only while landed; this explicitly requests an in-flight motor cut.
 FORCE_DISARM_MAGIC = 21196.0
-# 이 시간 이상 heartbeat 이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
-# PX4 는 1Hz 로 heartbeat 을 보낸다. 2s는 한 heartbeat 유실은 허용하면서
-# 재기동/단절 상태를 기존 3s보다 빠르게 UI·control에 전달한다.
+# 이 시간 이상 MAVLink 수신이 없으면 PX4 가 내려간 것으로 본다(패널 RESET 이 PX4 만 재기동).
+# heartbeat(시뮬 시간 1Hz)만 보면 Gazebo RTF가 0.5 아래로 떨어질 때 벽시계 간격이 2s를
+# 넘어 연결이 깜빡이고, control 이 그걸 io fault 로 보고 ARM 직후 RTL 로 빠졌다.
+# 그래서 30Hz ATTITUDE 를 포함한 모든 수신으로 판단한다.
 HB_TIMEOUT_SEC = 2.0
 GPS_RAW_INT_MESSAGE_ID = 24
 GPS_STREAM_INTERVAL_US = 200_000  # 5 Hz: UI 표시에는 충분하고 MAVLink 부하는 작다.
@@ -81,7 +82,7 @@ class ArmsSITLCommNode(Node):
         # PX4 재기동(패널 RESET) 감지용. heartbeat 이 끊겼다 돌아오면 그건 '새 PX4'이고,
         # 갓 부팅한 PX4 는 ACRO 가 아니다 — 모드를 다시 넣어주지 않으면 위 주석의
         # '조용히 기울기 명령으로 오해석' 상태로 계속 난다.
-        self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
+        self._last_rx   = 0.0          # 마지막 MAVLink 수신 시각 (monotonic)
         self._reiniting = False        # _initial_setup 재실행 중복 방지
         self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
         # Track A preserves the established telemetry/logging API.
@@ -181,23 +182,23 @@ class ArmsSITLCommNode(Node):
                 now = time.monotonic()
                 if msg is None:
                     # heartbeat 끊김 = PX4 가 내려갔다 (패널 RESET 이거나 죽음).
-                    if self._connected and now - self._last_hb > HB_TIMEOUT_SEC:
+                    if self._connected and now - self._last_rx > HB_TIMEOUT_SEC:
                         self._connected = False
                         self.get_logger().warn(
-                            "PX4 heartbeat 끊김 — 재기동 대기 (RESET?)")
+                            "PX4 MAVLink 수신 끊김 — 재기동 대기 (RESET?)")
                     continue
                 t = msg.get_type()
+                # 공백을 두고 돌아온 수신 = 갓 부팅한 새 PX4. 기본 모드는
+                # ACRO 가 아니므로 다시 넣어준다. 안 넣으면 자동 출력이 각속도가
+                # 아니라 기울기 명령으로 해석돼 '느리게 나는' 상태가 된다.
+                #   판정 기준을 _connected 가 아니라 '공백'으로 잡는 이유: 최초 연결
+                #   직후엔 _initial_setup 이 EKF 를 기다리며 자느라 _connected 가
+                #   아직 False 다. 그걸 재기동으로 오해하면 기동할 때마다 모드를
+                #   두 번 넣는다.
+                if self._last_rx > 0.0 and (now - self._last_rx) > HB_TIMEOUT_SEC:
+                    self._restore_mode()
+                self._last_rx = now
                 if t == 'HEARTBEAT':
-                    # 공백을 두고 돌아온 heartbeat = 갓 부팅한 새 PX4. 기본 모드는
-                    # ACRO 가 아니므로 다시 넣어준다. 안 넣으면 자동 출력이 각속도가
-                    # 아니라 기울기 명령으로 해석돼 '느리게 나는' 상태가 된다.
-                    #   판정 기준을 _connected 가 아니라 '공백'으로 잡는 이유: 최초 연결
-                    #   직후엔 _initial_setup 이 EKF 를 기다리며 자느라 _connected 가
-                    #   아직 False 다. 그걸 재기동으로 오해하면 기동할 때마다 모드를
-                    #   두 번 넣는다.
-                    if self._last_hb > 0.0 and (now - self._last_hb) > HB_TIMEOUT_SEC:
-                        self._restore_mode()
-                    self._last_hb = now
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
                 elif t == 'GPS_RAW_INT':
                     self._publish_gps(msg)
@@ -246,7 +247,7 @@ class ArmsSITLCommNode(Node):
                 f"(roll={att.roll_deg:.1f}, pitch={att.pitch_deg:.1f}, yaw={att.yaw_deg:.1f} deg)")
 
     def _publish_status(self):
-        age = time.monotonic() - self._last_hb if self._last_hb else float('inf')
+        age = time.monotonic() - self._last_rx if self._last_rx else float('inf')
         status = IoStatus()
         status.header.stamp = self.get_clock().now().to_msg()
         status.source = "px4"

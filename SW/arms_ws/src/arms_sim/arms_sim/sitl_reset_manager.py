@@ -84,8 +84,12 @@ class SitlResetManager(Node):
             # Referee/control 등이 이전 에피소드의 표적 진행 및 명령을 버리게 한다.
             self._reset_pub.publish(Empty())
             self._stop_px4()
-            self._park_drone()
-            self._start_px4()
+            try:
+                self._park_drone()
+            finally:
+                # 재장전이 실패해도 PX4는 다시 띄운다. 예전에는 여기서 예외가 나면
+                # PX4만 죽은 채 남아, 런치 전체를 다시 띄워야 복구됐다.
+                self._start_px4()
             drone = self._wait_for_px4()
             response.success = True
             response.message = f"RESET 완료 ({drone} 원위치 + PX4 재attach)"
@@ -134,11 +138,12 @@ class SitlResetManager(Node):
         #    set_pose 는 용접 상태에선 조용히 무시된다 → 발사기 노드가 없으면 실패로 알린다)
         if self._reload_cli.wait_for_service(timeout_sec=1.0):
             fut = self._reload_cli.call_async(Trigger.Request())
-            deadline = time.monotonic() + 8.0
+            # Gazebo RTF가 낮으면(호스트 검출 부하) gz set_pose 응답이 수 초씩 걸린다.
+            deadline = time.monotonic() + 20.0
             while not fut.done() and time.monotonic() < deadline:
                 time.sleep(0.02)
             if not fut.done():
-                raise RuntimeError("발사기 재장전 응답 없음(8s) — launcher 노드 로그 확인")
+                raise RuntimeError("발사기 재장전 응답 없음(20s) — launcher 노드 로그 확인")
             r = fut.result()
             if not r.success:
                 raise RuntimeError(f"발사기 재장전 실패: {r.message}")
