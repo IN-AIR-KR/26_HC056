@@ -5,8 +5,9 @@ use_sim_time:=true + stamp_source=header 로 띄운다. PX4/Gazebo 불필요, �
 
 검증 항목
   1. 제어 주기가 시뮬 시간 50 Hz (벽시계 ≈ 12.5 Hz) — PX4 lockstep 과 같은 시간축
-  2. 측정 신선도는 header.stamp(촬영 시각) 기준: 제때 받아도 촬영이 오래됐으면(0.5 s > gate 0.2 s)
-     PN 명령을 내지 않고 수평·호버 유지, 촬영이 최근이면(0.05 s) PN 명령 활성
+  2. 신선도 게이트는 '측정 도착 후 경과'(시뮬 시간) 기준: 검출 지연(촬영→수신 0.5 s, gate 0.2 s 초과)
+     만으로는 PN 이 막히지 않는다(회귀: 촬영 기준 게이트는 호스트 YOLO 지연에 PN 을 거의 항상 막았다).
+     표적 측정이 끊기면 gate 뒤 PN 명령을 멈추고 수평·호버 유지
   3. TRACK 표적 소실 timeout 이 시뮬 2.0 s(벽시계 ≈ 8 s) 에 일어난다
 """
 import os
@@ -180,7 +181,7 @@ def test_1_control_loop_runs_on_sim_time(h):
     assert 9.0 <= wall_hz <= 16.0, wall_hz
 
 
-def test_2_freshness_uses_capture_stamp(h):
+def test_2_freshness_gate_uses_arrival_not_capture(h):
     h.target = True
     h.capture_lag = 0.05
     h.arm = False
@@ -193,14 +194,18 @@ def test_2_freshness_uses_capture_stamp(h):
     h.launch = False
     assert wait_until(lambda: h.pn is not None and h.pn.command_active, 3.0), \
         "최근 촬영 검출인데 PN 명령이 활성화되지 않음"
-    # 같은 주기로 '제때' 도착하지만 촬영 시각이 0.5 s(시뮬) 지난 검출 → gate 0.2 s 초과.
+    # 제때 도착하지만 촬영 0.5 s(시뮬) 전 영상의 검출 → 지연만으로 PN 이 막히면 안 된다.
     h.capture_lag = 0.5
-    assert wait_until(lambda: not h.pn.command_active, 3.0), \
-        "촬영 0.5 s 지난 검출로 PN 명령이 계속 나간다 (수신 시각 기준으로 판단 중?)"
+    time.sleep(3.0)                              # 시뮬 0.75 s
+    assert h.pn.command_active, "검출 지연(촬영 후 0.5 s)만으로 PN 명령이 차단됨 (회귀)"
+    # 표적 측정이 끊김(빈 DetectionArray) → gate(0.2 s) 뒤 PN 명령 중단, 수평·호버 유지.
+    h.target = False
+    assert wait_until(lambda: not h.pn.command_active, 3.0), "측정이 끊겼는데 PN 명령이 계속 나감"
     c = h.cmd
     assert c.arm and c.stabilized_mode and not c.manual_mode
     assert c.throttle == pytest.approx(HOVER, abs=1e-4)
     h.capture_lag = 0.05
+    h.target = True
     assert wait_until(lambda: h.pn.command_active, 3.0)
 
 

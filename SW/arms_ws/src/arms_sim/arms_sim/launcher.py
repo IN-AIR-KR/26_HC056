@@ -139,6 +139,10 @@ class Launcher(Node):
         self._angle_worker_running = False
         self._fc_armed = None             # vehicle/armed (PX4 HEARTBEAT 실제 무장)
         self._fc_armed_since = None       # 실제 무장 시작 시각 (ROS clock [s])
+        # 자동 분리 대기: TRACK 진입 순간 인터록(spool-up·정렬·FC 무장)이 아직 안 풀렸으면
+        #   TRACK 이 유지되는 동안 매 틱 다시 판정한다. (사유, 시작 시각) 또는 None.
+        self._release_pending = None
+        self._release_block = ""          # 마지막으로 분리를 막은 인터록 (상태 표시용)
         self._fc_armed_t = 0.0
         self._att = None                  # (roll, pitch, yaw) PX4 ATTITUDE [deg]
         self._att_t = 0.0                 # 수신 시각(monotonic)
@@ -236,10 +240,27 @@ class Launcher(Node):
         self._armed = bool(msg.armed)
         self._manual = bool(msg.manual_mode)
         prev, self._prev_state = self._prev_state, state
+        if state != prev:
+            # 진단: 분리 판단의 입력(상태 전이·요청 무장·장착)을 전이마다 남긴다.
+            self.get_logger().info(
+                f"[release] mission {prev or '-'}→{state} armed(요청)={self._armed} "
+                f"manual={self._manual} attached={self._attached} fc_armed={self._fc_armed}")
         # TRACK 으로 '들어오는 순간'만 본다(보통 LOCK→TRACK). 이미 TRACK 인 상태로
         # 재장전되는 경우(RESET 직후 상태가 아직 안 바뀜)에 다시 쏘지 않게 전이로만 판단.
         if self._attached and state == "TRACK" and prev != "TRACK":
-            self._release(f"자동: {prev or '?'}→TRACK (실기체 걸쇠 OPEN 과 같은 순간)")
+            why = f"자동: {prev or '?'}→TRACK (실기체 걸쇠 OPEN 과 같은 순간)"
+            if not self._release(why):
+                # 예전엔 여기서 끝이라, 인터록에 한 번 걸리면 TRACK 내내 분리되지 않았다
+                #   (ARM→LOCK→LAUNCH 가 1 s 안쪽이면 spool-up 1.5 s 에 항상 걸림).
+                self._release_pending = (why, self._ros_now())
+                self.get_logger().warn(
+                    "[release] 자동 분리 대기 시작 — TRACK 유지 동안 인터록을 매 틱 재판정")
+        elif self._release_pending and state != "TRACK":
+            why, t0 = self._release_pending
+            self._release_pending = None
+            self.get_logger().warn(
+                f"[release] 자동 분리 대기 취소 — 상태 {state} (TRACK 이탈, "
+                f"{self._ros_now() - t0:.2f}s 대기) — 분리하지 않음")
 
     def _on_plugin_state(self, msg):
         s = msg.data.strip().lower()
@@ -305,6 +326,15 @@ class Launcher(Node):
               >= float(self.get_parameter("manual_release_hold_sec").value)):
             self._release("수동: ARM + 스로틀 호버 이상 유지")
 
+        pending = self._release_pending
+        if pending is not None:
+            if not attached or self._prev_state != "TRACK":
+                self._release_pending = None
+            elif self._release(pending[0]):
+                self._release_pending = None
+                self.get_logger().info(
+                    f"[release] 대기 후 분리 — 인터록 해제까지 {self._ros_now() - pending[1]:.2f}s")
+
         self._publish_markers()
 
     def _start_angle_worker(self):
@@ -348,13 +378,14 @@ class Launcher(Node):
 
     # ── 발사 ──────────────────────────────────────────────────────────────
     def _release(self, why):
+        """인터록을 모두 통과하면 분리 명령을 내고 True. 하나라도 걸리면 로그 남기고 False."""
         if not _GZ_OK:
-            return
+            return False
         if not self.get_parameter("release_enabled").value:
             self.get_logger().warn(
                 f"발사 차단 — {why} (release_enabled=false, 비충돌 시험 구성)",
                 throttle_duration_sec=2.0)
-            return
+            return False
         if self.get_parameter("release_requires_fc_armed").value:
             fresh = time.monotonic() - self._fc_armed_t < 1.0
             if not (fresh and self._fc_armed):
@@ -362,14 +393,16 @@ class Launcher(Node):
                     f"발사 차단 — {why}: FC 실제 무장 아님("
                     f"{'수신 없음' if not fresh else 'DISARMED'}). ARM 요청만으로는 분리하지 않는다",
                     throttle_duration_sec=2.0)
-                return
+                self._release_block = f"FC 무장 아님({'수신 없음' if not fresh else 'DISARMED'})"
+                return False
             armed_for = self._ros_now() - (self._fc_armed_since or self._ros_now())
             need = float(self.get_parameter("release_min_armed_sec").value)
             if armed_for < need:
                 self.get_logger().warn(
                     f"발사 보류 — {why}: 무장 {armed_for:.2f}s < {need:.1f}s (모터 spool-up 대기)",
                     throttle_duration_sec=1.0)
-                return
+                self._release_block = f"spool-up {armed_for:.1f}/{need:.1f}s"
+                return False
         err = self._attitude_error()
         tol = float(self.get_parameter("attitude_align_tol_deg").value)
         if self.get_parameter("release_requires_aligned_attitude").value:
@@ -382,7 +415,8 @@ class Launcher(Node):
                     f"발사 차단 — {why}: PX4 자세가 발사관 기하와 {err:.1f}° 다르다(허용 {tol:.0f}°). "
                     f"EKF 정렬 전 분리하면 자세 제어가 틀린 기준으로 돈다. 재장전/정렬 대기",
                     throttle_duration_sec=2.0)
-                return
+                self._release_block = f"자세 불일치 {err:.1f}°"
+                return False
         self._gz_detach.publish(_GzEmpty())
         with self._lock:
             self._attached = False          # 플러그인이 "detached" 로 곧 확인해준다
@@ -395,6 +429,7 @@ class Launcher(Node):
             f"기대 PX4 자세 roll={roll:.1f} pitch={pitch:.1f} yaw={yaw:.1f} deg, "
             f"카메라 광축 앙각 {self._el:.1f}° (HFOV {math.degrees(G.CAM_HFOV_RAD):.1f}°, "
             f"VFOV {math.degrees(G.camera_vfov_rad()):.1f}°)")
+        return True
 
     # ── 재장전 ────────────────────────────────────────────────────────────
     def _ros_now(self):
@@ -569,7 +604,9 @@ class Launcher(Node):
     def _publish_status(self):
         with self._lock:
             attached, ready, launched = self._attached, self._rig_ready, self._launched_at
-        if self._reload_lock.locked():
+        if self._release_pending is not None and self._attached:
+            text = f"분리 대기 · {self._release_block or '인터록 판정 중'}"
+        elif self._reload_lock.locked():
             text = "재장전 중…"
         elif not ready:
             text = "대기: 드론 장착 전"

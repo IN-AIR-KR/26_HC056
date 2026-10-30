@@ -540,9 +540,14 @@ class ArmsControlNode : public rclcpp::Node {
             gt_los_rate = &gt_rate;
             gt_closing_speed = &gt_speed;
           }
-          pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
-                                        best->width, best->height, attitude,
-                                        gt_los_rate, gt_closing_speed);
+          if (pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
+                                            best->width, best->height, attitude,
+                                            gt_los_rate, gt_closing_speed)) {
+            // 신선도 게이트는 '측정이 도착한 뒤 경과'로 잰다(원래 의미). 촬영 시각(sample)은
+            // 자세 보간·LOS 재구성에만 쓴다 — 게이트까지 촬영 기준으로 바꾸자 검출 지연
+            // (호스트 YOLO 0.3~1 s)만으로 PN 이 거의 항상 차단됐다(SITL: PN 활성 0.8%).
+            pn_last_update_rx_ = receipt;
+          }
         });
 
     sub_guidance_gt_ = create_subscription<arms_msgs::msg::GuidanceGroundTruth>(
@@ -663,6 +668,7 @@ class ArmsControlNode : public rclcpp::Node {
           loom_s_ema_ = loom_rate_ema_ = 0.0;
           loom_init_ = false;
           pn_guidance_.reset();
+          pn_last_update_rx_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
           pn_attitudes_.clear();
           gt_received_ = false;
           align_locked_ = false;
@@ -1105,9 +1111,10 @@ class ArmsControlNode : public rclcpp::Node {
         // 계산에 필요한 attitude 또는 detection track이 오래되면 추력을 내지 않는다. PID 출력을
         // Stabilized 입력으로 잘못 해석하는 fallback은 허용하지 않는다.
         const auto &pn_out = pn_guidance_.output();
-        const bool fresh = pn_out.valid &&
-            (now_t.seconds() - pn_out.stamp_sec) >= 0.0 &&
-            (now_t.seconds() - pn_out.stamp_sec) <= pn_measurement_age_sec_;
+        const double rx_age = pn_last_update_rx_.nanoseconds() > 0
+            ? (now_t - pn_last_update_rx_).seconds() : -1.0;
+        const double capture_age = now_t.seconds() - pn_out.stamp_sec;
+        const bool fresh = pn_out.valid && rx_age >= 0.0 && rx_age <= pn_measurement_age_sec_;
         if (fresh) {
           const auto &desired = pn_out.attitude_desired_nb;
           roll_rate_cmd = std::atan2(desired(2, 1), desired(2, 2)) * pn::kRadToDeg;
@@ -1127,10 +1134,10 @@ class ArmsControlNode : public rclcpp::Node {
           thrust = static_cast<float>(hover_throttle_);
           idbg.cmd_active = false;
           RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-              "[PN] TRACK 중 PN 출력 %s → 수평 자세·호버 추력 %.2f 유지 (age=%.2fs, gate=%.2fs, "
-              "attitude skip=%zu, GT skip=%zu, GT=%s)",
-              pn_out.valid ? "오래됨" : "무효", hover_throttle_,
-              pn_out.valid ? now_t.seconds() - pn_out.stamp_sec : -1.0,
+              "[PN] TRACK 중 PN 출력 %s → 수평 자세·호버 추력 %.2f 유지 (수신 후 %.2fs, "
+              "촬영 후 %.2fs, gate=%.2fs, attitude skip=%zu, GT skip=%zu, GT=%s)",
+              pn_out.valid ? "오래됨" : "무효", hover_throttle_, rx_age,
+              pn_out.valid ? capture_age : -1.0,
               pn_measurement_age_sec_, pn_attitude_skip_count_, gt_skip_count_,
               pn_use_ground_truth_ ? "ON" : "OFF");
         }
@@ -1513,6 +1520,8 @@ class ArmsControlNode : public rclcpp::Node {
   std::size_t pn_attitude_skip_count_{0};
   std::size_t gt_skip_count_{0};
   std::size_t stamp_fallback_count_{0};
+  // 마지막으로 PN 이 실제 갱신된 측정의 '수신' 시각 (신선도 게이트 기준)
+  rclcpp::Time pn_last_update_rx_{0, 0, RCL_ROS_TIME};
   bool pn_stamp_from_header_{false};
   // 노드마다 /clock 을 받아 처리하는 시점이 달라 다른 노드의 stamp 가 수십 ms '미래'로 보인다
   // (SITL 실측 -0.064 s). 그 범위는 수신 시각으로 잘라 쓴다 — 더 신선하게 취급하는 일은 없다.
