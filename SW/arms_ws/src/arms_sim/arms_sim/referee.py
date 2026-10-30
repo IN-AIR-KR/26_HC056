@@ -207,6 +207,10 @@ class BalloonReferee(Node):
         self._prev_enabled = True
         self._launched_once = False
         self._last_move_t = self.get_clock().now().nanoseconds * 1e-9
+        # Gazebo dynamic pose 알림은 비동기라 reset 직후에는 이전 패스의 좌표가
+        # 잠시 남을 수 있다. 그 좌표를 새 대기 위치와 미분하면 가짜 표적 속도가
+        # 생기므로 버리고 _ball_pos(정지 대기 위치)를 새 GT 기준으로 사용한다.
+        self._target_pos_gt = None
         self._reset_ground_truth_history()
         self._park_at_start()
         self.get_logger().info("실험 RESET: 표적을 패스 시작점에 대기")
