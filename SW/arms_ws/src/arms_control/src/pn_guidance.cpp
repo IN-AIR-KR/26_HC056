@@ -224,9 +224,9 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
   if (params_.max_lateral_accel_mps2 > 0.0 && lateral > params_.max_lateral_accel_mps2) {
     a_pn = a_pn * (params_.max_lateral_accel_mps2 / lateral);
   }
-  const Vec3 guidance_accel = params_.approach_accel_mps2 * los + a_pn;
-  const Vec3 specific_thrust = guidance_accel - Vec3{0.0, 0.0, kGravity};
-  const double throttle = params_.hover_throttle * norm(specific_thrust) / kGravity;
+  // Pure PN supplies only lateral acceleration. Longitudinal thrust remains the
+  // control node's shared TRACK policy so PID and PN fly at the same thrust.
+  const Vec3 specific_thrust = a_pn - Vec3{0.0, 0.0, kGravity};
 
   output_.valid = los_filter_.initialized() && scale_initialized_ && range_m > 0.0;
   output_.stamp_sec = stamp_sec;
@@ -240,7 +240,6 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
   output_.closing_speed_mps = closing_speed;
   output_.acceleration_pn_ned = a_pn;
   output_.attitude_desired_nb = desired_attitude(specific_thrust);
-  output_.throttle = std::clamp(throttle, 0.0, params_.max_throttle);
   return true;
 }
 

@@ -100,8 +100,6 @@
       guidance_mode: 1
       pn:
         navigation_ratio: 3.0
-        # LOS 방향의 접근 가속도. PN 횡가속도와 합쳐 gravity compensation에 사용한다.
-        approach_accel_mps2: 5.0
         # SITL 풍선 지름(반지름 0.25 m). 실기체에서는 실제 풍선 지름으로 덮어쓴다.
         target_diameter_m: 0.50
         closing_speed_alpha: 0.25

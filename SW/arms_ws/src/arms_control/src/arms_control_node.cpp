@@ -78,7 +78,6 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.guidance_mode", rclcpp::ParameterType::PARAMETER_INTEGER);
     declare_required_parameter("control.max_angle_deg", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.navigation_ratio", rclcpp::ParameterType::PARAMETER_DOUBLE);
-    declare_required_parameter("control.pn.approach_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.target_diameter_m", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.closing_speed_alpha", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.kf_accel_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
@@ -282,7 +281,6 @@ class ArmsControlNode : public rclcpp::Node {
     guidance_mode_ = static_cast<int>(get_parameter("control.guidance_mode").as_int());
     max_angle_deg_ = get_parameter("control.max_angle_deg").as_double();
     pn_params_.navigation_ratio = get_parameter("control.pn.navigation_ratio").as_double();
-    pn_params_.approach_accel_mps2 = get_parameter("control.pn.approach_accel_mps2").as_double();
     pn_params_.target_diameter_m = get_parameter("control.pn.target_diameter_m").as_double();
     pn_params_.closing_speed_alpha = get_parameter("control.pn.closing_speed_alpha").as_double();
     pn_params_.kf_accel_noise = get_parameter("control.pn.kf_accel_noise").as_double();
@@ -291,8 +289,6 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("control.pn.max_lateral_accel_mps2").as_double();
     pn_measurement_age_sec_ = get_parameter("control.pn.max_measurement_age_sec").as_double();
     pn_use_ground_truth_ = get_parameter("control.pn.use_ground_truth").as_bool();
-    pn_params_.max_throttle = track_throttle_;
-    pn_params_.hover_throttle = hover_throttle_;
     pn_camera_.fx = cam_fx_;
     pn_camera_.fy = cam_fy_;
     pn_camera_.cx = cam_cx_;
@@ -328,8 +324,6 @@ class ArmsControlNode : public rclcpp::Node {
               pitch_sign_ = p.as_double();
             else if (n == "control.track_throttle") {
               track_throttle_ = p.as_double();
-              pn_params_.max_throttle = track_throttle_;
-              pn_changed = true;
             }
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
@@ -343,8 +337,6 @@ class ArmsControlNode : public rclcpp::Node {
               max_rate_dps_ = p.as_double();
             else if (n == "control.hover_throttle") {
               hover_throttle_ = p.as_double();
-              pn_params_.hover_throttle = hover_throttle_;
-              pn_changed = true;
             }
             else if (n == "control.pursuit_gate")
               pursuit_gate_ = p.as_double();
@@ -369,8 +361,6 @@ class ArmsControlNode : public rclcpp::Node {
               max_angle_deg_ = p.as_double();
             } else if (n == "control.pn.navigation_ratio") {
               pn_params_.navigation_ratio = p.as_double(); pn_changed = true;
-            } else if (n == "control.pn.approach_accel_mps2") {
-              pn_params_.approach_accel_mps2 = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.target_diameter_m") {
               pn_params_.target_diameter_m = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.closing_speed_alpha") {
@@ -1032,7 +1022,7 @@ class ArmsControlNode : public rclcpp::Node {
           const auto &desired = pn_out.attitude_desired_nb;
           roll_rate_cmd = std::atan2(desired(2, 1), desired(2, 2)) * pn::kRadToDeg;
           pitch_rate_cmd = std::asin(std::clamp(-desired(2, 0), -1.0, 1.0)) * pn::kRadToDeg;
-          thrust = static_cast<float>(pn_out.throttle);
+          thrust = static_cast<float>(track_throttle_);
           pn_command_active = true;
           idbg.guidance_x = pn_out.acceleration_pn_ned.y;
           idbg.guidance_y = pn_out.acceleration_pn_ned.x;

@@ -4,15 +4,17 @@
 
 `guidance_mode: 1`은 풍선 bbox의 bearing과 기체 attitude로 관성 좌표계 LOS
 (line of sight)와 LOS-rate를 추정하고, true proportional navigation(PN)으로
-목표 가속도·자세·추력을 만든다. 기본값 `guidance_mode: 0`은 기존 PID/ACRO
+목표 횡가속도와 자세를 만든다. TRACK 추력은 PID와 동일한 `track_throttle`을
+사용한다. 기본값 `guidance_mode: 0`은 기존 PID/ACRO
 제어를 그대로 유지한다.
 
 ```text
 perception/detections + vehicle/attitude
   → camera ray → body FRD → world NED LOS
   → constant-rate LOS filter
-  → PN lateral acceleration + LOS approach acceleration
-  → gravity compensation → desired roll/pitch + throttle
+  → PN lateral acceleration
+  → gravity compensation → desired roll/pitch
+  + shared track_throttle
   → FlightCommand(stabilized_mode=true)
   → flight_io → PX4/Betaflight Stabilized
 ```
@@ -67,7 +69,7 @@ l_N = R_NB R_BC l_C
 기체 up (`-body z`)을 향하는 장착을 나타낸다. 이 행렬이나 roll/pitch/yaw 부호가 틀리면
 기체 회전 중에도 관성 LOS가 움직여 PN이 잘못된 횡가속도를 낸다.
 
-## PN과 접근 가속도
+## PN 횡가속도
 
 필터가 추정한 LOS와 그 미분을 각각 `l`, `l_dot`, bbox scale 기반 closing speed를 `Vc`라
 하면 횡가속도는 다음과 같다.
@@ -76,12 +78,10 @@ l_N = R_NB R_BC l_C
 a_PN = N Vc l_dot
 ```
 
-`N`은 `navigation_ratio`이며 3부터 시작한다. PN은 LOS에 수직인 성분만 만들므로,
-표적 쪽으로 실제 접근시키는 성분은 별도로 더한다.
-
-```text
-a_guidance = approach_accel_mps2 * l + a_PN
-```
+`N`은 `navigation_ratio`이며 3부터 시작한다. PN은 LOS에 수직인 성분만 만든다.
+표적 쪽으로 접근시키는 종방향 추력은 PN 식에서 만들지 않고, PID 모드와 같은
+`track_throttle` 정책이 담당한다. 따라서 PID와 PN의 차이는 조향 방식이며 기본
+접근 추력은 동일하다.
 
 bbox의 픽셀 크기와 알려진 풍선 지름 `D`로 거리를 근사한다.
 
@@ -95,16 +95,16 @@ SITL의 풍선 반지름은 0.25 m이므로 기준 `target_diameter_m`은 0.50 m
 
 ## 중력 보상과 출력
 
-NED에서 중력은 `[0, 0, +g]`다. 원하는 관성 가속도를 만들 specific thrust는 다음과 같다.
+NED에서 중력은 `[0, 0, +g]`다. PN 횡가속도를 만들 specific thrust는 다음과 같다.
 
 ```text
-f_des = a_guidance - [0, 0, g]
+f_des = a_PN - [0, 0, g]
 ```
 
-`f_des`의 방향에서 목표 roll/pitch를 복원하고, 크기는 hover throttle 비례로 collective
-throttle로 변환한다. PN 자동 모드에서는 `FlightCommand.stabilized_mode=true`를 함께
-보내므로 flight I/O가 FC를 Stabilized로 둔다. 이는 수동 모드가 아니며 operator 입력을
-passthrough하지 않는다.
+`f_des`의 방향에서 목표 roll/pitch를 복원한다. collective throttle은 PN 가속도 벡터의
+크기에서 계산하지 않고 `track_throttle`을 그대로 사용한다. PN 자동 모드에서는
+`FlightCommand.stabilized_mode=true`를 함께 보내므로 flight I/O가 FC를 Stabilized로
+둔다. 이는 수동 모드가 아니며 operator 입력을 passthrough하지 않는다.
 
 PID mode 0은 기존과 같이 ACRO rate 입력을 쓴다.
 
@@ -116,7 +116,6 @@ PID mode 0은 기존과 같이 ACRO rate 입력을 쓴다.
 | --- | --- | --- |
 | `guidance_mode` | `0` PID/ACRO, `1` PN/Stabilized | `0` |
 | `pn.navigation_ratio` | PN navigation ratio `N` | `3.0` |
-| `pn.approach_accel_mps2` | LOS 방향 접근 가속도 | `5.0` |
 | `pn.target_diameter_m` | 실제 풍선 지름 | `0.50` |
 | `pn.max_lateral_accel_mps2` | PN 횡가속도 상한 | `12.0` |
 | `pn.use_ground_truth` | SITL Gazebo GT LOS-rate/Vc 사용 | `false` |
@@ -125,7 +124,7 @@ PID mode 0은 기존과 같이 ACRO rate 입력을 쓴다.
 1. PID mode 0에서 `vehicle/attitude`가 지속 발행되는지 확인한다.
 2. `guidance_mode: 1`로 바꾸고, 정지·무추력 상태에서 기체를 회전시킨다.
    화면 bbox는 움직여도 관성 LOS-rate가 작아야 한다.
-3. 작은 초기 offset과 낮은 `approach_accel_mps2`로 비행한다.
+3. 작은 초기 offset에서 `track_throttle`로 비행한다.
 4. `N`은 3, 4, 5 순서로만 올리고, tilt/throttle 포화와 실제 miss를 함께 비교한다.
 
 PN 유효성이 끊겼을 때 PID 출력으로 조용히 전환하지 않는다. Stabilized에서 중립 자세와

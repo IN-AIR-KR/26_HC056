@@ -109,13 +109,10 @@ class ConstantRateLosFilter {
 
 struct Parameters {
   double navigation_ratio{3.0};
-  double approach_accel_mps2{5.0};
   double target_diameter_m{2.0};
   double closing_speed_alpha{0.25};
   double kf_accel_noise{0.8};
   double kf_measurement_noise{0.0025};
-  double hover_throttle{0.42};
-  double max_throttle{0.70};
   double max_lateral_accel_mps2{12.0};
 };
 
@@ -144,7 +141,6 @@ struct Output {
   double closing_speed_mps{0.0};
   Vec3 acceleration_pn_ned{};
   Mat3 attitude_desired_nb{};
-  double throttle{0.0};
 };
 
 class Guidance {
