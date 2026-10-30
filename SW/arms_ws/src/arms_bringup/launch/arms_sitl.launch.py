@@ -47,6 +47,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
+from arms_sim.px4_params import bridge_enforce_list
+
 CRSF_TX = "/tmp/crsf_tx"   # arms_control 이 쓰는 쪽
 CRSF_RX = "/tmp/crsf_rx"   # sitl_bridge 가 읽는 쪽
 
@@ -258,7 +260,9 @@ def generate_launch_description():
             parameters=[str(io_config), {
                 "connection": PythonExpression(
                     ["'udpin:0.0.0.0:' + str(14540 + int(", LaunchConfiguration("px4_instance"), "))"]),
-                "send_rate_hz": 50.0, "use_sim_time": _sim_time}],
+                "send_rate_hz": 50.0, "use_sim_time": _sim_time,
+                # Stabilized 추력 역변환의 전제(곡선·호버)를 브리지가 직접 보장한다.
+                "enforce_params": bridge_enforce_list()}],
         ),
         # SITL 가상 운용자 입력.
         Node(
@@ -291,6 +295,8 @@ def generate_launch_description():
                 "release_enabled": ParameterValue(LaunchConfiguration("release"), value_type=bool),
                 "drone_model": ParameterValue(
                     ["arms_drone_", LaunchConfiguration("px4_instance")], value_type=str),
+                # 분리 조건의 시간(무장 유지·스로틀 유지)을 PX4 와 같은 시뮬 시간으로 잰다.
+                "use_sim_time": _sim_time,
             }],
         ),
         # 각도 발사 진단 모니터 (관찰 전용, 제어 토픽 발행 없음). SITL 전용.

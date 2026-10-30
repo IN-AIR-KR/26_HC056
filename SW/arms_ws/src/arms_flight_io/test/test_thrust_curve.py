@@ -8,7 +8,7 @@ import pytest
 
 from arms_flight_io.sitl_bridge_node import thrust_to_stabilized_stick
 
-MIN, HOVER, MAX = 0.08, 0.32, 1.0
+MIN, HOVER, MAX = 0.08, 0.25, 1.0
 
 
 def px4_throttle_curve(stick, thr_min=MIN, hover=HOVER, thr_max=MAX):
@@ -17,7 +17,7 @@ def px4_throttle_curve(stick, thr_min=MIN, hover=HOVER, thr_max=MAX):
     return hover + stick * (thr_max - hover)
 
 
-@pytest.mark.parametrize("thrust", [0.10, 0.20, 0.32, 0.45, 0.60, 0.95])
+@pytest.mark.parametrize("thrust", [0.10, 0.20, 0.25, 0.32, 0.45, 0.60, 0.95])
 def test_roundtrip_through_px4_curve(thrust):
     stick = thrust_to_stabilized_stick(thrust, MIN, HOVER, MAX)
     assert px4_throttle_curve(stick) == pytest.approx(thrust, abs=1e-9)
@@ -35,4 +35,4 @@ def test_limits():
 def test_old_linear_mapping_was_wrong():
     # 예전: RC = 추력 그대로(0.32 → stick -0.36). PX4 곡선을 거치면 실제 추력 ≈0.234 (호버의 73%).
     old_stick = 0.32 * 2.0 - 1.0
-    assert px4_throttle_curve(old_stick) == pytest.approx(0.2336, abs=1e-4)
+    assert px4_throttle_curve(old_stick, hover=0.32) == pytest.approx(0.2336, abs=1e-4)

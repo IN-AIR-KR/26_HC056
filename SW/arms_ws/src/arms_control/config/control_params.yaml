@@ -132,7 +132,9 @@
       # ── 추격 추력 ─────────────────────────────────────────────────────
       # 조준 상태와 관계없이 기본은 track_throttle로 상승한다.
       # pursuit_center_boost=true면 정렬이 좋을수록 hover→track으로 보간한다.
-      hover_throttle: 0.32
+      # 물리 호버 추력(PX4 MPC_THR_HOVER 와 같은 값). 모델 계산 0.25, SITL 실측 일치.
+      #   예전 0.32 는 sitl_bridge 가 Stabilized 추력 곡선을 무시해 실제 0.234 로 나가던 값이다.
+      hover_throttle: 0.25
       track_throttle: 0.60
       pursuit_gate: 0.20
       pursuit_center_boost: false

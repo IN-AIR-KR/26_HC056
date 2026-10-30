@@ -19,6 +19,7 @@ arms_sitl.launch.py(gui:=false) 가 떠 있는 상태에서 가상 조종기 대
 import json
 import math
 import os
+import signal
 import threading
 import time
 
@@ -31,7 +32,7 @@ from rclpy.qos import qos_profile_sensor_data
 from rcl_interfaces.msg import Parameter as ParamMsg, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 from rosgraph_msgs.msg import Clock
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from arms_msgs.msg import (AttitudeTelemetry, DetectionArray, FlightCommand, GpsTelemetry,
                            IoStatus, MissionState, OperatorInput, PnDebug)
 
@@ -83,7 +84,8 @@ class StabilityTest(Node):
         self.gps = None
         self.gps0 = None
         self.state = None
-        self.armed = False
+        self.armed = False           # control 의 CH5 요청 (MissionState.armed)
+        self.fc_armed = False        # PX4 실제 무장 (vehicle/armed)
         self.manual_out = False
         self.cmd = None
         self.pn = None
@@ -106,6 +108,8 @@ class StabilityTest(Node):
         self.create_subscription(FlightCommand, ns + "control/flight_command", self._on_cmd, 50)
         self.create_subscription(PnDebug, ns + "control/pn_debug", lambda m: setattr(self, "pn", m), 10)
         self.create_subscription(String, ns + "sim/launcher/status", self._on_launcher, 10)
+        self.create_subscription(Bool, ns + "vehicle/armed",
+                                 lambda m: setattr(self, "fc_armed", bool(m.data)), 10)
         self.create_subscription(DetectionArray, ns + "perception/detections", self._on_det, 10)
         self._pub_op = self.create_publisher(OperatorInput, ns + "operator/input", 10)
         self._set = {n: self.create_client(SetParameters, f"{n}/set_parameters")
@@ -184,7 +188,7 @@ class StabilityTest(Node):
 
     def wait(self, pred, timeout, step=0.05):
         t0 = time.time()
-        while time.time() - t0 < timeout:
+        while time.time() - t0 < timeout and rclpy.ok():
             if pred():
                 return True
             time.sleep(step)
@@ -192,7 +196,7 @@ class StabilityTest(Node):
 
     def wait_sim(self, sim_sec, wall_cap):
         s0, t0 = self.sim, time.time()
-        while time.time() - t0 < wall_cap:
+        while time.time() - t0 < wall_cap and rclpy.ok():
             if self.sim is not None and s0 is not None and self.sim - s0 >= sim_sec:
                 return True
             time.sleep(0.05)
@@ -238,7 +242,7 @@ class StabilityTest(Node):
         self.rec("rail_first", **first, launcher=self.launcher_status)
         t0, s0 = time.time(), self.sim
         aligned_at = None
-        while time.time() - t0 < 90.0:
+        while time.time() - t0 < 90.0 and rclpy.ok():
             if "자세정렬 OK" in self.launcher_status and aligned_at is None:
                 aligned_at = (time.time() - t0, (self.sim or 0) - (s0 or 0))
             if aligned_at and time.time() - t0 > aligned_at[0] + 8.0:
@@ -306,10 +310,11 @@ class StabilityTest(Node):
         aligned = self.wait(lambda: "자세정렬 OK" in self.launcher_status, 90.0)
         self.rec("p3_pre", aligned=aligned, **self.att_errors(), launcher=self.launcher_status)
         self.toggle_arm(manual=True)
-        if not self.wait(lambda: self.armed, 30.0):
-            self.rec("p3_result", ok=False, why="ARM 실패")
+        if not self.wait(lambda: self.armed and self.fc_armed, 30.0):
+            self.rec("p3_result", ok=False,
+                     why=f"ARM 실패 (요청={self.armed}, PX4 실제={self.fc_armed})")
             return False
-        time.sleep(1.0)
+        self.wait_sim(2.0, 30.0)             # PX4 spool-up(시뮬 1 s) 이후에 스로틀
         self.op["throttle"] = 0.25           # 호버 이상 → 발사기 수동 분리 조건
         released = self.wait(lambda: self.launcher_status.startswith("발사됨"), 30.0)
         rel_sim, rel_wall = self.sim, time.time()
@@ -321,7 +326,7 @@ class StabilityTest(Node):
             return False
         samples = []
         dur = float(self.get_parameter("flight_sim_sec").value)
-        while self.sim - rel_sim < dur and time.time() - rel_wall < dur * 15:
+        while self.sim - rel_sim < dur and time.time() - rel_wall < dur * 15 and rclpy.ok():
             if self.truth and self.att:
                 samples.append({"sim": round(self.sim - rel_sim, 3),
                                 "px4": [round(v, 2) for v in self.att],
@@ -351,6 +356,27 @@ class StabilityTest(Node):
             return t_set
 
         late = [s for s in samples if s["sim"] > 3.0] or samples
+        # 분리 1 s 뒤(스틱 중앙=MPC_THR_HOVER) z(t) 2차 맞춤 → 수직 가속도. 0 이면 그 추력이 호버.
+        fit = [(s["sim"], s["gz"][2]) for s in samples if 1.0 <= s["sim"] <= 6.0]
+        a_z = None
+        if len(fit) >= 8:
+            ts = [t for t, _ in fit]
+            # 최소제곱 z = c0 + c1 t + c2 t^2  (정규방정식)
+            S = [[sum(t ** (i + j) for t in ts) for j in range(3)] for i in range(3)]
+            b = [sum(z * t ** i for t, z in fit) for i in range(3)]
+            for i in range(3):            # 가우스 소거
+                piv = S[i][i]
+                for j in range(i, 3):
+                    S[i][j] /= piv
+                b[i] /= piv
+                for k in range(3):
+                    if k != i:
+                        f = S[k][i]
+                        for j in range(i, 3):
+                            S[k][j] -= f * S[i][j]
+                        b[k] -= f * b[i]
+            a_z = 2.0 * b[2]
+
         gz0 = rel_truth or samples[0]["gz"]
         last = samples[-1]["gz"]
         return {
@@ -368,6 +394,7 @@ class StabilityTest(Node):
             "min_alt_m": round(min(s["gz"][2] for s in samples), 3),
             "horiz_disp_m": round(math.hypot(last[0] - gz0[0], last[1] - gz0[1]), 3),
             "final_gz_rpy": last[3:],
+            "vertical_accel_center_stick_mps2": None if a_z is None else round(a_z, 3),
         }
 
     def run(self):
@@ -388,6 +415,8 @@ class StabilityTest(Node):
 
 
 def main(args=None):
+    # SIGTERM 도 KeyboardInterrupt 로 → finally 에서 disarm 후 종료 (시험 래퍼 정리용)
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     rclpy.init(args=args)
     node = StabilityTest()
     ex = MultiThreadedExecutor(num_threads=2)
@@ -395,6 +424,8 @@ def main(args=None):
     threading.Thread(target=ex.spin, daemon=True).start()
     try:
         node.run()
+    except KeyboardInterrupt:
+        node.rec("end", ok=False, why="중단됨")
     finally:
         node.op["arm"] = False
         time.sleep(0.5)

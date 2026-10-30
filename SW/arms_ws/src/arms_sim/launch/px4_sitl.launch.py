@@ -39,35 +39,8 @@ from ament_index_python.packages import get_package_share_directory
 
 from arms_sim.launcher_geometry import spawn_pose_str
 from arms_sim import sitl_procs
+from arms_sim.px4_params import PX4_PARAMS
 
-# 자동 disarm / 페일세이프 끄기 (GCS/RC 없는 SITL 자율비행 셋업).
-#   COM_DISARM_PRFLT 0  = arm 후 이륙 지연 자동 disarm 해제 (가만히 둬도 안 멈춤)
-#   NAV_DLL_ACT      0  = GCS(데이터링크) 연결 끊김 페일세이프 해제
-#   NAV_RCL_ACT      0  = RC 연결 끊김 페일세이프 해제
-#   MC_ACRO_R_MAX / P_MAX = ACRO 모드 풀스틱 각속도[deg/s]. control의
-#     flight command 정규화 기준(400 deg/s)과 일치해야 한다.
-PX4_PARAMS = {
-    "COM_DISARM_PRFLT": 0,
-    "NAV_DLL_ACT": 0,
-    "NAV_RCL_ACT": 0,
-    # CH7은 control의 RTL 요청용이다. 기존 SITL 파라미터에 남은 kill mapping을
-    # 부팅마다 지워야 RC override의 CH7 high가 `Kill switch engaged`가 되지 않는다.
-    "RC_MAP_KILL_SW": 0,
-    "MC_ACRO_R_MAX": 400,
-    "MC_ACRO_P_MAX": 400,
-    "MPC_MAN_TILT_MAX": 65,
-    # Stabilized 추력 곡선: 스틱 중앙 = MPC_THR_HOVER '파라미터'(2). 기본(0)은 호버 추력
-    #   추정값을 써서 시점마다 중앙값이 달라진다. sitl_bridge 가 자동 유도 추력을 이 곡선의
-    #   역함수로 스틱에 싣는다 (arms_flight_io/sitl_bridge_node.py thrust_to_stabilized_stick).
-    "MPC_THR_CURVE": 2,
-    "MPC_TILTMAX_AIR": 65,
-    # 견착 발사기: 앙각 30° 이하(수직 기준 60° 이상 기울기)에서도 ARM/발사돼야 한다.
-    #   PX4 고장감지기(FD)는 기본 60° 넘게 기울면 'Attitude failure' 로 ARM 을 거부하고
-    #   비행 중엔 비상정지까지 걸 수 있다. 0 = 해당 축 검사 끔.
-    #   ★ 실기체 Pixhawk 에도 같은 결정이 필요하다 (낮은 앙각 발사를 할 거라면).
-    "FD_FAIL_P": 0,
-    "FD_FAIL_R": 0,
-}
 
 # 종료/재기동 시 정리할 프로세스 패턴 (pkill -f).
 #   gz sim 은 PX4 rc 스크립트가 '&' 로 띄우고 떠나서 PX4 가 죽어도 살아남는다.
@@ -133,10 +106,30 @@ def _setup(context, *args, **kwargs):
     #   (PX4 Tools/simulation/sitl_multiple_run.sh 와 같은 방식).
     workdir = rootfs if instance == 0 else build_dir / f"instance_{instance}"
     workdir.mkdir(parents=True, exist_ok=True)
+    worlds_dir = px4_worlds
+    if instance != 0:
+        # 월드의 발사기 DetachableJoint 는 <child_model>arms_drone_0</child_model> 로 고정돼 있다.
+        #   인스턴스 N 의 기체는 arms_drone_N 이라 그대로면 발사관에 물리지 않는다(드론이 지면에
+        #   떨어진 채 '장착 간주' 폴백만 걸림). 인스턴스 전용 월드 사본에서 이름만 바꾼다.
+        worlds_dir = workdir / "worlds"
+        worlds_dir.mkdir(parents=True, exist_ok=True)
+        text = world_sdf.read_text()
+        old = "<child_model>arms_drone_0</child_model>"
+        if old not in text:
+            raise RuntimeError(f"{world_sdf} 에 {old} 가 없어 인스턴스 {instance} 월드를 만들 수 없음")
+        (worlds_dir / world_sdf.name).write_text(
+            text.replace(old, f"<child_model>arms_drone_{instance}</child_model>"))
     if instance != 0 and (rootfs / "gz_env.sh").exists():
-        # rcS 가 작업 폴더의 gz_env.sh 를 source 해 GZ_SIM_RESOURCE_PATH(PX4 기본 모델 경로)를
-        # 잡는다. 없으면 월드의 model://x500_base 를 못 찾아 Gazebo 월드 로드가 실패한다.
-        _link(rootfs / "gz_env.sh", workdir / "gz_env.sh")
+        # rcS(px4-rc.gzsim)가 작업 폴더의 gz_env.sh 를 source 해 GZ_SIM_RESOURCE_PATH(PX4 기본
+        #   모델 경로)를 잡는다. 없으면 월드의 model://x500_base 를 못 찾아 월드 로드가 실패한다.
+        #   단 이 파일은 PX4_GZ_WORLDS 를 고정 경로로 export 하므로, 인스턴스 월드 사본을 쓰게
+        #   끝에 덮어쓰기 한 줄을 붙인 사본을 둔다.
+        env_sh = workdir / "gz_env.sh"
+        if env_sh.is_symlink():
+            env_sh.unlink()
+        env_sh.write_text((rootfs / "gz_env.sh").read_text()
+                          + f"\n# arms_sim px4_sitl.launch.py (instance {instance})\n"
+                          + f"export PX4_GZ_WORLDS={worlds_dir}\n")
 
     env = dict(os.environ)
     env.update({
@@ -144,7 +137,7 @@ def _setup(context, *args, **kwargs):
         "PX4_GZ_WORLD": world,
         # make 를 안 거치므로 make 가 넣어주던 값을 직접 지정 (rc 스크립트 기본값과 동일).
         "PX4_GZ_MODELS": str(px4_models),
-        "PX4_GZ_WORLDS": str(px4_worlds),
+        "PX4_GZ_WORLDS": str(worlds_dir),
         # 레포 모델 폴더도 gz 리소스 경로에 추가 (링크와 이중 안전장치).
         "GZ_SIM_RESOURCE_PATH": ":".join(
             p for p in [str(models_dir), os.environ.get("GZ_SIM_RESOURCE_PATH", "")] if p),

@@ -46,7 +46,7 @@ from arms_msgs.msg import (AttitudeTelemetry, BoundingBox, DetectionArray,  # no
                            FlightCommand, IoStatus, MissionState, OperatorInput, PnDebug)
 
 TRACK_LOST = 2.0     # control_params.yaml mission.track_target_lost_timeout_sec
-HOVER = 0.32         # control_params.yaml control.hover_throttle
+HOVER = 0.25         # control_params.yaml control.hover_throttle
 
 
 class Harness(Node):

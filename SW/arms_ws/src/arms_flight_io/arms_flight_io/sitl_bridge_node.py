@@ -8,6 +8,7 @@ sitl_bridge_node — FlightCommand→MAVLink adapter for SITL.
 """
 
 import math
+import struct
 import threading
 import time
 
@@ -15,6 +16,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 from arms_msgs.msg import AttitudeTelemetry, FlightCommand, GpsTelemetry, IoStatus
@@ -50,7 +52,7 @@ HB_WALL_BACKSTOP_SEC = 15.0
 #   stick -1/0/+1 → MPC_MANTHR_MIN / MPC_THR_HOVER / MPC_THR_MAX.
 # 자동 유도(stabilized_mode)의 FlightCommand.throttle 은 물리 추력(호버=MPC_THR_HOVER)이므로
 # 이 곡선의 역함수로 스틱 값을 만든다. 수동(manual_mode)은 조종 스틱 그대로 보낸다.
-THR_CURVE_PARAMS = {"MPC_MANTHR_MIN": 0.08, "MPC_THR_HOVER": 0.32, "MPC_THR_MAX": 1.0}
+THR_CURVE_PARAMS = {"MPC_MANTHR_MIN": 0.08, "MPC_THR_HOVER": 0.25, "MPC_THR_MAX": 1.0}
 SERIAL_CONTROL_DEV_SHELL = 10
 SERIAL_CONTROL_FLAG_RESPOND = 2
 SERIAL_CONTROL_FLAG_EXCLUSIVE = 4
@@ -86,6 +88,15 @@ class ArmsSITLCommNode(Node):
         self.require_parameter("connection", Parameter.Type.STRING)
         self.require_parameter("send_rate_hz", Parameter.Type.DOUBLE)
 
+        # 추력 변환이 의존하는 PX4 파라미터를 연결 때마다 PARAM_SET·확인한다. 런치의 일회성
+        #   mavlink_shell param set 이 실패/지연돼도 곡선이 어긋나지 않게. 형식 "NAME:i|f:값".
+        self.declare_parameter("enforce_params", [""])
+        self._enforce = {}
+        for item in self.get_parameter("enforce_params").value:
+            if item:
+                name, typ, val = item.split(":")
+                self._enforce[name] = (typ, float(val))
+        self._enforced_ok = set()
         self._conn_str   = self.get_parameter("connection").value
         self._send_rate  = self.get_parameter("send_rate_hz").value
         # PID 자동유도는 ACRO rate 명령을, PN 자동유도는 Stabilized attitude 명령을
@@ -116,6 +127,9 @@ class ArmsSITLCommNode(Node):
         self._gps_pub = self.create_publisher(GpsTelemetry, "vehicle/gps", 10)
         self._attitude_pub = self.create_publisher(AttitudeTelemetry, "vehicle/attitude", 10)
         self._status_pub = self.create_publisher(IoStatus, "io/status", 10)
+        # PX4 가 HEARTBEAT 로 알린 '실제' 무장 상태. FlightCommand.arm(요청)과 다르다 —
+        #   PX4 가 ARM 을 거부하면 요청은 ON 인데 실제는 OFF 다. 발사기 분리 조건이 이걸 본다.
+        self._armed_pub = self.create_publisher(Bool, "vehicle/armed", 10)
         self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
         # 발사기를 기울인 뒤 EKF 를 현재 자세로 다시 정렬시키는 서비스 (DISARM 상태에서만).
         self.create_service(Trigger, "sitl/reinit_estimator", self._srv_reinit_estimator)
@@ -302,6 +316,14 @@ class ArmsSITLCommNode(Node):
 
     def _publish_status(self):
         now, wall = self._ros_now(), time.monotonic()
+        # 부팅 15 s 뒤 런치가 param set 으로 곡선 파라미터를 바꾼다 → 주기적으로 다시 읽는다.
+        if self._connected and wall - getattr(self, "_thr_req_wall", 0.0) > 10.0:
+            self._thr_req_wall = wall
+            self._request_thr_curve_params()
+        if self._connected and len(self._enforced_ok) < len(self._enforce) \
+                and wall - getattr(self, "_enforce_wall", 0.0) > 3.0:
+            self._enforce_wall = wall
+            self._send_enforced_params()
         age = self._rx_age(now, wall)
         if self._last_rx_wall is not None and wall - self._last_rx_wall > HB_WALL_BACKSTOP_SEC:
             age = max(age, HB_TIMEOUT_SEC + 1.0)
@@ -320,6 +342,7 @@ class ArmsSITLCommNode(Node):
         status.rx_uart_crc_error_hz = float('nan')
         status.fault_reason = "" if status.transport_connected else "PX4 heartbeat timeout"
         self._status_pub.publish(status)
+        self._armed_pub.publish(Bool(data=bool(self._armed and status.transport_connected)))
 
     # ------------------------------------------------------------------
     # Vehicle-independent command input
@@ -484,9 +507,34 @@ class ArmsSITLCommNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"{name} 읽기 요청 실패: {e}", throttle_duration_sec=5.0)
 
+    def _send_enforced_params(self):
+        for name, (typ, val) in self._enforce.items():
+            if name in self._enforced_ok:
+                continue
+            ptype = (mavutil.mavlink.MAV_PARAM_TYPE_INT32 if typ == "i"
+                     else mavutil.mavlink.MAV_PARAM_TYPE_REAL32)
+            # PX4 는 PARAM_ENCODE_BYTEWISE: INT32 는 float 필드에 비트 그대로 싣는다.
+            wire = (struct.unpack("<f", struct.pack("<i", int(val)))[0] if typ == "i"
+                    else float(val))
+            try:
+                self._mav.mav.param_set_send(self._mav.target_system, self._mav.target_component,
+                                             name.encode(), wire, ptype)
+                self._mav.mav.param_request_read_send(self._mav.target_system,
+                                                      self._mav.target_component, name.encode(), -1)
+            except Exception as e:
+                self.get_logger().warn(f"{name} PARAM_SET 실패: {e}", throttle_duration_sec=5.0)
+
     def _on_param_value(self, msg):
         name = msg.param_id.rstrip("\x00") if isinstance(msg.param_id, str) \
             else msg.param_id.decode(errors="replace").rstrip("\x00")
+        if name in self._enforce and name not in self._enforced_ok:
+            want = self._enforce[name][1]
+            got = float(msg.param_value)
+            if msg.param_type == mavutil.mavlink.MAV_PARAM_TYPE_INT32:
+                got = float(struct.unpack("<i", struct.pack("<f", msg.param_value))[0])
+            if abs(got - want) < 1e-3:
+                self._enforced_ok.add(name)
+                self.get_logger().info(f"PX4 {name}={want:g} 확인 (추력 변환 전제 파라미터)")
         if name in self._thr_curve:
             value = float(msg.param_value)
             if abs(value - self._thr_curve[name]) > 1e-4:

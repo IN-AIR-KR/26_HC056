@@ -50,7 +50,7 @@ import rclpy
 from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
 from geometry_msgs.msg import Point
-from std_msgs.msg import Empty, String
+from std_msgs.msg import Bool, Empty, String
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 from arms_msgs.msg import AttitudeTelemetry, MissionState, OperatorInput
@@ -104,6 +104,13 @@ class Launcher(Node):
         self.declare_parameter("realign_estimator", True)
         self.declare_parameter("release_requires_aligned_attitude", True)
         self.declare_parameter("attitude_align_tol_deg", 8.0)
+        # 분리는 FC 가 '실제로' 무장했을 때만. 예전엔 control 의 ARM 요청(MissionState.armed)만
+        #   봐서, PX4 가 ARM 을 거부한 상태에서도 분리해 무동력 기체가 떨어졌다(SITL 실측).
+        self.declare_parameter("release_requires_fc_armed", True)
+        # PX4 는 무장 후 COM_SPOOLUP_TIME(기본 1 s, 시뮬 시간) 동안 수동 최대 추력을 0 으로 묶는다.
+        #   그 전에 분리하면 모터가 공회전인 채 떨어진다(SITL 실측: 1.97 m → 지면 0.7 s).
+        #   이 시간은 ROS clock(SITL use_sim_time = 시뮬 시간)으로 잰다.
+        self.declare_parameter("release_min_armed_sec", 1.5)
         self._drone = str(self.get_parameter("drone_model").value)
 
         self._lock = threading.Lock()
@@ -130,6 +137,9 @@ class Launcher(Node):
         self._launched_at = None          # (elev, az) 발사 순간 각도
         self._angle_generation = 0
         self._angle_worker_running = False
+        self._fc_armed = None             # vehicle/armed (PX4 HEARTBEAT 실제 무장)
+        self._fc_armed_since = None       # 실제 무장 시작 시각 (ROS clock [s])
+        self._fc_armed_t = 0.0
         self._att = None                  # (roll, pitch, yaw) PX4 ATTITUDE [deg]
         self._att_t = 0.0                 # 수신 시각(monotonic)
         self._align_since = None          # 재정렬 요청 시각 (정렬 완료 로그용)
@@ -142,6 +152,7 @@ class Launcher(Node):
         self.create_subscription(OperatorInput, "operator/input", self._on_operator, 10)
         self.create_subscription(Empty, "sim/launcher/reload_manual", self._on_reload_manual, 10)
         self.create_subscription(AttitudeTelemetry, "vehicle/attitude", self._on_attitude, 10)
+        self.create_subscription(Bool, "vehicle/armed", self._on_fc_armed, 10)
         self._reinit_cli = self.create_client(Trigger, "sitl/reinit_estimator")
 
         if not _GZ_OK:
@@ -284,7 +295,8 @@ class Launcher(Node):
         # 수동 발사: ARM + 수동모드 + 스로틀 호버 이상을 hold_sec 동안 유지
         hi = (self._armed and self._manual
               and self._throttle > float(self.get_parameter("manual_release_throttle").value))
-        now = time.monotonic()
+        # 유지 시간은 ROS clock(SITL=시뮬 시간)으로 잰다 — 벽시계 0.2 s 는 RTF 0.3 에서 시뮬 0.06 s.
+        now = self._ros_now()
         if not hi:
             self._throttle_hi_since = None
         elif self._throttle_hi_since is None:
@@ -343,6 +355,21 @@ class Launcher(Node):
                 f"발사 차단 — {why} (release_enabled=false, 비충돌 시험 구성)",
                 throttle_duration_sec=2.0)
             return
+        if self.get_parameter("release_requires_fc_armed").value:
+            fresh = time.monotonic() - self._fc_armed_t < 1.0
+            if not (fresh and self._fc_armed):
+                self.get_logger().error(
+                    f"발사 차단 — {why}: FC 실제 무장 아님("
+                    f"{'수신 없음' if not fresh else 'DISARMED'}). ARM 요청만으로는 분리하지 않는다",
+                    throttle_duration_sec=2.0)
+                return
+            armed_for = self._ros_now() - (self._fc_armed_since or self._ros_now())
+            need = float(self.get_parameter("release_min_armed_sec").value)
+            if armed_for < need:
+                self.get_logger().warn(
+                    f"발사 보류 — {why}: 무장 {armed_for:.2f}s < {need:.1f}s (모터 spool-up 대기)",
+                    throttle_duration_sec=1.0)
+                return
         err = self._attitude_error()
         tol = float(self.get_parameter("attitude_align_tol_deg").value)
         if self.get_parameter("release_requires_aligned_attitude").value:
@@ -370,6 +397,18 @@ class Launcher(Node):
             f"VFOV {math.degrees(G.camera_vfov_rad()):.1f}°)")
 
     # ── 재장전 ────────────────────────────────────────────────────────────
+    def _ros_now(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _on_fc_armed(self, msg):
+        armed = bool(msg.data)
+        if armed and not self._fc_armed:
+            self._fc_armed_since = self._ros_now()
+        elif not armed:
+            self._fc_armed_since = None
+        self._fc_armed = armed
+        self._fc_armed_t = time.monotonic()
+
     def _on_attitude(self, msg):
         self._att = (float(msg.roll_deg), float(msg.pitch_deg), float(msg.yaw_deg))
         self._att_t = time.monotonic()

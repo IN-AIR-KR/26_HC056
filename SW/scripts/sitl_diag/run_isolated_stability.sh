@@ -46,6 +46,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# 시험 중 다른 세션이 시작돼 메모리가 부족해지면 내 시험을 먼저 접는다(남의 Gazebo 가 OOM 으로 죽지 않게).
+(
+  while kill -0 "$LAUNCH_PID" 2>/dev/null; do
+    a=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+    if [ "$a" -lt "${ABORT_FREE_MB:-700}" ]; then
+      echo "[watchdog] 가용 메모리 ${a}MB — 격리 시험 중단" | tee -a "$LOG"
+      kill -INT -- "-$LAUNCH_PID" 2>/dev/null; pkill -INT -f "angled_stability_test.*$STAMP" || true
+      break
+    fi
+    sleep 2
+  done
+) &
+
 ros2 run arms_sim angled_stability_test --ros-args -p elev:="$ELEV" -p phases:="$PHASES" \
   -p drone_model:=arms_drone_1 -p out:="$OUT/${STAMP}_elev${ELEV}_test.jsonl" \
   2>&1 | tee "$OUT/${STAMP}_elev${ELEV}_test.log"

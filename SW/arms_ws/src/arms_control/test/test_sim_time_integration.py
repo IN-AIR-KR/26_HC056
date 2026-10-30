@@ -37,7 +37,7 @@ from arms_msgs.msg import (AttitudeTelemetry, BoundingBox, DetectionArray,  # no
 
 RTF = 0.25
 TRACK_LOST = 2.0
-HOVER = 0.32
+HOVER = 0.25
 
 
 class SimHarness(Node):
