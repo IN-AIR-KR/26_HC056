@@ -117,13 +117,21 @@ def _detection(context, *args, **kwargs):
     else:
         model = os.path.expanduser(model)
     det_config = Path(get_package_share_directory("arms_detection")) / "config" / "detection.yaml"
+    threads = LaunchConfiguration("det_threads").perform(context).strip() or "2"
     actions.append(Node(
         package="arms_detection", executable="arms_detection_node",
         namespace="arms", name="arms_detection_node", output="screen",
-        parameters=[str(det_config)],
+        # SITL 전용 override: 노트북 CPU YOLO 에선 전체 화면 fallback 한 번이 0.3~1 s 라
+        #   HSV 가 놓친 프레임마다 돌면(기본 1) 검출이 1~2 Hz 로 떨어지고 지연이 수백 ms 가
+        #   돼 PID/PN 이 낡은 오차로 발산한다. detection.yaml(실기체 기본값)은 그대로 둔다.
+        parameters=[str(det_config), {"yolo.full_fallback_interval": ParameterValue(
+            LaunchConfiguration("det_full_fallback"), value_type=int)}],
         # YOLO on/off 는 파라미터가 아니라 이 환경변수다 — 모델이 로드돼야 검출을
         # 발행한다(HSV 단독 발행 금지). 노드 기동 시점에 한 번만 읽는다.
-        additional_env={"ARMS_MODEL": model},
+        # SITL 전용: CPU torch 가 기본으로 코어 수만큼 스레드를 띄워 Gazebo 와 경합하면
+        #   ROI YOLO 한 번이 ~1.3 s 까지 늘어난다(같은 조건 2 스레드 ~40 ms). 실기체는 GPU 라 무관.
+        additional_env={"ARMS_MODEL": model,
+                        "OMP_NUM_THREADS": threads, "MKL_NUM_THREADS": threads},
     ))
     return actions
 
@@ -188,6 +196,13 @@ def generate_launch_description():
                         "표기이며 host 모드에선 docker/models/x 로 자동 치환된다. "
                         "호스트 절대경로를 직접 줘도 된다."),
 
+        DeclareLaunchArgument("det_full_fallback", default_value="5",
+                              description="SITL 검출의 전체 화면 YOLO fallback 주기(프레임). "
+                                          "1=매 프레임(실기체 기본값), N=N프레임마다, 0=끔. "
+                                          "CPU YOLO 부하와 HSV 놓침 복구 속도의 절충으로 SITL 은 5."),
+        DeclareLaunchArgument("det_threads", default_value="2",
+                              description="SITL 검출(CPU YOLO) torch 스레드 수. 코어 수만큼 띄우면 "
+                                          "Gazebo 와 경합해 추론이 수십 배 느려진다."),
         DeclareLaunchArgument("auto_save", default_value="true",
                               description="비행 로그 녹화. true 면 가상 조종기 ARM 스위치 ON~OFF 를 "
                                           "~/arms_flight_logs_ibvs/<일시>_sitl/ "

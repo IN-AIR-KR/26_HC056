@@ -6,11 +6,13 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "arms_control/pid_aim.hpp"
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/pn_guidance.hpp"
 #include "arms_control/state_machine.hpp"
@@ -70,6 +72,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.pitch_sign", rclcpp::ParameterType::PARAMETER_DOUBLE);
     // 중력 처짐 보상: 양수면 카메라 중심을 표적보다 화면 위쪽으로 조준한다.
     declare_required_parameter("control.aim_above_offset", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    // PID 중력 보상 조준: 추력·자세·LOS 로 '공보다 얼마나 위를 겨눌지'를 매 틱 계산한다.
+    declare_required_parameter("control.gravity_comp_gain", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.gravity_comp_max_tan", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.error_lpf_alpha", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.control_rate_hz", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.deadzone", rclcpp::ParameterType::PARAMETER_DOUBLE);
@@ -85,11 +90,25 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.pn.kf_measurement_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.max_lateral_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.max_measurement_age_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.hold_max_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.use_ground_truth", rclcpp::ParameterType::PARAMETER_BOOL);
+    declare_required_parameter("control.pn.look_angle_fov_ratio", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pn.raw_match_gate", rclcpp::ParameterType::PARAMETER_DOUBLE);
     // 측정 시각 기준: "header"=메시지 header.stamp(촬영·추정 시각), "receipt"=이 노드 수신 시각.
     //   header 는 발행자와 같은 시계(SITL: /clock 시뮬 시간)를 쓸 때만 의미가 있다.
     declare_required_parameter("control.pn.stamp_source", rclcpp::ParameterType::PARAMETER_STRING);
     declare_required_parameter("control.pn.camera.r_bc", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    // PID 조준점 구조: "inertial"=관성 유도(PN 횡가속+중력+피드포워드)로 매 틱 계산,
+    //   "legacy"=예전 고정 오프셋(aim_above_offset + gravity_comp_*). pid_aim.hpp 설명 참고.
+    declare_required_parameter("control.pid_aim.mode", rclcpp::ParameterType::PARAMETER_STRING);
+    declare_required_parameter("control.pid_aim.navigation_ratio", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.approach_accel_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.min_closing_speed_mps", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.look_angle_fov_ratio", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.rate_feedforward_gain", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.los_rate_max_age_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.los_rate_fade_start_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.pid_aim.aim_slew_tan_per_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
 
     declare_required_parameter("mission.sitl_auto_launch", rclcpp::ParameterType::PARAMETER_BOOL);
     // 종말 RTL 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
@@ -251,6 +270,9 @@ class ArmsControlNode : public rclcpp::Node {
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
     aim_above_offset_ = std::clamp(
         get_parameter("control.aim_above_offset").as_double(), -1.0, 1.0);
+    gravity_comp_gain_ = std::max(get_parameter("control.gravity_comp_gain").as_double(), 0.0);
+    gravity_comp_max_tan_ =
+        std::max(get_parameter("control.gravity_comp_max_tan").as_double(), 0.0);
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
     control_rate_hz_ = get_parameter("control.control_rate_hz").as_double();
     deadzone_ = get_parameter("control.deadzone").as_double();
@@ -295,7 +317,10 @@ class ArmsControlNode : public rclcpp::Node {
     pn_params_.max_lateral_accel_mps2 =
         get_parameter("control.pn.max_lateral_accel_mps2").as_double();
     pn_measurement_age_sec_ = get_parameter("control.pn.max_measurement_age_sec").as_double();
+    pn_hold_max_sec_ = get_parameter("control.pn.hold_max_sec").as_double();
     pn_use_ground_truth_ = get_parameter("control.pn.use_ground_truth").as_bool();
+    pn_params_.look_angle_fov_ratio = get_parameter("control.pn.look_angle_fov_ratio").as_double();
+    pn_raw_match_gate_ = get_parameter("control.pn.raw_match_gate").as_double();
     {
       const auto src = get_parameter("control.pn.stamp_source").as_string();
       if (src != "header" && src != "receipt") {
@@ -318,6 +343,19 @@ class ArmsControlNode : public rclcpp::Node {
     std::copy(pn_r_bc.begin(), pn_r_bc.end(), pn_camera_.r_bc.v.begin());
     pn_guidance_.set_parameters(pn_params_);
     pn_guidance_.set_camera(pn_camera_);
+    pid_aim_inertial_ = parse_pid_aim_mode(get_parameter("control.pid_aim.mode").as_string());
+    pid_aim_params_.navigation_ratio = get_parameter("control.pid_aim.navigation_ratio").as_double();
+    pid_aim_params_.approach_accel_mps2 =
+        get_parameter("control.pid_aim.approach_accel_mps2").as_double();
+    pid_aim_params_.min_closing_speed_mps =
+        std::max(get_parameter("control.pid_aim.min_closing_speed_mps").as_double(), 0.0);
+    pid_aim_look_ratio_ = get_parameter("control.pid_aim.look_angle_fov_ratio").as_double();
+    pid_aim_ff_gain_ = get_parameter("control.pid_aim.rate_feedforward_gain").as_double();
+    pid_aim_rate_max_age_sec_ = get_parameter("control.pid_aim.los_rate_max_age_sec").as_double();
+    pid_aim_rate_fade_start_sec_ =
+        get_parameter("control.pid_aim.los_rate_fade_start_sec").as_double();
+    pid_aim_slew_tan_per_sec_ = get_parameter("control.pid_aim.aim_slew_tan_per_sec").as_double();
+    update_pid_aim_params();
     near_size_start_ = get_parameter("control.near_size_start").as_double();
     near_size_full_ = get_parameter("control.near_size_full").as_double();
     min_gain_scale_ = get_parameter("control.min_gain_scale").as_double();
@@ -347,6 +385,10 @@ class ArmsControlNode : public rclcpp::Node {
               lead_gain_ = p.as_double();
             else if (n == "control.aim_above_offset")
               aim_above_offset_ = std::clamp(p.as_double(), -1.0, 1.0);
+            else if (n == "control.gravity_comp_gain")
+              gravity_comp_gain_ = std::max(p.as_double(), 0.0);
+            else if (n == "control.gravity_comp_max_tan")
+              gravity_comp_max_tan_ = std::max(p.as_double(), 0.0);
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
             else if (n == "control.deadzone")
@@ -393,6 +435,38 @@ class ArmsControlNode : public rclcpp::Node {
               pn_params_.kf_measurement_noise = p.as_double(); pn_changed = true;
             } else if (n == "control.pn.max_lateral_accel_mps2") {
               pn_params_.max_lateral_accel_mps2 = p.as_double(); pn_changed = true;
+            } else if (n == "control.pn.look_angle_fov_ratio") {
+              pn_params_.look_angle_fov_ratio = p.as_double(); pn_changed = true;
+            } else if (n == "control.pid_aim.mode") {
+              try {
+                pid_aim_inertial_ = parse_pid_aim_mode(p.as_string());
+                aim_slew_init_ = false;
+                pid_roll_->reset();
+                pid_pitch_->reset();
+              } catch (const std::exception &e) {
+                res.successful = false;
+                res.reason = e.what();
+              }
+            } else if (n == "control.pid_aim.navigation_ratio") {
+              pid_aim_params_.navigation_ratio = p.as_double();
+            } else if (n == "control.pid_aim.approach_accel_mps2") {
+              pid_aim_params_.approach_accel_mps2 = p.as_double();
+            } else if (n == "control.pid_aim.min_closing_speed_mps") {
+              pid_aim_params_.min_closing_speed_mps = std::max(p.as_double(), 0.0);
+            } else if (n == "control.pid_aim.look_angle_fov_ratio") {
+              pid_aim_look_ratio_ = p.as_double();
+              update_pid_aim_params();
+            } else if (n == "control.pid_aim.rate_feedforward_gain") {
+              pid_aim_ff_gain_ = p.as_double();
+            } else if (n == "control.pid_aim.los_rate_max_age_sec") {
+              pid_aim_rate_max_age_sec_ = p.as_double();
+            } else if (n == "control.pid_aim.los_rate_fade_start_sec") {
+              pid_aim_rate_fade_start_sec_ = p.as_double();
+            } else if (n == "control.pid_aim.aim_slew_tan_per_sec") {
+              pid_aim_slew_tan_per_sec_ = p.as_double();
+            } else if (n == "control.pn.raw_match_gate") {
+              pn_raw_match_gate_ = p.as_double();
+              pending_track_.reset();
             } else if (n == "control.pn.use_ground_truth") {
               pn_use_ground_truth_ = p.as_bool();
               gt_skip_count_ = 0;
@@ -458,6 +532,7 @@ class ArmsControlNode : public rclcpp::Node {
             pid_pitch_->set_gains(pkp_, pki_, pkd_, max_cmd_rate_dps_);
           }
           if (pn_changed) pn_guidance_.set_parameters(pn_params_);
+          update_pid_aim_params();
           RCLCPP_INFO(get_logger(),
                       "param 적용: roll_sign=%.0f pitch_sign=%.0f rkp=%.1f "
                       "rkd=%.1f track_thr=%.2f",
@@ -502,52 +577,28 @@ class ArmsControlNode : public rclcpp::Node {
           //   예전에는 Gazebo 이미지(시뮬 시간)와 PX4 자세(벽시계 수신)의 시간축이 달라
           //   수신 시각으로 맞췄다. SITL 이 /clock(use_sim_time)을 쓰면 둘 다 시뮬 시간이라
           //   header 로 바로 맞출 수 있다(stamp_source=header). 실기체는 receipt 유지.
-          pn::Quaternion attitude;
-          if (!pn_attitudes_.interpolate(
-                  sample.seconds(), pn_measurement_age_sec_, attitude)) {
-            // 진단: 이 경우 PN은 갱신되지 않는다(조용히 건너뛰던 경로).
-            ++pn_attitude_skip_count_;
-            if (guidance_mode_ == 1) {
-              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                  "[PN] 검출 수신 시각에 맞는 vehicle/attitude 없음(> %.2fs) → PN 갱신 생략 "
-                  "(누적 %zu회)", pn_measurement_age_sec_, pn_attitude_skip_count_);
-            }
+          // 단, perception 이 이번 프레임을 놓쳐 KF 로 외삽(coast)한 박스는 PN 측정으로 쓰지 않는다.
+          //   coast 박스는 마지막 위치에 멈춰 있어, 공이 화면 밖으로 나간 뒤에도 '정중앙' 으로
+          //   보인다. PN 은 LOS 를 '자세 × 광축 × 화면 위치' 로 재구성하므로 그걸 받으면
+          //   LOS = 기체 위쪽 축이 되어 수직 상승 명령을 낸다(SITL 60°: 1.7 s 동안 공 없이 상승).
+          //   같은 프레임(header.stamp)의 detections_raw 에 근처 원시 검출이 있을 때만 갱신한다.
+          if (pn_raw_match_gate_ <= 0.0) {
+            update_pn(*best, sample, receipt);
             return;
           }
-          const pn::Vec3 *gt_los_rate = nullptr;
-          const double *gt_closing_speed = nullptr;
-          pn::Vec3 gt_rate;
-          double gt_speed = 0.0;
-          if (pn_use_ground_truth_) {
-            // GT 는 '지금'의 상대 상태이므로 현재 시각 기준으로 나이를 잰다.
-            // gt_received_ 를 먼저 본다: 한 번도 안 받았으면 gt_receipt_time_ 은 기본값이라
-            // 빼면 안 된다(시계 종류가 달라 rclcpp 가 예외를 던진다).
-            const double gt_age = gt_received_ ? (receipt - gt_receipt_time_).seconds() : -1.0;
-            const bool gt_fresh = gt_received_ && latest_gt_.valid &&
-                gt_age >= 0.0 && gt_age <= pn_measurement_age_sec_;
-            if (!gt_fresh) {
-              // 진단: GT 모드에서는 GT가 신선하지 않으면 영상 추정으로 대체하지 않고 갱신 자체를 건너뛴다.
-              ++gt_skip_count_;
-              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                  "[GT] use_ground_truth=true 인데 sim/guidance_ground_truth 가 %s → PN 갱신 생략 "
-                  "(누적 %zu회)",
-                  gt_received_ ? "오래됨" : "수신된 적 없음", gt_skip_count_);
-              return;
-            }
-            gt_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
-                       latest_gt_.los_rate_z};
-            gt_speed = latest_gt_.closing_speed_mps;
-            gt_los_rate = &gt_rate;
-            gt_closing_speed = &gt_speed;
-          }
-          if (pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
-                                            best->width, best->height, attitude,
-                                            gt_los_rate, gt_closing_speed)) {
-            // 신선도 게이트는 '측정이 도착한 뒤 경과'로 잰다(원래 의미). 촬영 시각(sample)은
-            // 자세 보간·LOS 재구성에만 쓴다 — 게이트까지 촬영 기준으로 바꾸자 검출 지연
-            // (호스트 YOLO 0.3~1 s)만으로 PN 이 거의 항상 차단됐다(SITL: PN 활성 0.8%).
-            pn_last_update_rx_ = receipt;
-          }
+          pending_track_ = PendingTrack{msg->header.stamp, *best, sample, receipt};
+          try_pn_with_raw();
+        });
+
+    // KF 적용 전 원시 검출. 같은 프레임 header 를 쓰므로 위 트랙 박스와 stamp 로 짝짓는다.
+    // 두 토픽의 도착 순서는 보장되지 않아 어느 쪽이 나중에 와도 짝이 맞으면 처리한다.
+    sub_detections_raw_ = create_subscription<arms_msgs::msg::DetectionArray>(
+        "perception/detections_raw", best_effort_qos,
+        [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
+          last_raw_stamp_ = msg->header.stamp;
+          last_raw_detections_ = msg->detections;
+          raw_received_ = true;
+          try_pn_with_raw();
         });
 
     sub_guidance_gt_ = create_subscription<arms_msgs::msg::GuidanceGroundTruth>(
@@ -570,6 +621,15 @@ class ArmsControlNode : public rclcpp::Node {
                                   msg->roll_deg * pn::kDegToRad,
                                   msg->pitch_deg * pn::kDegToRad,
                                   msg->yaw_deg * pn::kDegToRad));
+          // PN 이 끊겼을 때 '현재 자세 유지' fallback 용
+          att_roll_deg_ = msg->roll_deg;
+          att_pitch_deg_ = msg->pitch_deg;
+          att_received_ = true;
+          att_rx_time_ = now();
+          att_q_now_ = pn::Quaternion::from_euler(
+              msg->roll_deg * pn::kDegToRad,
+              msg->pitch_deg * pn::kDegToRad,
+              msg->yaw_deg * pn::kDegToRad);
         });
 
     sub_input_ = create_subscription<arms_msgs::msg::OperatorInput>(
@@ -668,8 +728,10 @@ class ArmsControlNode : public rclcpp::Node {
           loom_s_ema_ = loom_rate_ema_ = 0.0;
           loom_init_ = false;
           pn_guidance_.reset();
+          pn_hold_valid_ = false;
           pn_last_update_rx_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
           pn_attitudes_.clear();
+          los_ned_valid_ = false;
           gt_received_ = false;
           align_locked_ = false;
           auto_armed_ = manual_armed_ = false;
@@ -716,6 +778,88 @@ class ArmsControlNode : public rclcpp::Node {
   //   크기 모두에 무관하다.
   // 메시지 header 시각을 검증해 측정 시각으로 쓴다. 비어 있거나(0), 미래이거나, 너무 오래된
   // (시계가 다른 발행자) 값이면 수신 시각으로 대신하고 원인을 남긴다.
+  // 트랙 박스와 같은 프레임의 원시 검출이 모두 도착했을 때 PN 을 갱신한다.
+  void try_pn_with_raw() {
+    if (!pending_track_ || !raw_received_ || pending_track_->stamp != last_raw_stamp_) return;
+    const PendingTrack track = *pending_track_;
+    pending_track_.reset();
+    const bool measured = std::any_of(
+        last_raw_detections_.begin(), last_raw_detections_.end(), [&](const auto &raw) {
+          return std::hypot(raw.x_center - track.box.x_center,
+                            raw.y_center - track.box.y_center) <= pn_raw_match_gate_;
+        });
+    if (!measured) {
+      // 진단: coast 박스라 PN 갱신을 건너뜀. 계속되면 신선도 게이트가 PN 명령을 끊는다.
+      ++pn_coast_skip_count_;
+      if (guidance_mode_ == 1) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "[PN] 이번 프레임은 원시 검출 없음(KF coast) → PN 갱신 생략 (누적 %zu회)",
+            pn_coast_skip_count_);
+      }
+      return;
+    }
+    update_pn(track.box, track.sample, track.receipt);
+  }
+
+  void update_pn(const arms_msgs::msg::BoundingBox &best, const rclcpp::Time &sample,
+                 const rclcpp::Time &receipt) {
+    pn::Quaternion attitude;
+    if (!pn_attitudes_.interpolate(
+            sample.seconds(), pn_measurement_age_sec_, attitude)) {
+      // 진단: 이 경우 PN은 갱신되지 않는다(조용히 건너뛰던 경로).
+      ++pn_attitude_skip_count_;
+      if (guidance_mode_ == 1) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "[PN] 검출 수신 시각에 맞는 vehicle/attitude 없음(> %.2fs) → PN 갱신 생략 "
+            "(누적 %zu회)", pn_measurement_age_sec_, pn_attitude_skip_count_);
+      }
+      return;
+    }
+    // PID 재투영용: 촬영 시점 자세로 화면 위치 → world NED LOS. (원시 검출과 매칭된 측정만 옴)
+    {
+      double txn = 0.0, tyn = 0.0;
+      error_to_tan(best.x_center - 0.5, best.y_center - 0.5, txn, tyn);
+      const pn::Vec3 ray_c = pn::normalized(pn::Vec3{txn, tyn, 1.0});
+      los_ned_meas_ = pn::normalized(attitude.rotation_matrix() * (pn_camera_.r_bc * ray_c));
+      los_ned_rx_ = receipt;
+      los_ned_valid_ = true;
+    }
+    const pn::Vec3 *gt_los_rate = nullptr;
+    const double *gt_closing_speed = nullptr;
+    pn::Vec3 gt_rate;
+    double gt_speed = 0.0;
+    if (pn_use_ground_truth_) {
+      // GT 는 '지금'의 상대 상태이므로 현재 시각 기준으로 나이를 잰다.
+      // gt_received_ 를 먼저 본다: 한 번도 안 받았으면 gt_receipt_time_ 은 기본값이라
+      // 빼면 안 된다(시계 종류가 달라 rclcpp 가 예외를 던진다).
+      const double gt_age = gt_received_ ? (receipt - gt_receipt_time_).seconds() : -1.0;
+      const bool gt_fresh = gt_received_ && latest_gt_.valid &&
+          gt_age >= 0.0 && gt_age <= pn_measurement_age_sec_;
+      if (!gt_fresh) {
+        // 진단: GT 모드에서는 GT가 신선하지 않으면 영상 추정으로 대체하지 않고 갱신 자체를 건너뛴다.
+        ++gt_skip_count_;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "[GT] use_ground_truth=true 인데 sim/guidance_ground_truth 가 %s → PN 갱신 생략 "
+            "(누적 %zu회)",
+            gt_received_ ? "오래됨" : "수신된 적 없음", gt_skip_count_);
+        return;
+      }
+      gt_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
+                 latest_gt_.los_rate_z};
+      gt_speed = latest_gt_.closing_speed_mps;
+      gt_los_rate = &gt_rate;
+      gt_closing_speed = &gt_speed;
+    }
+    if (pn_guidance_.update_detection(sample.seconds(), best.x_center, best.y_center,
+                                      best.width, best.height, attitude,
+                                      gt_los_rate, gt_closing_speed)) {
+      // 신선도 게이트는 '측정이 도착한 뒤 경과'로 잰다(원래 의미). 촬영 시각(sample)은
+      // 자세 보간·LOS 재구성에만 쓴다 — 게이트까지 촬영 기준으로 바꾸자 검출 지연
+      // (호스트 YOLO 0.3~1 s)만으로 PN 이 거의 항상 차단됐다(SITL: PN 활성 0.8%).
+      pn_last_update_rx_ = receipt;
+    }
+  }
+
   rclcpp::Time measurement_time(const std_msgs::msg::Header &header, const rclcpp::Time &receipt,
                                 const char *what) {
     if (!pn_stamp_from_header_) return receipt;
@@ -778,6 +922,42 @@ class ArmsControlNode : public rclcpp::Node {
       pub_loom_->publish(lm);
   }
 
+  static bool parse_pid_aim_mode(const std::string &mode) {
+    if (mode == "inertial") return true;
+    if (mode == "legacy") return false;
+    throw std::runtime_error("control.pid_aim.mode must be 'inertial' or 'legacy': " + mode);
+  }
+
+  // pid_aim 이 다른 파라미터에서 가져오는 값(호버 추력, 횡가속 상한, 시야각)을 다시 맞춘다.
+  void update_pid_aim_params() {
+    pid_aim_params_.hover_throttle = hover_throttle_;
+    pid_aim_params_.max_lateral_accel_mps2 = pn_params_.max_lateral_accel_mps2;
+    const double ratio = std::clamp(pid_aim_look_ratio_, 0.0, 0.95);
+    double half_h = 0.0, half_v = 0.0;
+    if (cam_calibrated_) {
+      half_h = std::atan(0.5 * cam_width_ / cam_fx_);
+      half_v = std::atan(0.5 * cam_height_ / cam_fy_);
+    } else {
+      half_h = std::atan(0.5 * camera_tan_kx_);
+      half_v = std::atan(0.5 * camera_tan_ky_);
+    }
+    pid_aim_params_.max_look_angle_rad = ratio * std::min(half_h, half_v);
+  }
+
+  // 근접도(bbox 크기) 스케줄 진행도 0~1.
+  double closeness() const {
+    return std::clamp((loom_s_ema_ - near_size_start_) /
+                          std::max(near_size_full_ - near_size_start_, 1e-3),
+                      0.0, 1.0);
+  }
+
+  // τ(충돌까지 시간) 기반 추력 감속 배율. τ=+inf(미접근)면 1.0.
+  double tau_ease() const {
+    return std::clamp((tau_sec_ - tau_ease_full_) /
+                          std::max(tau_ease_start_ - tau_ease_full_, 1e-3),
+                      tau_ease_min_scale_, 1.0);
+  }
+
   /* 화각/종횡비 → 정규화오차(±0.5)를 tan 단위 카메라 좌표로 바꾸는 배율.
      error=±0.5(화면 가장자리)에서 x_n = tan(hfov/2) 가 되도록 맞춘다.
      세로는 정사각 픽셀 가정으로 tan(vfov/2) = tan(hfov/2) * (세로/가로). */
@@ -828,6 +1008,13 @@ class ArmsControlNode : public rclcpp::Node {
                 "D=[%.4f %.4f %.4f %.4f %.4f]",
                 cam_width_, cam_height_, cam_fx_, cam_fy_, cam_cx_, cam_cy_, model.c_str(),
                 cam_dist_[0], cam_dist_[1], cam_dist_[2], cam_dist_[3], cam_dist_[4]);
+  }
+
+  // m^T * p (회전행렬 역변환: NED→body, body→optical)
+  static pn::Vec3 mul_t(const pn::Mat3 &m, const pn::Vec3 &p) {
+    return {m(0, 0) * p.x + m(1, 0) * p.y + m(2, 0) * p.z,
+            m(0, 1) * p.x + m(1, 1) * p.y + m(2, 1) * p.z,
+            m(0, 2) * p.x + m(1, 2) * p.y + m(2, 2) * p.z};
   }
 
   /* 정규화 픽셀오차(error = bbox중심/화면 - 0.5, ±0.5) → tan 단위 이미지좌표 (x_n, y_n).
@@ -902,6 +1089,44 @@ class ArmsControlNode : public rclcpp::Node {
     return 0.0;
   }
 
+  /**
+   * PID 중력 보상 조준 오프셋 [tan 카메라 좌표]. 화면에서 표적이 '있어야 할' 위치를 돌려준다.
+   *
+   * 추력축(= 상방 카메라 광축)이 t̂, 추력 가속도 T = g·thrust/hover 일 때 실제 가속은
+   * T·t̂ + g 다. 이것이 LOS(l̂) 방향이려면 LOS 에 수직인 중력 성분 g⊥ 를 추력이 상쇄해야
+   * 하므로 추력축이 LOS 에서 중력 반대쪽으로 δ 만큼 들려야 한다:
+   *     sin δ = |g⊥| / T = cos(LOS 앙각) · hover / thrust
+   * 그러면 화면에서 표적은 중심에서 'g⊥ 의 화면 투영 방향'으로 tan δ 만큼 떨어져 보인다.
+   * (예: 앙각 60°, thrust 0.6, hover 0.25 → δ≈12°, 오프셋≈0.21 = 표적이 화면 아래쪽)
+   * 자세가 없거나 0.5 s 넘게 끊기면 보상하지 않는다(0 반환).
+   */
+  void gravity_aim_offset(double los_x, double los_y, double thrust,
+                          double &off_x, double &off_y) const {
+    off_x = 0.0;
+    off_y = 0.0;
+    if (gravity_comp_gain_ <= 0.0 || !att_received_ || thrust <= 1e-3) return;
+    if ((now() - att_rx_time_).seconds() > 0.5) return;
+    const double r = att_roll_deg_ * pn::kDegToRad;
+    const double p = att_pitch_deg_ * pn::kDegToRad;
+    // world NED 아래(+z)를 body FRD 로: R_nb^T · ẑ (yaw 무관)
+    const pn::Vec3 g_b{-std::sin(p), std::sin(r) * std::cos(p), std::cos(r) * std::cos(p)};
+    // r_bc 는 optical→body. body→optical 은 전치.
+    const auto &R = pn_camera_.r_bc;
+    const pn::Vec3 g_c{R(0, 0) * g_b.x + R(1, 0) * g_b.y + R(2, 0) * g_b.z,
+                       R(0, 1) * g_b.x + R(1, 1) * g_b.y + R(2, 1) * g_b.z,
+                       R(0, 2) * g_b.x + R(1, 2) * g_b.y + R(2, 2) * g_b.z};
+    const pn::Vec3 l_c = pn::normalized(pn::Vec3{los_x, los_y, 1.0});
+    const pn::Vec3 g_perp = g_c - l_c * pn::dot(g_c, l_c);   // |g_perp| = cos(LOS 앙각)
+    const double img = std::hypot(g_perp.x, g_perp.y);
+    if (img < 1e-6) return;   // LOS 가 수직 = 중력이 LOS 방향뿐, 보상 불필요
+    const double sin_d = std::clamp(
+        gravity_comp_gain_ * pn::norm(g_perp) * hover_throttle_ / thrust, 0.0, 0.99);
+    const double tan_d =
+        std::min(sin_d / std::sqrt(1.0 - sin_d * sin_d), gravity_comp_max_tan_);
+    off_x = tan_d * g_perp.x / img;
+    off_y = tan_d * g_perp.y / img;
+  }
+
   void control_loop() {
     auto now_t = now();
     double dt = (now_t - last_tick_).seconds();
@@ -957,6 +1182,21 @@ class ArmsControlNode : public rclcpp::Node {
       const double raw_ey_norm = sm_->current_error_y();
       double raw_ex = 0.0, raw_ey = 0.0;
       error_to_tan(raw_ex_norm, raw_ey_norm, raw_ex, raw_ey);
+      // ---- 촬영시점 LOS 를 '현재 자세'로 재투영 ----
+      //   검출이 ~1Hz 여도 오차가 매 tick 갱신되고 기체 자기회전이 빠진다.
+      //   g_off(현재 자세 기준)와 같은 시점끼리 빼게 된다.
+      bool reproj_fresh = false;
+      if (los_ned_valid_ && att_received_ &&
+          (now_t - att_rx_time_).seconds() <= 0.5 &&
+          (now_t - los_ned_rx_).seconds() <= reproj_max_age_sec_) {
+        const pn::Vec3 b = mul_t(att_q_now_.rotation_matrix(), los_ned_meas_);
+        const pn::Vec3 c = mul_t(pn_camera_.r_bc, b);
+        if (c.z > 0.05) {   // 광축 앞쪽일 때만 (뒤로 넘어가면 투영 무의미)
+          raw_ex = c.x / c.z;
+          raw_ey = c.y / c.z;
+          reproj_fresh = true;
+        }
+      }
       filt_err_x_ =
           error_lpf_alpha_ * raw_ex + (1.0 - error_lpf_alpha_) * filt_err_x_;
       filt_err_y_ =
@@ -968,12 +1208,72 @@ class ArmsControlNode : public rclcpp::Node {
       double los_x = filt_err_x_;
       double los_y = filt_err_y_;
 
-      // ---- 중앙 데드존 (보정된 LOS 기준) ----
-      double ex = apply_deadzone(los_x, deadzone_);
-      // 양의 offset은 풍선이 화면 중심보다 아래(tan y>0)에
-      // 머물도록 만든다. 즉 카메라 중심/추력축은 풍선보다 화면 위를 조준한다.
-      // 상수항은 미분 전에 넣지 않아 리드용 속도 추정을 오염시키지 않는다.
-      double ey = apply_deadzone(los_y - aim_above_offset_, deadzone_);
+      // ---- 조준점: PID 가 광축을 어디로 보낼지 ----
+      double ex = 0.0, ey = 0.0;
+      pid_aim_out_ = {};
+      const bool att_fresh = att_received_ && (now_t - att_rx_time_).seconds() <= 0.5;
+      if (pid_aim_inertial_ && guidance_mode_ != 1 && att_fresh) {   // PN 모드 경로는 그대로
+        // 관성 조준(pid_aim.hpp): 목표 비추력 f = A·l̂ + N·Vc·λ̇ − g 의 방향을 광축 목표로 삼는다.
+        //   λ̇·Vc 는 PN 필터(update_pn 이 유도 모드와 무관하게 매 검출 갱신)의 추정값을 쓴다.
+        //   근접·τ 감속은 접근 가속에만 곱해 횡가속·중력 상쇄 능력은 끝까지 유지한다.
+        pid_aim::Input in;
+        in.los_c = {los_x, los_y, 1.0};
+        in.r_nb = att_q_now_.rotation_matrix();
+        in.r_bc = pn_camera_.r_bc;
+        const auto &pn_out = pn_guidance_.output();
+        const double rate_age = pn_last_update_rx_.nanoseconds() > 0
+            ? (now_t - pn_last_update_rx_).seconds() : -1.0;
+        // λ̇ 가 오래되면 PN 항을 한 번에 끄지 않고 fade_start → max_age 사이에서 선형으로 줄인다.
+        //   검출이 1~3 Hz 라 0.6 s 하드 컷이면 PN 항(최대 12 m/s², 중력급)이 켜졌다 꺼졌다 하며
+        //   조준점이 0.15~0.28 tan 씩 순간 이동했다(→ kp 곱해 40~80 deg/s 계단 명령, 표적 이탈).
+        double rate_w = 0.0;
+        if (pn_out.valid && rate_age >= 0.0) {
+          const double span =
+              std::max(pid_aim_rate_max_age_sec_ - pid_aim_rate_fade_start_sec_, 1e-3);
+          rate_w = std::clamp(1.0 - (rate_age - pid_aim_rate_fade_start_sec_) / span, 0.0, 1.0);
+        }
+        in.los_rate_valid = rate_w > 0.0;
+        in.los_rate_ned = pn_out.los_rate_ned * rate_w;
+        in.closing_speed_mps = pn_out.closing_speed_mps;
+        in.approach_scale = (1.0 - closeness() * (1.0 - min_throttle_scale_)) * tau_ease();
+        pid_aim_out_ = pid_aim::compute(pid_aim_params_, in);
+      }
+      if (pid_aim_out_.valid) {
+        // 조준점(표적이 화면에서 놓여야 할 위치)은 초당 aim_slew_tan_per_sec 이하로만 옮긴다.
+        //   λ̇ 추정이 한 번에 크게 바뀌어도(근접 시 4→20 deg/s) PID 입력이 계단으로 뛰지 않게.
+        //   조준점이 FOV 를 가로질러 순간 이동하면 표적이 화면 밖으로 밀려 재획득을 못 한다.
+        //   표적 자체의 화면 이동(los)은 그대로 즉시 반영된다 — 제한은 조준점에만.
+        if (!aim_slew_init_ || pid_aim_slew_tan_per_sec_ <= 0.0) {
+          aim_f_x_ = pid_aim_out_.aim_x;
+          aim_f_y_ = pid_aim_out_.aim_y;
+          aim_slew_init_ = true;
+        } else {
+          const double step = pid_aim_slew_tan_per_sec_ * std::max(dt, 0.0);
+          aim_f_x_ += std::clamp(pid_aim_out_.aim_x - aim_f_x_, -step, step);
+          aim_f_y_ += std::clamp(pid_aim_out_.aim_y - aim_f_y_, -step, step);
+        }
+        // g_off 는 '표적이 화면에서 놓여야 할 위치'(등가 조준점)로 기록한다(로그·진단 호환).
+        g_off_x_ = aim_f_x_;
+        g_off_y_ = aim_f_y_;
+        // pid_aim 의 err = los − aim 이므로 제한된 조준점으로 다시 쓴다.
+        ex = apply_deadzone(los_x - aim_f_x_, deadzone_);
+        ey = apply_deadzone(los_y - aim_f_y_, deadzone_);
+      } else {
+        aim_slew_init_ = false;
+        // ---- legacy: 고정 중력 보상 조준점 ----
+        //   추력축을 LOS 에 그대로 맞추면 중력 때문에 가속 방향이 LOS 아래로 처져 표적 밑을
+        //   지나간다. 자세·추력·LOS 로 필요한 '들어 올림'을 계산해 조준점을 옮긴다.
+        //   추력은 직전 틱 PID 추력(첫 틱·LOCK 은 track_throttle)을 쓴다.
+        const double expected_thrust =
+            last_pid_thrust_ > 1e-3 ? last_pid_thrust_ : track_throttle_;
+        gravity_aim_offset(los_x, los_y, expected_thrust, g_off_x_, g_off_y_);
+        ex = apply_deadzone(los_x - g_off_x_, deadzone_);
+        // 양의 offset은 풍선이 화면 중심보다 아래(tan y>0)에
+        // 머물도록 만든다. 즉 카메라 중심/추력축은 풍선보다 화면 위를 조준한다.
+        // aim_above_offset 은 중력 보상 위에 더하는 수동 미세조정이다.
+        // 상수항은 미분 전에 넣지 않아 리드용 속도 추정을 오염시키지 않는다.
+        ey = apply_deadzone(los_y - aim_above_offset_ - g_off_y_, deadzone_);
+      }
       if (dt > 1e-6) {
         // 표적 시선각속도(LOS rate) 추정 = 예측조준의 핵심 신호 (보정 LOS 의 미분).
         const double DOT_A = err_dot_alpha_;
@@ -1023,7 +1323,10 @@ class ArmsControlNode : public rclcpp::Node {
             else if (emag_g < 0.20) gain_scale = 0.75;
           }
         }
-        double t_lead = lead_gain_;   // 시간기반 리드만 쓴다 (거리비례 리드는 3D 거리와 함께 삭제됨)
+        // 시간기반 리드는 legacy 에서만. 관성 조준은 PN 횡가속 + 각속도 피드포워드가 그 역할을
+        // 하며, err_dot(재투영 오차 미분)은 기체가 표적을 따라갈수록 0 이 되어 관성 LOS 회전을
+        // 보지 못한다.
+        double t_lead = pid_aim_out_.valid ? 0.0 : lead_gain_;
         double ex_lead = ex + t_lead * err_dot_x_;
         double ey_lead = ey + t_lead * err_dot_y_;
         roll_rate_cmd = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
@@ -1041,15 +1344,21 @@ class ArmsControlNode : public rclcpp::Node {
       //   near_size_full_에서 min_gain_scale_까지 낮춘다. 원근 때문에 가까울수록 같은 실제 오차도
       //   화면상 커 보여서 과민반응(오버슈트)하기 쉬운 걸 완화한다.
       {
-        double closeness = std::clamp(
-            (loom_s_ema_ - near_size_start_) /
-                std::max(near_size_full_ - near_size_start_, 1e-3),
-            0.0, 1.0);
-        double range_gain_scale = 1.0 - closeness * (1.0 - min_gain_scale_);
+        const double close = closeness();
+        double range_gain_scale = 1.0 - close * (1.0 - min_gain_scale_);
         roll_rate_cmd  *= range_gain_scale;
         pitch_rate_cmd *= range_gain_scale;
-        idbg.closeness = closeness;
+        idbg.closeness = close;
         idbg.range_gain_scale = range_gain_scale;
+      }
+
+      // ---- 각속도 피드포워드 (관성 조준) ----
+      //   목표 광축은 관성 LOS 와 함께 돈다. 그 회전을 피드백(P)만으로 따라가면
+      //   '오차 = LOS 회전 / kp' 만큼 늘 뒤처진다(예전 로그의 pid 입력 0.02~0.03 정체).
+      //   필요한 회전을 직접 내고 PID 는 남은 오차만 잡는다. 근접 게인 감쇠는 피드백에만.
+      if (pid_aim_out_.valid) {
+        roll_rate_cmd += roll_sign_ * pid_aim_ff_gain_ * pid_aim_out_.ff_x * pn::kRadToDeg;
+        pitch_rate_cmd += pitch_sign_ * pid_aim_ff_gain_ * pid_aim_out_.ff_y * pn::kRadToDeg;
       }
 
       // ---- 추격 궤적(Pursuit): 조준하며 처음부터 상승 ----
@@ -1061,10 +1370,7 @@ class ArmsControlNode : public rclcpp::Node {
         // 근접도 기반 스로틀 스케줄링: 가까울수록 최대 추력 상한을 낮춰서
         // 회전 게인을 부드럽게 만든 만큼 반응할 시간도 같이 벌어준다
         // (속도를 안 줄이면 게인만 낮춰봤자 스쳐 지나가는 시간이 그대로라 무의미함).
-        double closeness_thr = std::clamp(
-            (loom_s_ema_ - near_size_start_) /
-                std::max(near_size_full_ - near_size_start_, 1e-3),
-            0.0, 1.0);
+        double closeness_thr = closeness();
         double range_throttle_scale = 1.0 - closeness_thr * (1.0 - min_throttle_scale_);
         const double up = hover_throttle_ +
             (track_throttle_ - hover_throttle_) * range_throttle_scale;  // 잘 겨눴을 때 최대 상승(=공쪽 돌진, 근접시 하향)
@@ -1078,13 +1384,23 @@ class ArmsControlNode : public rclcpp::Node {
         //   (center_q)과 무관하게 곱해져서, 겨냥이 완벽해도 임박하면 추력을 눌러
         //   관성으로 지나치는 것을 막고 정밀 정렬에 시간을 번다.
         //   τ=+inf(표적 없음/안 다가오는 중)면 tau_ease=1.0 → 지금과 동일하게 동작.
-        const double tau_ease = std::clamp(
-            (tau_sec_ - tau_ease_full_) /
-                std::max(tau_ease_start_ - tau_ease_full_, 1e-3),
-            tau_ease_min_scale_, 1.0);
+        const double tau_ease = this->tau_ease();
         tau_ease_dbg_ = tau_ease;   // 로그용
+        double throttle_up = up;
 
-        if (pursuit_center_boost_) {
+        if (pid_aim_out_.valid) {
+          // 관성 조준: 추력 = 목표 비추력 f 의 '실제 광축' 성분. 근접·τ 감속은 이미 f 의
+          //   접근 가속에 들어가 있고, 횡가속·중력 상쇄분이 남도록 상한은 track_throttle 이다.
+          double thr = std::clamp(pid_aim_out_.throttle, hover, track_throttle_);
+          double center_q = 1.0;
+          if (pursuit_center_boost_) {
+            center_q = std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
+            thr = hover + (thr - hover) * center_q;
+          }
+          thrust = static_cast<float>(thr);
+          throttle_up = track_throttle_;
+          idbg.center_q = center_q;
+        } else if (pursuit_center_boost_) {
           // 중앙 정렬될수록(center_q↑) 그쪽으로 더 세게 상승, 빗나가면 hover 로 낮춰 재조준 우선.
           double center_q =
               std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
@@ -1095,8 +1411,9 @@ class ArmsControlNode : public rclcpp::Node {
           thrust = static_cast<float>(hover + (up - hover) * tau_ease);
           idbg.center_q = 1.0;
         }
+        last_pid_thrust_ = thrust;
         idbg.range_throttle_scale = range_throttle_scale;
-        idbg.throttle_up = up;
+        idbg.throttle_up = throttle_up;
         idbg.emag = emag;
         idbg.tau_ease = tau_ease;
 
@@ -1104,6 +1421,30 @@ class ArmsControlNode : public rclcpp::Node {
           align_locked_ = true;
           RCLCPP_INFO(get_logger(), "추격 시작 (오차 %.2f) → 공 향해 대각선 상승", emag);
         }
+      }
+
+      // 새 측정 없음(검출 끊김/coast 장기화/화면 뒤) → ACRO rate 0 = 현재 자세 유지.
+      //   얼어붙은 오차로 몇 초씩 같은 방향으로 도는 것을 막는다.
+      if (state == State::TRACK && guidance_mode_ != 1 && !reproj_fresh) {
+        roll_rate_cmd = 0.0;
+        pitch_rate_cmd = 0.0;
+        pid_roll_->reset();
+        pid_pitch_->reset();
+        // 추력은 호버로 떨구지 않는다. 기울어진 채 hover 면 수직 성분이 모자라 가라앉고 옆으로
+        //   밀려 상방 카메라에서 표적이 더 멀어진다(→ 재획득 실패 → 2 s 뒤 IDLE). 그래서
+        //   기울기 보상 호버와 위에서 계산한 추격 추력 중 큰 값으로 마지막 겨눈 방향을 유지한다
+        //   (PN hold 의 '현재 자세' 경로와 같은 규칙, 상한 track_throttle).
+        double hold_thrust = hover_throttle_;
+        if (att_received_) {
+          const double tilt_cos = std::cos(att_roll_deg_ * pn::kDegToRad) *
+                                  std::cos(att_pitch_deg_ * pn::kDegToRad);
+          const double tilt_hover = hover_throttle_ / std::max(tilt_cos, 0.5);
+          hold_thrust = std::min(std::max(static_cast<double>(thrust), tilt_hover),
+                                 std::max(track_throttle_, hover_throttle_));
+        }
+        thrust = static_cast<float>(hold_thrust);
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+            "[PID] 신선한 측정 없음 → rate 0 (자세 유지) thr=%.2f", thrust);
       }
 
       if (state == State::TRACK && guidance_mode_ == 1) {
@@ -1123,32 +1464,74 @@ class ArmsControlNode : public rclcpp::Node {
           pn_command_active = true;
           idbg.guidance_x = pn_out.acceleration_pn_ned.y;
           idbg.guidance_y = pn_out.acceleration_pn_ned.x;
+          // 마지막 유효 PN 명령 저장 (끊겼을 때 hold 용)
+          pn_hold_roll_deg_ = roll_rate_cmd;
+          pn_hold_pitch_deg_ = pitch_rate_cmd;
+          pn_hold_thrust_ = thrust;
+          pn_hold_valid_ = true;
         } else {
-          // 유도 입력이 없거나 오래됐다: 유도 명령은 내지 않고 수평 자세 + 호버 추력으로
-          // 버틴다. 예전에는 추력 0 을 보내 표적 소실 timeout(→ 수동 인계)까지 기체가
-          // 자유낙하했다(SITL 50° 기록: 인계 직전 1.4 s 연속 추력 0).
-          //   이 값은 유도가 아니라 '자세 안정화 유지'다. hover_throttle 은 PX4 MPC_THR_HOVER
-          //   와 같은 물리 추력이며, flight_io 가 Stabilized 추력 곡선에 맞게 변환한다.
-          roll_rate_cmd = 0.0;
-          pitch_rate_cmd = 0.0;
-          thrust = static_cast<float>(hover_throttle_);
+          // 수평으로 눕히면 상방 카메라 광축이 천정(90°)을 봐서 앙각 60° 공이 FOV 밖으로
+          // 나간다 → coast → PN 갱신 생략 → 계속 stale 데드락. 그래서 LOS 쪽 자세를 유지한다.
+          //   1순위: 마지막 PN 명령을 hold_max_sec 동안 유지
+          //   2순위: TRACK 직후(PN 아직 없음)·hold 만료 → 현재(발사) 자세 + 기울기 보상 추력
+          //   진짜 놓치면 track_target_lost_timeout_sec 규칙이 IDLE·수동 인계 처리
+          const bool in_hold =
+              pn_hold_valid_ && rx_age >= 0.0 && rx_age <= pn_hold_max_sec_;
+          const char *hold_mode = "수평";
+          if (in_hold) {
+            roll_rate_cmd = pn_hold_roll_deg_;
+            pitch_rate_cmd = pn_hold_pitch_deg_;
+            thrust = pn_hold_thrust_;
+            hold_mode = "마지막 PN 자세";
+          } else if (att_received_) {
+            roll_rate_cmd = std::clamp(att_roll_deg_, -45.0, 45.0);
+            pitch_rate_cmd = std::clamp(att_pitch_deg_, -45.0, 45.0);
+            const double tilt_cos = std::cos(roll_rate_cmd * pn::kDegToRad) *
+                                    std::cos(pitch_rate_cmd * pn::kDegToRad);
+            const double tilt_hover = hover_throttle_ / std::max(tilt_cos, 0.5);
+            // 위에서 계산된 pursuit 추력과 기울기 보상 호버 중 큰 값 (상한 track_throttle)
+            thrust = static_cast<float>(
+                std::min(std::max(static_cast<double>(thrust), tilt_hover), track_throttle_));
+            hold_mode = "현재 자세";
+          } else {
+            roll_rate_cmd = 0.0;
+            pitch_rate_cmd = 0.0;
+            thrust = static_cast<float>(hover_throttle_);
+          }
           idbg.cmd_active = false;
           RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-              "[PN] TRACK 중 PN 출력 %s → 수평 자세·호버 추력 %.2f 유지 (수신 후 %.2fs, "
-              "촬영 후 %.2fs, gate=%.2fs, attitude skip=%zu, GT skip=%zu, GT=%s)",
-              pn_out.valid ? "오래됨" : "무효", hover_throttle_, rx_age,
-              pn_out.valid ? capture_age : -1.0,
-              pn_measurement_age_sec_, pn_attitude_skip_count_, gt_skip_count_,
+              "[PN] TRACK 중 PN 출력 %s → %s 유지 cmd=(%.0f,%.0f)deg thr=%.2f (수신 후 %.2fs, "
+              "촬영 후 %.2fs, gate=%.2fs, hold=%.2fs, attitude skip=%zu, coast skip=%zu, "
+              "GT skip=%zu, GT=%s)",
+              pn_out.valid ? "오래됨" : "무효", hold_mode, roll_rate_cmd, pitch_rate_cmd,
+              thrust, rx_age, pn_out.valid ? capture_age : -1.0,
+              pn_measurement_age_sec_, pn_hold_max_sec_, pn_attitude_skip_count_,
+              pn_coast_skip_count_, gt_skip_count_,
               pn_use_ground_truth_ ? "ON" : "OFF");
         }
       }
 
-      if (++dbg_count_ % 6 == 0) {
+      if (++dbg_count_ % 6 == 0 && guidance_mode_ != 1 && pid_aim_out_.valid) {
+        // err=표적 화면 위치, aim=표적이 있어야 할 위치, pid_in=PID 입력(광축→목표 추력축),
+        // ff=피드포워드, lr=관성 LOS 회전율, vc=PN 에 쓴 접근속도, apn=PN 횡가속, look=추력축-LOS 각
+        const auto &a = pid_aim_out_;
         RCLCPP_INFO(get_logger(),
-                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f "
-                    "tau=%.2fs ease=%.2f thr=%.2f cmd=(%.0f,%.0f)%s",
+                    "TRACK[PID/관성] err=(%.2f,%.2f) aim=(%.3f,%.3f) pid_in=(%.3f,%.3f) "
+                    "ff=(%.0f,%.0f)deg/s lr=%.1fdeg/s vc=%.1f apn=%.1f look=%.1f%s "
+                    "bbox=%.2f tau=%.2fs thr=%.2f cmd=(%.0f,%.0f)deg/s",
+                    filt_err_x_, filt_err_y_, a.aim_x, a.aim_y, ex, ey,
+                    pid_aim_ff_gain_ * a.ff_x * pn::kRadToDeg,
+                    pid_aim_ff_gain_ * a.ff_y * pn::kRadToDeg,
+                    std::hypot(a.ff_x, a.ff_y) * pn::kRadToDeg, a.closing_speed_used_mps,
+                    pn::norm(a.accel_pn_ned), a.look_angle_deg, a.look_limited ? "(제약)" : "",
+                    loom_s_ema_, std::isfinite(tau_sec_) ? tau_sec_ : 9.99, thrust,
+                    roll_rate_cmd, pitch_rate_cmd);
+      } else if (dbg_count_ % 6 == 0) {
+        RCLCPP_INFO(get_logger(),
+                    "TRACK[%s] err=(%.2f,%.2f) g_off=(%.3f,%.3f) losdot=(%.2f,%.2f) "
+                    "bbox=%.2f tau=%.2fs ease=%.2f thr=%.2f cmd=(%.0f,%.0f)%s",
                     guidance_mode_ == 1 ? "PN" : "PID",
-                    filt_err_x_, filt_err_y_,
+                    filt_err_x_, filt_err_y_, g_off_x_, g_off_y_,
                     err_dot_x_, err_dot_y_,
                     loom_s_ema_,
                     std::isfinite(tau_sec_) ? tau_sec_ : 9.99, tau_ease_dbg_, thrust,
@@ -1166,7 +1549,14 @@ class ArmsControlNode : public rclcpp::Node {
       thrust = 0.f;
       align_locked_ = false;
       tau_ease_dbg_ = 1.0;
+      last_pid_thrust_ = 0.0;
+      g_off_x_ = 0.0;
+      g_off_y_ = 0.0;
+      pid_aim_out_ = {};
+      aim_slew_init_ = false;
       pn_guidance_.reset();
+      pn_hold_valid_ = false;
+      los_ned_valid_ = false;
     }
 
     // ---- 유효 스위치 = 상태 스위치 && 재토글 래치 해제 ----
@@ -1427,6 +1817,21 @@ class ArmsControlNode : public rclcpp::Node {
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
   double aim_above_offset_{0.016};  // tan y 단위, 양수=표적보다 화면 위 조준
+  double gravity_comp_gain_{1.0};       // 0=끔, 1=물리 계산값 그대로
+  double gravity_comp_max_tan_{0.22};   // 보상 오프셋 상한(표적이 화면 밖으로 밀리지 않게)
+  double last_pid_thrust_{0.0};         // 직전 틱 PID 추력 (중력 보상 계산용)
+  double g_off_x_{0.0}, g_off_y_{0.0};  // 이번 틱 조준 오프셋 = 표적이 있어야 할 화면 위치 (로그용)
+  // PID 관성 조준 (control.pid_aim.*)
+  bool pid_aim_inertial_{true};
+  pid_aim::Parameters pid_aim_params_{};
+  double pid_aim_look_ratio_{0.7};
+  double pid_aim_ff_gain_{1.0};
+  double pid_aim_rate_max_age_sec_{1.5};
+  double pid_aim_rate_fade_start_sec_{0.3};
+  double pid_aim_slew_tan_per_sec_{0.4};
+  bool aim_slew_init_{false};
+  double aim_f_x_{0.0}, aim_f_y_{0.0};  // 이동 속도 제한을 거친 조준점 [tan]
+  pid_aim::Output pid_aim_out_{};
   double error_lpf_alpha_{0.25};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
@@ -1513,15 +1918,43 @@ class ArmsControlNode : public rclcpp::Node {
   pn::CameraModel pn_camera_{};
   pn::Guidance pn_guidance_{};
   pn::AttitudeBuffer pn_attitudes_{};
+  // PID 재투영: 촬영시점 LOS(NED)를 보관했다가 매 tick 현재 자세로 화면에 다시 투영한다.
+  pn::Vec3 los_ned_meas_{};
+  bool los_ned_valid_{false};
+  rclcpp::Time los_ned_rx_{0, 0, RCL_ROS_TIME};
+  double reproj_max_age_sec_{1.5};   // 이보다 오래 새 측정 없으면 rate 0 (자세 유지)
+  pn::Quaternion att_q_now_{};
   arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
   rclcpp::Time gt_receipt_time_{0, 0, RCL_ROS_TIME};
   bool gt_received_{false};
   // 진단 카운터: PN 갱신을 건너뛴 원인별 누적 횟수 (명령에는 영향 없음)
   std::size_t pn_attitude_skip_count_{0};
   std::size_t gt_skip_count_{0};
+  std::size_t pn_coast_skip_count_{0};
+  // coast 판별: 트랙 박스 중심에서 이 거리(정규화 화면) 안에 같은 프레임 원시 검출이 있어야
+  // PN 측정으로 쓴다. 0 이면 판별 끔(트랙 박스를 그대로 사용).
+  double pn_raw_match_gate_{0.1};
+  struct PendingTrack {
+    builtin_interfaces::msg::Time stamp;
+    arms_msgs::msg::BoundingBox box;
+    rclcpp::Time sample;
+    rclcpp::Time receipt;
+  };
+  std::optional<PendingTrack> pending_track_;
+  builtin_interfaces::msg::Time last_raw_stamp_{};
+  std::vector<arms_msgs::msg::BoundingBox> last_raw_detections_;
+  bool raw_received_{false};
   std::size_t stamp_fallback_count_{0};
   // 마지막으로 PN 이 실제 갱신된 측정의 '수신' 시각 (신선도 게이트 기준)
   rclcpp::Time pn_last_update_rx_{0, 0, RCL_ROS_TIME};
+  // PN 신선도 끊길 때 hold
+  double pn_hold_roll_deg_{0.0}, pn_hold_pitch_deg_{0.0};
+  float  pn_hold_thrust_{0.f};
+  bool   pn_hold_valid_{false};
+  double pn_hold_max_sec_{1.5};
+  double att_roll_deg_{0.0}, att_pitch_deg_{0.0};
+  bool   att_received_{false};
+  rclcpp::Time att_rx_time_{0, 0, RCL_ROS_TIME};
   bool pn_stamp_from_header_{false};
   // 노드마다 /clock 을 받아 처리하는 시점이 달라 다른 노드의 stamp 가 수십 ms '미래'로 보인다
   // (SITL 실측 -0.064 s). 그 범위는 수신 시각으로 잘라 쓴다 — 더 신선하게 취급하는 일은 없다.
@@ -1551,6 +1984,7 @@ class ArmsControlNode : public rclcpp::Node {
   double tau_ease_min_scale_{0.3};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
+  rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_raw_;
   rclcpp::Subscription<arms_msgs::msg::GuidanceGroundTruth>::SharedPtr sub_guidance_gt_;
   rclcpp::Subscription<arms_msgs::msg::AttitudeTelemetry>::SharedPtr sub_attitude_;
   rclcpp::Subscription<arms_msgs::msg::OperatorInput>::SharedPtr sub_input_;

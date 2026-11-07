@@ -72,32 +72,69 @@
       deriv_lpf_alpha: 0.25
       # 감산형 deadzone: |오차| 이하에서는 0, 그 밖에서는 deadzone만큼 뺀다.
       deadzone: 0.0
+      # [legacy 전용 — pid_aim.mode=inertial 이면 무시] 아래 aim_above_offset·gravity_comp_*.
       # 양수면 풍선이 화면 중심보다 아래(tan y 양수)에 놓이도록 조준해 중력 처짐을 보상한다.
+      #   중력 보상(아래 gravity_comp_*) 위에 더하는 수동 미세조정이다.
       aim_above_offset: 0.016
+      # PID 중력 보상 조준: 추력축을 LOS 에 그대로 맞추면 중력 때문에 가속 방향이 LOS 아래로
+      #   처져 공 밑을 지나간다. 자세·추력·LOS 로 sin δ = cos(LOS 앙각)·hover/thrust 만큼
+      #   추력축을 들어 올린다(앙각 60°, thrust 0.6 → δ≈12°, tan≈0.21).
+      # gain: 0=끔, 1=물리 계산값 그대로. max_tan: 오프셋 상한(SITL VFOV 반각 tan≈0.267 보다 작게).
+      gravity_comp_gain: 0.5
+      gravity_comp_max_tan: 0.10
 
       # ── PID와 시간기반 lead ───────────────────────────────────────────
       # 단위: tan 카메라 좌표 → 각속도[deg/s]. PID 출력 한계는 max_cmd_rate_dps 하나다.
       # 튜닝: kp를 낮은 값부터 올리고, 진동 시 낮춘 다음 kd와 lead를 조절한다.
+      # SITL 패널 튜닝값(2026-11-02): kp 200, ki 0, kd 6, lead 0.35.
       roll_pid:
-        kp: 100.0
-        ki: 1.0
-        kd: 3.5
+        kp: 200.0
+        ki: 0.0
+        kd: 6.0
       pitch_pid:
-        kp: 100.0
-        ki: 1.0
-        kd: 3.5
+        kp: 200.0
+        ki: 0.0
+        kd: 6.0
       # lead_gain [s] × err_dot을 PID 입력에 더해 움직이는 표적의 미래 위치를 겨냥한다.
-      lead_gain: 0.0
+      #   legacy 전용. inertial 은 PN 횡가속 + 각속도 피드포워드가 이 역할을 한다.
+      lead_gain: 0.35
       err_dot_alpha: 0.2
       err_dot_clamp: 0.6
       # 구 물리량 시절 지터 대책. false는 순수 PID이며 현재 기본값이다.
       gain_shaping: false
 
+      # ── PID 조준점 구조 ───────────────────────────────────────────────
+      # legacy  : 표적을 '화면 중앙 + 고정 오프셋'에 둔다(자세 추종). 추력 방향만 맞추고
+      #           LOS 수직 속도를 없애는 항이 없어, 화면 오차가 0 근처여도 공 옆을 지나간다.
+      # inertial: 목표 비추력 f = A·l̂ + N·Vc·λ̇ − g 의 방향을 광축 목표로 삼는다.
+      #           PID 입력 = 그 방향의 화면 위치, 관성 LOS 회전은 각속도 피드포워드로 낸다.
+      #           λ̇·Vc 는 PN 필터 추정값(pn.kf_*, pn.target_diameter_m, pn.use_ground_truth 공유).
+      #           추력 = f 의 광축 성분(hover~track_throttle). 근접·τ 감속은 접근 가속에만 곱한다.
+      pid_aim:
+        mode: inertial
+        navigation_ratio: 3.0
+        # LOS 방향 접근 가속. 클수록 빨리 다가가고 추력도 커진다(상한 track_throttle).
+        approach_accel_mps2: 6.0
+        # bbox 로 추정한 Vc 가 작은 발사 직후에도 LOS 회전을 죽이도록 PN 항의 Vc 하한.
+        min_closing_speed_mps: 3.0
+        # 광축이 LOS 에서 ratio × min(HFOV,VFOV)/2 넘게 벗어나지 않게(SITL 0.4 → 6.0°).
+        #   0.7(10.5°)이면 조준점이 뒤집힐 때 표적이 VFOV(반각 15°)를 거의 다 가로질러 이탈했다.
+        look_angle_fov_ratio: 0.4
+        # 1 = 관성 LOS 회전율 그대로 각속도에 더함. 0 = 끔(피드백만).
+        rate_feedforward_gain: 1.0
+        # PN 필터 마지막 갱신(수신 후) 나이에 따라 λ̇ 를 fade_start 부터 max_age 까지 선형으로
+        #   줄여 0 으로 만든다(하드 컷이면 조준점이 순간 이동). 검출 1~3 Hz 기준.
+        los_rate_fade_start_sec: 0.3
+        los_rate_max_age_sec: 1.5
+        # 조준점(표적이 놓일 화면 위치) 이동 속도 상한 [tan/s]. 0 = 제한 없음.
+        #   λ̇ 추정이 한 번에 크게 바뀌어도 PID 입력이 계단으로 뛰지 않게 한다(0.4 ≈ 23°/s).
+        aim_slew_tan_per_sec: 0.4
+
       # ── PN 관성 LOS-rate 유도 ──────────────────────────────────────────
       # guidance_mode: 0=기존 PID/ACRO, 1=PN/Stabilized. 기본은 검증된 PID다.
       # PN은 perception track bbox와 vehicle/attitude를 합성한다. raw IMU/gyro는
       # 직접 쓰지 않고 FC가 추정해 발행한 attitude를 사용한다.
-      guidance_mode: 1
+      guidance_mode: 0
       pn:
         navigation_ratio: 3.0
         # LOS 방향의 접근 가속도. PN 횡가속도와 합쳐 gravity compensation에 사용한다.
@@ -108,8 +145,21 @@
         kf_accel_noise: 0.8
         kf_measurement_noise: 0.0025
         max_lateral_accel_mps2: 12.0
+        # 시야각 제약: 목표 추력축(= 상방 카메라 광축)이 LOS 에서 ratio × min(HFOV,VFOV)/2
+        # 넘게 벗어나지 않게 묶는다. SITL VFOV 29.9° → 0.95 면 14.2°(0.7 이면 10.5°). 0 = 제약 없음(원래 PN).
+        #   제약이 걸리면 LOS 수직 성분(PN 횡가속+중력 상쇄)을 유지하도록 추력이 커지고,
+        #   남는 추력은 접근 가속이 된다(상한 track_throttle).
+        look_angle_fov_ratio: 0.95
+        # coast 차단: 같은 프레임 detections_raw 에 트랙 박스 중심에서 이 거리(정규화 화면)
+        # 안의 원시 검출이 있을 때만 PN 을 갱신한다. 0 = 끔(KF coast 박스도 사용).
+        #   0.1 이면 빠르게 회전할 때 KF 평활 박스가 원시 검출보다 뒤처져 실측이 버려졌다.
+        #   원시 검출이 아예 없는 coast 프레임은 값과 무관하게 계속 걸러진다.
+        raw_match_gate: 0.2
         # detection track 수신시각에 대응하는 attitude가 이보다 오래되면 PN 명령을 차단한다.
         max_measurement_age_sec: 0.20
+        # PN 출력이 끊겨도(coast·검출 지연) 마지막 PN 자세를 이 시간까지 유지한다.
+        # 수평으로 눕히면 상방 카메라가 표적을 FOV 밖으로 놓쳐 데드락이 난다.
+        hold_max_sec: 1.5
         # SITL referee의 Gazebo ground truth LOS-rate/Vc로 PN을 검증한다.
         # 실기체에는 이 토픽이 없으므로 반드시 false를 유지한다.
         use_ground_truth: false
@@ -135,7 +185,7 @@
       # 물리 호버 추력(PX4 MPC_THR_HOVER 와 같은 값). 모델 계산 0.25, SITL 실측 일치.
       #   예전 0.32 는 sitl_bridge 가 Stabilized 추력 곡선을 무시해 실제 0.234 로 나가던 값이다.
       hover_throttle: 0.25
-      track_throttle: 0.60
+      track_throttle: 0.50
       pursuit_gate: 0.20
       pursuit_center_boost: false
 

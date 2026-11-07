@@ -117,6 +117,9 @@ struct Parameters {
   double hover_throttle{0.42};
   double max_throttle{0.70};
   double max_lateral_accel_mps2{12.0};
+  // 상방 고정 카메라(광축 = 추력축 body -z)용 시야각 제약. 목표 추력축이 LOS 에서
+  // ratio × min(HFOV, VFOV)/2 넘게 벗어나지 않게 묶는다. 0 이면 제약 없음(원래 PN 법칙).
+  double look_angle_fov_ratio{0.0};
 };
 
 struct CameraModel {
@@ -145,6 +148,9 @@ struct Output {
   Vec3 acceleration_pn_ned{};
   Mat3 attitude_desired_nb{};
   double throttle{0.0};
+  // 시야각 제약으로 추력축을 LOS 쪽으로 당겼는지, 최종 추력축과 LOS 사이 각.
+  bool look_angle_limited{false};
+  double look_angle_deg{0.0};
 };
 
 class Guidance {
@@ -160,6 +166,7 @@ class Guidance {
 
  private:
   Mat3 desired_attitude(const Vec3 &specific_thrust_ned) const;
+  double max_look_angle_rad() const;
 
   Parameters params_{};
   CameraModel camera_{};

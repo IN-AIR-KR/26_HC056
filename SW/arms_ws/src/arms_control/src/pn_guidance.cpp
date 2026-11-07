@@ -177,6 +177,14 @@ Mat3 Guidance::desired_attitude(const Vec3 &specific_thrust_ned) const {
   return result;
 }
 
+double Guidance::max_look_angle_rad() const {
+  const double ratio = std::clamp(params_.look_angle_fov_ratio, 0.0, 0.95);
+  if (ratio <= 0.0) return 0.0;
+  const double half_h = std::atan(0.5 * camera_.width / camera_.fx);
+  const double half_v = std::atan(0.5 * camera_.height / camera_.fy);
+  return ratio * std::min(half_h, half_v);
+}
+
 bool Guidance::update_detection(double stamp_sec, double x_center, double y_center,
                                 double width, double height, const Quaternion &q_nb,
                                 const Vec3 *los_rate_override_ned,
@@ -225,7 +233,29 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
     a_pn = a_pn * (params_.max_lateral_accel_mps2 / lateral);
   }
   const Vec3 guidance_accel = params_.approach_accel_mps2 * los + a_pn;
-  const Vec3 specific_thrust = guidance_accel - Vec3{0.0, 0.0, kGravity};
+  Vec3 specific_thrust = guidance_accel - Vec3{0.0, 0.0, kGravity};
+
+  // 시야각 제약. 카메라 광축이 추력축(body -z)이라 자세 = 카메라 방향이다. 위 식 그대로면
+  // 중력 상쇄 때문에 추력축이 LOS 보다 늘 더 서 있다(앙각 60° → 기울기 10°, 광축-LOS 20°).
+  // 그러면 VFOV/2(SITL 15°) 밖으로 공이 나가 첫 1 초 안에 표적을 잃는다.
+  //   추력축 방향 d 를 LOS 에서 θmax 이내로 당기고, 크기 T 는 'LOS 수직 성분'
+  //   (PN 횡가속 + 중력 상쇄)을 그대로 내도록 정한다: (T·d)·u = f·u, u = LOS 수직 단위벡터.
+  //   d 가 LOS 에 가까울수록 T 가 커지고 남는 추력은 LOS 방향 접근 가속이 된다.
+  //   max_throttle 에 걸리면 수직 성분이 모자라 경로가 LOS 아래로 처지고, 그만큼 LOS-rate 가
+  //   생겨 PN 이 다시 보정한다.
+  bool look_limited = false;
+  const double max_look = max_look_angle_rad();
+  const Vec3 thrust_axis = normalized(specific_thrust);
+  const double cos_look = std::clamp(dot(thrust_axis, los), -1.0, 1.0);
+  if (max_look > 0.0 && std::acos(cos_look) > max_look) {
+    const Vec3 u = normalized(thrust_axis - cos_look * los);
+    if (norm(u) > 0.5) {
+      const Vec3 d = std::cos(max_look) * los + std::sin(max_look) * u;
+      const double thrust = dot(specific_thrust, u) / std::sin(max_look);
+      specific_thrust = std::max(thrust, 0.0) * d;
+      look_limited = true;
+    }
+  }
   const double throttle = params_.hover_throttle * norm(specific_thrust) / kGravity;
 
   output_.valid = los_filter_.initialized() && scale_initialized_ && range_m > 0.0;
@@ -241,6 +271,9 @@ bool Guidance::update_detection(double stamp_sec, double x_center, double y_cent
   output_.acceleration_pn_ned = a_pn;
   output_.attitude_desired_nb = desired_attitude(specific_thrust);
   output_.throttle = std::clamp(throttle, 0.0, params_.max_throttle);
+  output_.look_angle_limited = look_limited;
+  output_.look_angle_deg =
+      std::acos(std::clamp(dot(normalized(specific_thrust), los), -1.0, 1.0)) * kRadToDeg;
   return true;
 }
 

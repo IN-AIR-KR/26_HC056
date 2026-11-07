@@ -123,6 +123,7 @@ class ArmsSITLCommNode(Node):
         self._thr_curve = dict(THR_CURVE_PARAMS)   # PX4 PARAM_VALUE 로 갱신
         self._reiniting = False        # _initial_setup 재실행 중복 방지
         self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
+        self._px4_main_mode = None     # HEARTBEAT 로 받은 PX4 실제 main mode (변경 시 로그)
         # Track A preserves the established telemetry/logging API.
         self._gps_pub = self.create_publisher(GpsTelemetry, "vehicle/gps", 10)
         self._attitude_pub = self.create_publisher(AttitudeTelemetry, "vehicle/attitude", 10)
@@ -248,6 +249,7 @@ class ArmsSITLCommNode(Node):
                 self._last_rx_wall = wall
                 if t == 'HEARTBEAT':
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+                    self._log_px4_mode(msg)
                 elif t == 'GPS_RAW_INT':
                     self._publish_gps(msg)
                 elif t == 'ATTITUDE':
@@ -281,6 +283,22 @@ class ArmsSITLCommNode(Node):
         gps.fix_type_inferred = False
         gps.valid_fix = fix_type >= 2  # MAVLink: 2D FIX 이상
         self._gps_pub.publish(gps)
+
+    def _log_px4_mode(self, msg):
+        """PX4 가 '실제로' 들어가 있는 main mode 를 바뀔 때마다 남긴다 (진단 전용).
+
+        SET_MODE/CH6 는 요청일 뿐이라, ACRO 가 안 먹으면 rate 명령이 기울기로
+        해석돼 '게인을 바꿔도 거의 안 꺾이는' 상태가 로그에 드러나지 않는다.
+        """
+        if not (msg.base_mode & PX4_BASE_MODE_CUSTOM):
+            return
+        main = (int(msg.custom_mode) >> 16) & 0xFF
+        if main == self._px4_main_mode:
+            return
+        self._px4_main_mode = main
+        name = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 4: "AUTO", 5: "ACRO",
+                6: "OFFBOARD", 7: "STABILIZED"}.get(main, f"?{main}")
+        self.get_logger().info(f"PX4 실제 모드 = {name}")
 
     def _publish_attitude(self, msg):
         """PX4 MAVLink ATTITUDE(rad)를 source-independent vehicle/attitude(deg)로 변환한다."""

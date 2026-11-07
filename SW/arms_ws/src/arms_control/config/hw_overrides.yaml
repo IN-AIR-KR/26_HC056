@@ -47,5 +47,9 @@
       pn:
         stamp_source: receipt
 
+      # PID 관성 조준은 SITL 에서 먼저 검증한다. 실기체 비행 로그로 확인하기 전까지는 예전 구조.
+      pid_aim:
+        mode: legacy
+
       # 자동 모드에서 FC arm을 유지할 상태. 실험 목적에 따라 여기서 빠르게 바꾼다.
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "RTL"]

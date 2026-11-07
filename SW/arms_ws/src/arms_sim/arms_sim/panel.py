@@ -5,7 +5,8 @@ panel.py — A.R.M.S. SITL 튜닝/심판 콘솔 (tkinter GUI)  [arms_sim]
 SITL 전용 개발 콘솔. 운용자 입력은 발행하지 않는다 (그건 가상 조종기 =
 arms_operator 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/RTL) — 읽기전용 구독
-  - Roll/Pitch 부호, PID, τ, 추력, 시간기반 lead 등 → arms_control_node 파라미터
+  - Roll/Pitch 부호, PID, τ, 추력, 시간기반 lead, PN 유도(N·접근 가속도·Vc·칼만) 등
+    → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET → Gazebo world reset + PX4 SITL 재시작 (Gazebo 프로세스는 유지)
 
@@ -276,6 +277,7 @@ class PanelGUI:
         self.pitch_sign = 1.0
         # (노드, 파라미터, 반영함수) — _pull_from_nodes 가 시작할 때 읽어 채운다.
         self._pullables = []
+        self._mission_state = ""   # 마지막 mission/state (유도 방식 전환을 IDLE 로 제한)
         self._applyq = queue.Queue()      # 워커 → 메인 루프 (_poll 이 비운다)
         self._reset_in_progress = False
 
@@ -381,31 +383,28 @@ class PanelGUI:
             return ep, ei, ed
 
         self.roll_kp, self.roll_ki, self.roll_kd = make_pid_group(
-            g_pid, "Roll PID  [px→deg/s]", [455, 0.0, 3.5],
+            g_pid, "Roll PID  [px→deg/s]", [200.0, 0.0, 6.0],
             ["control.roll_pid.kp", "control.roll_pid.ki", "control.roll_pid.kd"])
 
         self.pitch_kp, self.pitch_ki, self.pitch_kd = make_pid_group(
-            g_pid, "Pitch PID  [px→deg/s]", [455, 0.0, 3.5],
+            g_pid, "Pitch PID  [px→deg/s]", [200.0, 0.0, 6.0],
             ["control.pitch_pid.kp", "control.pitch_pid.ki", "control.pitch_pid.kd"])
 
         # ── [제어] 추력 ─────────────────────────────────────────────────────
         g_thr = group(left, "추력  ·  arms_control")
-        tk.Label(g_thr, text="상승 추력 (track_throttle)", fg="#aaaaaa",
-                 bg="#1e1e1e", font=("Arial", 9)).pack(anchor="w")
-        thr_row = tk.Frame(g_thr, bg="#1e1e1e")
-        thr_row.pack(anchor="w")
-        self.thr_entry = tk.Entry(thr_row, width=7, bg="#2e2e2e", fg="white",
-                                  insertbackground="white", relief="flat")
-        self.thr_entry.insert(0, "0.85")   # yaml track_throttle 과 일치 (1.05kg)
-        self.thr_entry.grid(row=0, column=0, padx=(4, 6))
+        # 낮출수록 교전 시간이 길어져 피드백할 시간이 생긴다(호버 0.25 이하는 의미 없음).
+        # 중력 보상량도 이 값으로 계산된다(sin δ ∝ hover/thrust).
+        self.thr_scale = tk.Scale(g_thr, from_=0.25, to=1.0, resolution=0.01,
+                                  orient="horizontal", length=180, bg="#1e1e1e", fg="white",
+                                  label="상승 추력 (track_throttle)",
+                                  highlightthickness=0, troughcolor="#444")
+        self.thr_scale.set(0.50)   # yaml track_throttle 기본값 (시작 시 노드 값으로 덮음)
+        self.thr_scale.pack(pady=(2, 0))
         self._track(CTRL_NODE, "control.track_throttle",
-                    lambda v: (self.thr_entry.delete(0, "end"),
-                               self.thr_entry.insert(0, v)))
-        tk.Button(thr_row, text="적용", bg="#455a64", fg="white",
-                  activebackground="#607d8b", relief="flat",
-                  command=lambda: ros_param_set(
-                      "control.track_throttle", float(self.thr_entry.get()))
-                  ).grid(row=0, column=1)
+                    lambda v: self.thr_scale.set(float(v)))
+        self.thr_scale.bind("<ButtonRelease-1>",
+                            lambda e: ros_param_set("control.track_throttle",
+                                                    float(self.thr_scale.get())))
 
         # ── [발사기] launcher ───────────────────────────────────────────────
         #   슬라이더를 드래그하는 동안 노드에 보낸다(같은 값은 합쳐짐).
@@ -461,7 +460,7 @@ class PanelGUI:
 
         prow = tk.Frame(g_lch, bg="#1e1e1e")
         prow.pack(pady=(4, 0))
-        for deg in (90, 60, 50, 40, 30):
+        for deg in (90, 80, 70, 60, 50):
             tk.Button(prow, text=f"{deg}°", width=4, bg="#37474f", fg="white",
                       relief="flat",
                       command=lambda d=deg: (
@@ -562,14 +561,95 @@ class PanelGUI:
         self.ball_speed.bind("<ButtonRelease-1>",
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
 
-        # ── [유도] arms_control ─────────────────────────────────────────────
-        g_guid = group(right, "유도  ·  PID / PN")
+        # ── [유도 방식] control.guidance_mode — 0=PID/ACRO, 1=PN/Stabilized ──
+        #   두 방식은 PX4 비행 모드(ACRO 각속도 / Stabilized 자세)가 달라서 비행 중에
+        #   바꾸면 명령 해석이 중간에 뒤바뀐다. 그래서 미션 상태가 IDLE 일 때만 보낸다.
+        g_mode = group(right, "유도 방식  ·  arms_control")
+        self.guid_mode = tk.IntVar(value=-1)   # 노드에서 읽기 전에는 아무것도 선택 안 됨
+        self._guid_mode_sent = None
+        mode_row = tk.Frame(g_mode, bg="#1e1e1e")
+        mode_row.pack(anchor="w")
+        for text, val in (("PID", 0), ("PN", 1)):
+            tk.Radiobutton(
+                mode_row, text=text, value=val, variable=self.guid_mode,
+                bg="#1e1e1e", fg="white", selectcolor="#333333",
+                activebackground="#1e1e1e", activeforeground="white",
+                command=self._on_guid_mode,
+            ).pack(side="left", padx=(0, 10))
+        self.guid_mode_lbl = tk.Label(g_mode, text="", fg="#ff8a65", bg="#1e1e1e",
+                                      font=("Arial", 9))
+        self.guid_mode_lbl.pack(anchor="w")
+        self._track(CTRL_NODE, "control.guidance_mode", self._apply_guid_mode)
+
+        # ── [유도] arms_control — PID 경로 ─────────────────────────────────
+        g_guid = group(right, "유도 (PID)  ·  arms_control")
+
+        # 예측 조준(lead) — 움직이는 공의 미래 위치를 겨냥 (control.lead_gain)
+        # guidance_mode=0(PID/ACRO) 경로에서만 쓰인다. PN 은 아래 3열 그룹.
+        def pid_slider(label, lo, hi, res, init, pname):
+            """놓을 때 노드로 보내고, 시작 시 노드 값을 읽어 반영하는 슬라이더."""
+            sc = tk.Scale(g_guid, from_=lo, to=hi, resolution=res, orient="horizontal",
+                          length=180, bg="#1e1e1e", fg="white", label=label,
+                          highlightthickness=0, troughcolor="#444")
+            sc.set(init)
+            sc.pack(pady=(2, 0))
+            self._track(CTRL_NODE, pname, lambda v: sc.set(float(v)))
+            sc.bind("<ButtonRelease-1>",
+                    lambda e: ros_param_set(pname, float(sc.get())))
+            return sc
+
+        # 조준점 구조 (control.pid_aim.mode)
+        #   관성  : 목표 추력축 = A·LOS + N·Vc·LOS-rate − g 방향, LOS 회전은 피드포워드
+        #   legacy: 공을 '화면 중앙 + 고정 오프셋'에 둔다 (아래 legacy 슬라이더만 유효)
+        self.pid_aim_mode = tk.StringVar(value="")
+        aim_row = tk.Frame(g_guid, bg="#1e1e1e")
+        aim_row.pack(anchor="w")
+        tk.Label(aim_row, text="조준점:", fg="#aaaaaa", bg="#1e1e1e").pack(side="left")
+        for text, val in (("관성", "inertial"), ("legacy", "legacy")):
+            tk.Radiobutton(
+                aim_row, text=text, value=val, variable=self.pid_aim_mode,
+                bg="#1e1e1e", fg="white", selectcolor="#333333",
+                activebackground="#1e1e1e", activeforeground="white",
+                command=lambda: ros_param_set("control.pid_aim.mode", self.pid_aim_mode.get()),
+            ).pack(side="left", padx=(4, 6))
+        self._track(CTRL_NODE, "control.pid_aim.mode", lambda v: self.pid_aim_mode.set(str(v)))
+
+        self.aim_accel = pid_slider("[관성] 접근 가속 [m/s²]", 0.0, 15.0, 0.5, 6.0,
+                                    "control.pid_aim.approach_accel_mps2")
+        self.aim_nav = pid_slider("[관성] 항법상수 N", 0.0, 6.0, 0.1, 3.0,
+                                  "control.pid_aim.navigation_ratio")
+        self.aim_ff = pid_slider("[관성] 각속도 피드포워드 gain", 0.0, 1.5, 0.05, 1.0,
+                                 "control.pid_aim.rate_feedforward_gain")
+
+        self.lead = pid_slider("[legacy] 예측 조준 lead [s]", 0.0, 1.5, 0.05, 0.35,
+                               "control.lead_gain")
+        # 중력 보상: 추력·자세·LOS 로 '공보다 얼마나 위를 겨눌지' 자동 계산 (0=끔, 1=물리값)
+        self.grav_gain = pid_slider("[legacy] 중력 보상 gain  (0=끔 / 1=물리값)", 0.0, 1.5, 0.05,
+                                    1.0, "control.gravity_comp_gain")
+        # 보상 오프셋 상한 — VFOV 반각 tan≈0.267 를 넘으면 공이 화면 밖으로 밀린다
+        self.grav_max = pid_slider("[legacy] 중력 보상 상한 [tan]", 0.0, 0.26, 0.01, 0.22,
+                                   "control.gravity_comp_max_tan")
+        # 수동 추가 조준 (중력 보상 위에 더함). 양수 = 공보다 위를 겨눔
+        self.aim_off = pid_slider("[legacy] 추가 조준 오프셋 [tan]  (+=위)", -0.15, 0.30, 0.005,
+                                  0.016, "control.aim_above_offset")
+
+        # ── [PN 유도] arms_control — 3열 ────────────────────────────────────
+        #   a_guidance = approach_accel_mps2 · LOS + clamp(N · Vc · LOS-rate, max_lateral)
+        #   LOS·LOS-rate 는 칼만 필터(kf_*), Vc 는 bbox 크기 변화(target_diameter_m,
+        #   closing_speed_alpha)에서 나온다. 노드는 파라미터 콜백에서 바로
+        #   pn_guidance_.set_parameters() 로 반영하므로 비행 중에도 드래그하는 동안 보낸다
+        #   (같은 값은 ParamBus 가 합침).
+        #   여기 없는 PN 파라미터: max_measurement_age_sec(신선도 안전 게이트, 기동 시만 읽음),
+        #   stamp_source·camera.r_bc(시각 출처/장착 보정 — 튜닝값이 아니라 설정값).
+        pn_col = tk.Frame(cols, bg="#1e1e1e")
+        pn_col.grid(row=0, column=2, sticky="nw", padx=(12, 0))
+        g_pn = group(pn_col, "PN 유도  ·  arms_control")
 
         # PN 검증 시에만 Gazebo referee가 계산한 LOS-rate와 closing speed를 쓴다.
         # 해제하면 평소처럼 영상 측정값 경로이며, 실기체에는 GT 발행자가 없다.
         self.pn_ground_truth = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            g_guid, text="PN 입력: Gazebo GT", variable=self.pn_ground_truth,
+            g_pn, text="PN 입력: Gazebo GT", variable=self.pn_ground_truth,
             bg="#1e1e1e", fg="#f0c84b", selectcolor="#333333",
             activebackground="#1e1e1e", activeforeground="#f0c84b",
             command=lambda: ros_param_set(
@@ -579,16 +659,80 @@ class PanelGUI:
             CTRL_NODE, "control.pn.use_ground_truth",
             lambda v: self.pn_ground_truth.set(str(v).lower() == "true"))
 
-        # 예측 조준(lead) — 움직이는 공의 미래 위치를 겨냥 (control.lead_gain)
-        self.lead = tk.Scale(g_guid, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",
-                             length=180, bg="#1e1e1e", fg="white", label="예측 조준 lead",
-                             highlightthickness=0, troughcolor="#444")
-        self.lead.set(0.0)
-        self.lead.pack(pady=(2, 0))
-        self._track(CTRL_NODE, "control.lead_gain",
-                    lambda v: self.lead.set(float(v)))
-        self.lead.bind("<ButtonRelease-1>",
-                       lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
+        self._pn_drag = set()
+        self._pn_sent = {}
+
+        def pn_section(text):
+            tk.Label(g_pn, text=text, fg="#aaaaaa", bg="#1e1e1e",
+                     font=("Arial", 9, "bold")).pack(anchor="w", pady=(6, 0))
+
+        def pn_slider(label, lo, hi, res, init, pname):
+            sc = tk.Scale(g_pn, from_=lo, to=hi, resolution=res, orient="horizontal",
+                          length=200, bg="#1e1e1e", fg="white", label=label,
+                          highlightthickness=0, troughcolor="#444")
+            sc.set(init)
+            sc.pack(pady=(2, 0))
+
+            def send_now():
+                v = float(sc.get())
+                self._pn_sent[pname] = (v, time.monotonic())
+                ros_param_set(pname, v)
+
+            def send(_e=None):
+                sc.after_idle(send_now)   # 슬라이더 값이 갱신된 '다음'에 읽는다
+
+            def press(_e):
+                self._pn_drag.add(pname)
+
+            def release(_e):
+                self._pn_drag.discard(pname)
+                send()
+
+            sc.bind("<ButtonPress-1>", press)
+            sc.bind("<B1-Motion>", send)
+            sc.bind("<ButtonRelease-1>", release)
+
+            def show(v):
+                if pname in self._pn_drag:
+                    return
+                sent = self._pn_sent.get(pname)
+                if sent and abs(float(v) - sent[0]) > res / 2 and time.monotonic() - sent[1] < 1.5:
+                    return
+                sc.set(float(v))
+            self._track(CTRL_NODE, pname, show)
+            return sc
+
+        pn_section("유도 법칙")
+        self.pn_nav_ratio = pn_slider("항법 상수 N", 0.0, 8.0, 0.1, 3.0,
+                                      "control.pn.navigation_ratio")
+        self.pn_approach = pn_slider("LOS 접근 가속도 [m/s²]", 0.0, 15.0, 0.25, 5.0,
+                                     "control.pn.approach_accel_mps2")
+        self.pn_max_lat = pn_slider("횡가속도 상한 [m/s²]  (0=무제한)", 0.0, 30.0, 0.5, 12.0,
+                                    "control.pn.max_lateral_accel_mps2")
+        # 추력축(= 상방 카메라 광축)이 LOS 에서 ratio × min(HFOV,VFOV)/2 넘게 벗어나지 않게
+        # 묶는다(0.95 → 14.2°). 0 = 제약 없음. 노드 상한 0.95.
+        self.pn_look = pn_slider("시야각 제약 비율  (×FOV/2, 0=끔)", 0.0, 0.95, 0.05, 0.95,
+                                 "control.pn.look_angle_fov_ratio")
+
+        pn_section("접근 속도 Vc 추정")
+        # Vc ∝ 지름이므로 지름이 틀리면 PN 항 전체(N·Vc)가 같은 비율로 틀어진다.
+        self.pn_diam = pn_slider("표적 지름 [m]", 0.05, 3.0, 0.05, 0.5,
+                                 "control.pn.target_diameter_m")
+        self.pn_vc_alpha = pn_slider("Vc 평활 α  (↑빠름·잡음 / ↓느림·매끈)", 0.01, 1.0, 0.01, 0.25,
+                                     "control.pn.closing_speed_alpha")
+
+        pn_section("LOS 칼만 필터")
+        # 단위는 LOS 단위벡터 기준(측정 잡음 ≈ rad, fx=900 에서 1 px ≈ 0.0011).
+        self.pn_kf_q = pn_slider("모델 잡음 Q  (↑빠른 추종 / ↓매끈)", 0.05, 5.0, 0.05, 0.8,
+                                 "control.pn.kf_accel_noise")
+        self.pn_kf_r = pn_slider("측정 잡음 R [rad]  (↑매끈 / ↓빠른 추종)", 0.0005, 0.02, 0.0005,
+                                 0.0025, "control.pn.kf_measurement_noise")
+
+        pn_section("자세 명령 (Stabilized)")
+        # 정규화 스틱 ±1 = ±max_angle_deg 로 보낸다. PX4 는 ±1 을 MPC_MAN_TILT_MAX 로
+        # 해석하므로 둘이 다르면 실제 기울기가 그 비율만큼 틀어진다(SITL px4_params = 65).
+        self.pn_max_angle = pn_slider("풀스틱 각도 [deg]  (= MPC_MAN_TILT_MAX)", 10, 80, 1, 55,
+                                      "control.max_angle_deg")
 
         # 충돌 판정 그룹은 없다. 명중은 Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값이 없고(예전 hit_radius 는 "빗나가도 명중"을 만들 수
@@ -596,6 +740,26 @@ class PanelGUI:
 
         self._pull_from_nodes()
         self._poll()
+
+    def _apply_guid_mode(self, v):
+        """노드에서 읽은 guidance_mode 를 라디오 버튼에 반영."""
+        self._guid_mode_sent = int(v)
+        self.guid_mode.set(self._guid_mode_sent)
+        self.guid_mode_lbl.config(text="")
+
+    def _on_guid_mode(self):
+        """라디오 버튼 클릭 — IDLE 일 때만 노드에 보낸다."""
+        want = self.guid_mode.get()
+        if want == self._guid_mode_sent:
+            return
+        if self._mission_state not in ("", "IDLE"):
+            # 비행 중 전환 거부: 버튼을 원래 값으로 되돌린다
+            self.guid_mode.set(self._guid_mode_sent if self._guid_mode_sent is not None else -1)
+            self.guid_mode_lbl.config(text=f"{self._mission_state} 중에는 못 바꿈 (IDLE 에서)")
+            return
+        ros_param_set("control.guidance_mode", want)
+        self._guid_mode_sent = want
+        self.guid_mode_lbl.config(text="")
 
     def _track(self, node, param, apply_fn):
         """시작할 때 노드에서 읽어와 위젯에 반영할 항목을 등록한다."""
@@ -812,6 +976,7 @@ class PanelGUI:
                         bg="#b71c1c" if launched else
                            ("#2e7d32" if msg.data.startswith("장전됨") else "#455a64"))
                 elif isinstance(msg, MissionState):
+                    self._mission_state = msg.state or ""
                     color = STATE_COLOR.get(msg.state, "#888888")
                     self.state_lbl.config(text=msg.state or "—", bg=color)
                     self.info_lbl.config(

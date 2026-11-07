@@ -10,7 +10,7 @@
   ros__parameters:
     enabled: false
     alt: 30.0
-    speed: 3.6
+    speed: 0.8
     target: balloon
     pos_x: 5.0
     pos_y: -5.0

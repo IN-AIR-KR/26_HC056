@@ -57,6 +57,8 @@ class Harness(Node):
         self.pub_io = self.create_publisher(IoStatus, ns + "io/status", 10)
         self.pub_att = self.create_publisher(AttitudeTelemetry, ns + "vehicle/attitude", 10)
         self.pub_det = self.create_publisher(DetectionArray, ns + "perception/detections", 10)
+        # 실제 perception 처럼 같은 header 의 원시 검출도 낸다(control 이 coast 박스를 걸러냄).
+        self.pub_det_raw = self.create_publisher(DetectionArray, ns + "perception/detections_raw", 10)
         self.create_subscription(FlightCommand, ns + "control/flight_command", self._on_cmd, 50)
         self.create_subscription(MissionState, ns + "mission/state", self._on_state, 50)
         self.create_subscription(PnDebug, ns + "control/pn_debug", self._on_pn, 50)
@@ -102,6 +104,7 @@ class Harness(Node):
             b.confidence = 0.9
             d.detections.append(b)
             self.last_target_t = time.monotonic()
+        self.pub_det_raw.publish(d)
         self.pub_det.publish(d)
 
     def _tick_io(self):

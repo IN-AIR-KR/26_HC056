@@ -16,6 +16,7 @@ find_package(arms_msgs REQUIRED)
 # Library: state machine + PID
 # -----------------------------------------------------------------------
 add_library(arms_control_lib
+  src/pid_aim.cpp
   src/pid_controller.cpp
   src/pn_guidance.cpp
   src/state_machine.cpp
@@ -51,6 +52,9 @@ if(BUILD_TESTING)
   add_executable(pn_guidance_smoke test/pn_guidance_smoke.cpp)
   target_link_libraries(pn_guidance_smoke arms_control_lib)
   add_test(NAME pn_guidance_smoke COMMAND pn_guidance_smoke)
+  add_executable(pid_aim_test test/pid_aim_test.cpp)
+  target_link_libraries(pid_aim_test arms_control_lib)
+  add_test(NAME pid_aim_test COMMAND pid_aim_test)
   add_executable(state_machine_safety_test test/state_machine_safety_test.cpp)
   target_link_libraries(state_machine_safety_test arms_control_lib)
   add_test(NAME state_machine_safety_test COMMAND state_machine_safety_test)

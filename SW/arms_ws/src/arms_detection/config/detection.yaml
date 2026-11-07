@@ -54,4 +54,4 @@
       confirm_frames: 3 # NEW→TRACKED: 같은 위치 연속검출 이만큼이면 표적 확정
       confirm_dist: 0.035 # NEW: "같은 위치" 연속 판정 중심거리(정규화)
       jump_gate: 0.4 # TRACKED 유지 게이트: 예측서 이 거리 넘게 튄 검출은 기각→miss (0=off)
-      max_age: 8 # LOST→REMOVED: 연속 miss 이만큼이면 표적 제거
+      max_age: 6 # LOST→REMOVED: 연속 miss 이만큼이면 표적 제거 (2 는 순간 놓침마다 KF 리셋·박스 깜빡임)
