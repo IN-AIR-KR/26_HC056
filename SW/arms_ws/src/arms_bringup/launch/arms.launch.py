@@ -135,6 +135,7 @@ def generate_launch_description():
             namespace="arms", name="arms_ui_node",
             output="screen",
             parameters=[str(ui_config), {
+                "ui.restart_button": True,
                 "ui.fullscreen": ParameterValue(
                     LaunchConfiguration("fullscreen"), value_type=bool),
                 "ui.debug": ParameterValue(

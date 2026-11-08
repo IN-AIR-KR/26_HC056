@@ -30,3 +30,5 @@
       gps_timeout_sec: 2.0
       power_button: false
       power_off_cmd: systemctl poweroff
+      restart_button: false
+      restart_cmd: systemctl --no-ask-password reboot

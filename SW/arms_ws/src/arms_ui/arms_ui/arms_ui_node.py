@@ -224,10 +224,12 @@ class ArmsUINode(Node):
         self.require_parameter("ui.gps_timeout_sec", Parameter.Type.DOUBLE)
         self._keep_aspect = True    # True=레터박스(비율 유지, 잘림 없음), False=강제 스트레치
 
-        # 터치(=마우스 클릭)로 누르는 전원 종료 버튼. 누르면 즉시 끄지 않고 확인 받는다.
+        # 터치로 누르는 전원 종료/재시작 버튼은 확인을 받은 뒤 실행한다.
         self.require_parameter("ui.power_button", Parameter.Type.BOOL)
         self.require_parameter("ui.power_off_cmd", Parameter.Type.STRING)
-        self._confirm_shutdown = False    # 확인 다이얼로그 표시 중 여부
+        self.declare_parameter("ui.restart_button", False)
+        self.declare_parameter("ui.restart_cmd", "systemctl --no-ask-password reboot")
+        self._pending_power_action = None
         self._btn_rects = {}              # 버튼 히트박스(원본 프레임 좌표): name→(x1,y1,x2,y2)
         self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 표시좌표→원본좌표 역변환(x0,y0,sx,sy)
 
@@ -442,7 +444,8 @@ class ArmsUINode(Node):
         self._draw_link_status(frame)            # 모드·TELM 연결 표시
         self._draw_battery(frame)
         self._draw_component_status(frame)
-        self._draw_power_ui(frame)               # 전원 버튼 사용 가능하게
+        gps_bottom = self._draw_gps(frame)
+        self._draw_power_ui(frame, gps_bottom)
         self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 이미 화면 크기 → 항등(터치 매핑)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
@@ -645,7 +648,7 @@ class ArmsUINode(Node):
         # 배터리(전압/퍼센트)는 하단 중앙에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
         # GPS fix/위성수/고도/지상속도는 우상단에 네 줄로 표시한다.
-        self._draw_gps(frame)
+        gps_bottom = self._draw_gps(frame)
         self._draw_component_status(frame)
         # 검출기 작동여부·confidence·모드 텍스트는 디버그 모드에서만(메인은 깔끔하게).
         if self._debug and not self._manual_mode and (
@@ -653,7 +656,7 @@ class ArmsUINode(Node):
                 "SEARCH", "LOCK", "BOOST", "TRACK"):
             self._draw_detector_status(frame)
         # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
-        self._draw_power_ui(frame)
+        self._draw_power_ui(frame, gps_bottom)
         # 화면 맞춤/우측 진단 패널을 붙이기 전 검출 화면 원본을 캡처 대상으로 쓴다.
         detection_capture = frame.copy()
         if self._cv_debug:
@@ -923,29 +926,41 @@ class ArmsUINode(Node):
         cv2.putText(frame, text, (tx, ty), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, text, (tx, ty), font, scale, color, thick, cv2.LINE_AA)
 
-    def _draw_power_ui(self, frame):
-        """우상단 전원(OFF) 버튼과, 눌렀을 때의 종료 확인 다이얼로그를 그린다.
-        터치 히트박스는 self._btn_rects(원본 프레임 좌표)에 기록한다."""
+    def _draw_power_ui(self, frame, gps_bottom):
+        """전원 버튼과 확인 창의 터치 영역을 원본 프레임 좌표에 기록한다."""
         self._btn_rects = {}
-        if not self.get_parameter("ui.power_button").value:
-            self._confirm_shutdown = False
-            return
         h, w = frame.shape[:2]
-        m  = max(8, int(h * 0.02))
-        bs = max(46, int(h * 0.12))
-        x2, y1 = w - m, m
-        x1, y2 = x2 - bs, y1 + bs
-        self._btn_rects["power"] = (x1, y1, x2, y2)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (30, 30, 200), -1)   # 빨강(BGR)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
-        self._put_text_in_rect(frame, "OFF", x1, y1, x2, y2,
-                               (255, 255, 255), max(0.5, bs / 90.0), 2)
+        margin = max(10, int(h * 0.02))
+        right = w - margin
+        white = (255, 255, 255)
+        if self.get_parameter("ui.power_button").value:
+            size = max(46, int(h * 0.12))
+            rect = (right - size, margin, right, margin + size)
+            self._btn_rects["power"] = rect
+            cv2.rectangle(frame, rect[:2], rect[2:], (30, 30, 200), -1)
+            cv2.rectangle(frame, rect[:2], rect[2:], white, 2)
+            self._put_text_in_rect(frame, "OFF", *rect, white, max(0.5, size / 90.0), 2)
 
-        if self._confirm_shutdown:
-            self._draw_confirm_dialog(frame)
+        if self.get_parameter("ui.restart_button").value:
+            top = gps_bottom + margin
+            if "power" in self._btn_rects:
+                top = max(top, self._btn_rects["power"][3] + margin)
+            height = max(30, int(h * 0.065))
+            width = max(104, int(height * 3.4))
+            rect = (right - width, top, right, top + height)
+            self._btn_rects["restart"] = rect
+            cv2.rectangle(frame, rect[:2], rect[2:], (140, 85, 25), -1)
+            cv2.rectangle(frame, rect[:2], rect[2:], white, 2)
+            self._put_text_in_rect(frame, "RESTART", *rect, white, height / 54.0, 2)
 
-    def _draw_confirm_dialog(self, frame):
-        """화면 중앙에 '정말 끄겠습니까?' 확인 모달 (YES/NO 버튼)."""
+        if self._pending_power_action in self._btn_rects:
+            title = "RESTART JETSON?" if self._pending_power_action == "restart" else "SHUT DOWN?"
+            self._draw_confirm_dialog(frame, title)
+        else:
+            self._pending_power_action = None
+
+    def _draw_confirm_dialog(self, frame, title):
+        """화면 중앙에 전원 동작 확인 모달을 그린다."""
         h, w = frame.shape[:2]
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
@@ -955,7 +970,7 @@ class ArmsUINode(Node):
         bx2, by2 = bx1 + bw, by1 + bh
         cv2.rectangle(frame, (bx1, by1), (bx2, by2), (45, 45, 45), -1)
         cv2.rectangle(frame, (bx1, by1), (bx2, by2), (255, 255, 255), 2)
-        self._put_text_in_rect(frame, "SHUT DOWN?", bx1, by1, bx2,
+        self._put_text_in_rect(frame, title, bx1, by1, bx2,
                                by1 + int(bh * 0.42), (255, 255, 255),
                                max(0.7, w / 900.0), 2)
         # YES / NO 버튼
@@ -985,24 +1000,30 @@ class ArmsUINode(Node):
             r = self._btn_rects.get(name)
             return r is not None and r[0] <= rx <= r[2] and r[1] <= ry <= r[3]
 
-        if self._confirm_shutdown:
+        if self._pending_power_action:
             if hit("yes"):
-                self._confirm_shutdown = False
-                self._do_power_off()
+                action = self._pending_power_action
+                self._pending_power_action = None
+                self._run_power_action(action)
             elif hit("no"):
-                self._confirm_shutdown = False       # 취소
+                self._pending_power_action = None
         elif hit("power"):
-            self._confirm_shutdown = True             # 확인 다이얼로그 띄움(바로 안 끔)
+            self._pending_power_action = "power"
+        elif hit("restart"):
+            self._pending_power_action = "restart"
 
-    def _do_power_off(self):
-        """확인된 경우에만 전원 종료 명령 실행."""
-        cmd = str(self.get_parameter("ui.power_off_cmd").value)
-        self.get_logger().warn(f"전원 종료 확인됨 → 실행: {cmd}")
+    def _run_power_action(self, action):
+        """확인된 전원 동작을 실행한다."""
+        if action == "restart" and self._latest_state.armed:
+            self.get_logger().warn("ARM 상태에서는 Jetson을 재시작할 수 없습니다.")
+            return
+        param = "ui.restart_cmd" if action == "restart" else "ui.power_off_cmd"
+        cmd = str(self.get_parameter(param).value)
+        self.get_logger().warn(f"전원 동작 확인됨 → 실행: {cmd}")
         try:
-            subprocess.Popen(cmd, shell=True,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            self.get_logger().error(f"전원 종료 명령 실패: {e}")
+            subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL)
+        except OSError as e:
+            self.get_logger().error(f"전원 명령 실패: {e}")
 
     def _draw_crosshair(self, frame):
         """화면 정중앙 조준 십자선 — 자동/수동 모두 항상 표시."""
@@ -1104,13 +1125,18 @@ class ArmsUINode(Node):
         thick = max(1, int(round(scale * 2)))
         margin = max(10, int(h * 0.02))
         line_h = max(20, int(h * 0.048))
+        right = w - margin
+        if self.get_parameter("ui.power_button").value:
+            right -= max(46, int(h * 0.12)) + margin
         for i, text in enumerate(lines):
             (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
-            x = max(margin, w - margin - tw)
+            x = max(margin, right - tw)
             y = margin + th + i * line_h
             line_color = color if i == 0 else (255, 255, 255)
             cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
             cv2.putText(frame, text, (x, y), font, scale, line_color, thick, cv2.LINE_AA)
+
+        return y
 
     def _draw_component_status(self, frame):
         """좌측 중단의 node-list 기반 구성요소 상태 (online/missing)."""

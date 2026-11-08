@@ -555,9 +555,9 @@ class ArmsControlNode : public rclcpp::Node {
                           joy_manual_mode_ ? "MANUAL (Angle)" : "AUTO (Acro)");
             }
           }
-          if (launch && !prev_btn_[3]) {
-            sm_->on_launch_button();
-          }
+          // if (launch && !prev_btn_[3]) {
+          //   sm_->on_launch_button();
+          // }
 
           joy_arm_  = static_cast<bool>(arm);
           joy_rtl_  = static_cast<bool>(rtl);
