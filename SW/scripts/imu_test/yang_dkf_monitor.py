@@ -20,10 +20,11 @@ from arms_msgs.msg import YangDebug
 
 
 class YangDkfMonitor(Node):
-    def __init__(self, topic: str, min_hz: float):
+    def __init__(self, topic: str, min_hz: float, max_image_age: float):
         super().__init__("arms_yang_dkf_monitor")
         self._topic = topic
         self._min_hz = min_hz
+        self._max_image_age = max_image_age
         self._stamps = deque()
         self._last = None
         self._last_receive = 0.0
@@ -59,7 +60,11 @@ class YangDkfMonitor(Node):
             self._last.image_x,
             self._last.image_y,
         )
-        return all(math.isfinite(value) for value in values) and self._rate_hz(now) >= self._min_hz
+        return (
+            self._last.image_age_sec <= self._max_image_age
+            and all(math.isfinite(value) for value in values)
+            and self._rate_hz(now) >= self._min_hz
+        )
 
     def _report(self):
         now = time.monotonic()
@@ -89,13 +94,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--topic", default="/arms/control/yang_debug")
     parser.add_argument("--min-hz", type=float, default=35.0)
+    parser.add_argument("--max-image-age", type=float, default=0.5,
+                        help="maximum age of the last detection correction in seconds")
     parser.add_argument("--duration", type=float, default=0.0)
     args, ros_args = parser.parse_known_args()
-    if args.min_hz < 0.0 or args.duration < 0.0:
-        parser.error("min-hz and duration must be >= 0")
+    if args.min_hz < 0.0 or args.max_image_age < 0.0 or args.duration < 0.0:
+        parser.error("min-hz, max-image-age, and duration must be >= 0")
 
     rclpy.init(args=ros_args)
-    node = YangDkfMonitor(args.topic, args.min_hz)
+    node = YangDkfMonitor(args.topic, args.min_hz, args.max_image_age)
     started = time.monotonic()
     try:
         while rclpy.ok():

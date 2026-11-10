@@ -33,5 +33,6 @@ python3 scripts/imu_test/imu_monitor.py --duration 10
 python3 scripts/imu_test/yang_dkf_monitor.py
 ```
 
-`/arms/control/yang_debug`가 약 IMU 수신률로 표시되고 `PASS`가 나오면, 영상 지연을
-보정하는 DKF 상태 전파와 현재 시각 재전파가 동작한 것이다.
+`/arms/control/yang_debug`가 약 IMU 수신률로 표시되고, 마지막 영상 보정의 나이가
+0.5초 이하인 상태에서 `PASS`가 나오면 영상 지연을 보정하는 DKF 상태 전파와 현재
+시각 재전파가 동작한 것이다. 표적 유실 뒤 IMU만 적분한 상태는 `CHECK`로 표시된다.
