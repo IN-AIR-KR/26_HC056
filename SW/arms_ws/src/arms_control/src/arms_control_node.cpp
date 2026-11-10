@@ -14,6 +14,7 @@
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/pn_guidance.hpp"
 #include "arms_control/state_machine.hpp"
+#include "arms_control/yang_dkf.hpp"
 #include "arms_msgs/msg/attitude_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/flight_command.hpp"
@@ -23,8 +24,10 @@
 #include "arms_msgs/msg/mission_state.hpp"
 #include "arms_msgs/msg/operator_input.hpp"
 #include "arms_msgs/msg/pn_debug.hpp"
+#include "arms_msgs/msg/yang_debug.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/imu.hpp"
 #include "std_msgs/msg/empty.hpp"
 
 using namespace std::chrono_literals;
@@ -87,6 +90,14 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.pn.max_measurement_age_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.pn.use_ground_truth", rclcpp::ParameterType::PARAMETER_BOOL);
     declare_required_parameter("control.pn.camera.r_bc", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    declare_required_parameter("control.yang.initial_range_m", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.gyro_noise_radps", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.accel_noise_mps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.gyro_bias_rw_radps2", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.accel_bias_rw_mps3", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.image_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.history_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.camera.r_cb", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
 
     declare_required_parameter("mission.sitl_auto_launch", rclcpp::ParameterType::PARAMETER_BOOL);
     // 종말 RTL 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
@@ -306,6 +317,19 @@ class ArmsControlNode : public rclcpp::Node {
     std::copy(pn_r_bc.begin(), pn_r_bc.end(), pn_camera_.r_bc.v.begin());
     pn_guidance_.set_parameters(pn_params_);
     pn_guidance_.set_camera(pn_camera_);
+    yang_params_.initial_range_m = get_parameter("control.yang.initial_range_m").as_double();
+    yang_params_.gyro_noise_radps = get_parameter("control.yang.gyro_noise_radps").as_double();
+    yang_params_.accel_noise_mps2 = get_parameter("control.yang.accel_noise_mps2").as_double();
+    yang_params_.gyro_bias_rw_radps2 = get_parameter("control.yang.gyro_bias_rw_radps2").as_double();
+    yang_params_.accel_bias_rw_mps3 = get_parameter("control.yang.accel_bias_rw_mps3").as_double();
+    yang_params_.image_noise = get_parameter("control.yang.image_noise").as_double();
+    yang_params_.history_sec = get_parameter("control.yang.history_sec").as_double();
+    const auto yang_r_cb = get_parameter("control.yang.camera.r_cb").as_double_array();
+    if (yang_r_cb.size() != 9) {
+      throw std::runtime_error("control.yang.camera.r_cb must contain exactly 9 values");
+    }
+    for (int i = 0; i < 9; ++i) yang_params_.r_cb(i / 3, i % 3) = yang_r_cb[i];
+    yang_dkf_.set_parameters(yang_params_);
     near_size_start_ = get_parameter("control.near_size_start").as_double();
     near_size_full_ = get_parameter("control.near_size_full").as_double();
     min_gain_scale_ = get_parameter("control.min_gain_scale").as_double();
@@ -462,6 +486,7 @@ class ArmsControlNode : public rclcpp::Node {
     pub_control_diag_ = create_publisher<arms_msgs::msg::ControlDebug>("control/diagnostics", 10);
     // PN 추정값·실제 PN 입력·명령을 분리해 기록한다. Gazebo GT는 별도 토픽으로 비교한다.
     pub_pn_debug_ = create_publisher<arms_msgs::msg::PnDebug>("control/pn_debug", 10);
+    pub_yang_debug_ = create_publisher<arms_msgs::msg::YangDebug>("control/yang_debug", 10);
     pub_flight_cmd_ = create_publisher<arms_msgs::msg::FlightCommand>("control/flight_command", 10);
 
     // ----------------------------------------------------------------
@@ -484,29 +509,56 @@ class ArmsControlNode : public rclcpp::Node {
           // MAVLink는 서로 다른 time base를 쓰므로 동기화에는 이 노드의 수신
           // 시각을 사용한다. 원본 image header는 rosbag/영상 동기화용으로 보존한다.
           const auto sample = now();
-          pn::Quaternion attitude;
-          if (!pn_attitudes_.interpolate(
-                  sample.seconds(), pn_measurement_age_sec_, attitude)) {
-            return;
+          if (guidance_mode_ == 1) {
+            pn::Quaternion attitude;
+            if (!pn_attitudes_.interpolate(
+                    sample.seconds(), pn_measurement_age_sec_, attitude)) {
+              return;
+            }
+            const pn::Vec3 *gt_los_rate = nullptr;
+            const double *gt_closing_speed = nullptr;
+            pn::Vec3 gt_rate;
+            double gt_speed = 0.0;
+            if (pn_use_ground_truth_) {
+              const bool gt_fresh = gt_received_ && latest_gt_.valid &&
+                  (sample - gt_receipt_time_).seconds() >= 0.0 &&
+                  (sample - gt_receipt_time_).seconds() <= pn_measurement_age_sec_;
+              if (!gt_fresh) return;
+              gt_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
+                         latest_gt_.los_rate_z};
+              gt_speed = latest_gt_.closing_speed_mps;
+              gt_los_rate = &gt_rate;
+              gt_closing_speed = &gt_speed;
+            }
+            pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
+                                          best->width, best->height, attitude,
+                                          gt_los_rate, gt_closing_speed);
+          } else if (guidance_mode_ == 2) {
+            // DKF correction is deliberately aligned to the camera capture stamp,
+            // not the delayed detection callback arrival time (paper Eq. 32--36).
+            rclcpp::Time image_stamp(msg->header.stamp);
+            if (image_stamp.nanoseconds() == 0) image_stamp = sample;
+            double image_x = 0.0, image_y = 0.0;
+            error_to_tan(best->x_center - 0.5, best->y_center - 0.5, image_x, image_y);
+            const Eigen::Vector2d image{image_x, image_y};
+            if (!yang_dkf_.initialized()) {
+              // There is no observer history before the first image. Seed it at
+              // the receive time; every later image is corrected at capture time
+              // and replayed through the stored IMU history.
+              pn::Quaternion attitude;
+              if (!pn_attitudes_.interpolate(
+                      sample.seconds(), yang_params_.history_sec, attitude)) {
+                return;
+              }
+              const Eigen::Quaterniond q_nb(
+                  attitude.w, attitude.x, attitude.y, attitude.z);
+              yang_dkf_.initialize(sample.seconds(), q_nb, image);
+              RCLCPP_INFO(get_logger(), "Yang DKF initialized at t=%.3f", sample.seconds());
+            } else if (!yang_dkf_.correct_delayed(image_stamp.seconds(), image)) {
+              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                  "Yang DKF delayed image correction rejected");
+            }
           }
-          const pn::Vec3 *gt_los_rate = nullptr;
-          const double *gt_closing_speed = nullptr;
-          pn::Vec3 gt_rate;
-          double gt_speed = 0.0;
-          if (pn_use_ground_truth_) {
-            const bool gt_fresh = gt_received_ && latest_gt_.valid &&
-                (sample - gt_receipt_time_).seconds() >= 0.0 &&
-                (sample - gt_receipt_time_).seconds() <= pn_measurement_age_sec_;
-            if (!gt_fresh) return;
-            gt_rate = {latest_gt_.los_rate_x, latest_gt_.los_rate_y,
-                       latest_gt_.los_rate_z};
-            gt_speed = latest_gt_.closing_speed_mps;
-            gt_los_rate = &gt_rate;
-            gt_closing_speed = &gt_speed;
-          }
-          pn_guidance_.update_detection(sample.seconds(), best->x_center, best->y_center,
-                                        best->width, best->height, attitude,
-                                        gt_los_rate, gt_closing_speed);
         });
 
     sub_guidance_gt_ = create_subscription<arms_msgs::msg::GuidanceGroundTruth>(
@@ -529,6 +581,39 @@ class ArmsControlNode : public rclcpp::Node {
                                   msg->roll_deg * pn::kDegToRad,
                                   msg->pitch_deg * pn::kDegToRad,
                                   msg->yaw_deg * pn::kDegToRad));
+        });
+
+    sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
+        "vehicle/imu_raw", rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::Imu::SharedPtr msg) {
+          if (guidance_mode_ != 2 || !yang_dkf_.initialized()) return;
+          const auto stamp = now();
+          if (!yang_dkf_.predict(
+              stamp.seconds(),
+              {msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z},
+              {msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z})) {
+            return;
+          }
+          const auto &out = yang_dkf_.output();
+          arms_msgs::msg::YangDebug debug;
+          debug.header.stamp = stamp;
+          debug.valid = out.valid;
+          debug.image_age_sec = out.last_image_age_sec;
+          debug.relative_position_north_m = out.state.p_r.x();
+          debug.relative_position_east_m = out.state.p_r.y();
+          debug.relative_position_down_m = out.state.p_r.z();
+          debug.relative_velocity_north_mps = out.state.v_r.x();
+          debug.relative_velocity_east_mps = out.state.v_r.y();
+          debug.relative_velocity_down_mps = out.state.v_r.z();
+          debug.image_x = out.state.image.x();
+          debug.image_y = out.state.image.y();
+          debug.gyro_bias_x_radps = out.state.bias_gyr.x();
+          debug.gyro_bias_y_radps = out.state.bias_gyr.y();
+          debug.gyro_bias_z_radps = out.state.bias_gyr.z();
+          debug.accel_bias_x_mps2 = out.state.bias_acc.x();
+          debug.accel_bias_y_mps2 = out.state.bias_acc.y();
+          debug.accel_bias_z_mps2 = out.state.bias_acc.z();
+          pub_yang_debug_->publish(debug);
         });
 
     sub_input_ = create_subscription<arms_msgs::msg::OperatorInput>(
@@ -627,6 +712,7 @@ class ArmsControlNode : public rclcpp::Node {
           loom_s_ema_ = loom_rate_ema_ = 0.0;
           loom_init_ = false;
           pn_guidance_.reset();
+          yang_dkf_.reset();
           pn_attitudes_.clear();
           gt_received_ = false;
           align_locked_ = false;
@@ -1043,6 +1129,15 @@ class ArmsControlNode : public rclcpp::Node {
         }
       }
 
+      // guidance_mode=2 currently exercises only the delayed EKF. It must
+      // never fall through to the tuned PID output while no Yang controller
+      // command has been connected yet.
+      if (guidance_mode_ == 2) {
+        roll_rate_cmd = 0.0;
+        pitch_rate_cmd = 0.0;
+        thrust = 0.0F;
+      }
+
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
                     "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f "
@@ -1407,6 +1502,8 @@ class ArmsControlNode : public rclcpp::Node {
   pn::Parameters pn_params_{};
   pn::CameraModel pn_camera_{};
   pn::Guidance pn_guidance_{};
+  yang::Parameters yang_params_{};
+  yang::DelayedKalmanFilter yang_dkf_{};
   pn::AttitudeBuffer pn_attitudes_{};
   arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
   rclcpp::Time gt_receipt_time_{};
@@ -1437,6 +1534,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<arms_msgs::msg::GuidanceGroundTruth>::SharedPtr sub_guidance_gt_;
   rclcpp::Subscription<arms_msgs::msg::AttitudeTelemetry>::SharedPtr sub_attitude_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
   rclcpp::Subscription<arms_msgs::msg::OperatorInput>::SharedPtr sub_input_;
   rclcpp::Subscription<arms_msgs::msg::IoStatus>::SharedPtr sub_io_status_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;
@@ -1446,6 +1544,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<arms_msgs::msg::ControlDebug>::SharedPtr pub_control_diag_;
   rclcpp::Publisher<arms_msgs::msg::PnDebug>::SharedPtr pub_pn_debug_;
+  rclcpp::Publisher<arms_msgs::msg::YangDebug>::SharedPtr pub_yang_debug_;
   rclcpp::Publisher<arms_msgs::msg::FlightCommand>::SharedPtr pub_flight_cmd_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 

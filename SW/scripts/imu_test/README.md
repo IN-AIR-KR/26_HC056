@@ -23,3 +23,15 @@ python3 scripts/imu_test/imu_monitor.py --duration 10
 - 정지 상태에서 `|a|`가 약 `9.81 m/s²`다.
 
 이 스크립트는 읽기 전용이다. FC에 명령을 보내거나 ARM 상태를 바꾸지 않는다.
+
+## Yang delayed-EKF 확인
+
+`control.guidance_mode: 2`로 실행하면 PID/PN 대신 Yang 관측기만 동작하며, 기체에는
+추력·자세 명령을 내보내지 않는다. 표적을 한 번 검출한 뒤 다음을 실행한다.
+
+```bash
+python3 scripts/imu_test/yang_dkf_monitor.py
+```
+
+`/arms/control/yang_debug`가 약 IMU 수신률로 표시되고 `PASS`가 나오면, 영상 지연을
+보정하는 DKF 상태 전파와 현재 시각 재전파가 동작한 것이다.

@@ -48,7 +48,8 @@ class FlightRecorder(Node):
         # 녹화할 토픽 목록. UI 영상·원본 카메라 수신 Header + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
         #   detections_raw = 칼만 적용 전 원시 측정값(추후 KF 튜닝 재현용).
         #   diagnostics=PID 제어 오차·lead·스케줄링·명령·추력 스냅샷,
-        #   pn_debug=PN 추정/입력/명령, sim/guidance_ground_truth=Gazebo 기준값이다.
+        #   pn_debug=PN 추정/입력/명령, yang_debug=Yang DKF 상태,
+        #   sim/guidance_ground_truth=Gazebo 기준값이다.
         #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
         #   imu_raw=DKF 입력용 raw gyro/accelerometer, battery=배터리 전용 토픽이다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.

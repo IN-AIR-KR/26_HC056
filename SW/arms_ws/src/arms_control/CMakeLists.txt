@@ -10,7 +10,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(arms_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 # -----------------------------------------------------------------------
 # Library: state machine + PID
@@ -19,6 +21,7 @@ add_library(arms_control_lib
   src/pid_controller.cpp
   src/pn_guidance.cpp
   src/state_machine.cpp
+  src/yang_dkf.cpp
 )
 
 target_include_directories(arms_control_lib PUBLIC
@@ -30,6 +33,7 @@ ament_target_dependencies(arms_control_lib
   rclcpp
   arms_msgs
 )
+target_link_libraries(arms_control_lib Eigen3::Eigen)
 
 # -----------------------------------------------------------------------
 # Executable: arms_control_node
@@ -44,6 +48,7 @@ ament_target_dependencies(arms_control_node
   rclcpp
   std_msgs
   geometry_msgs
+  sensor_msgs
   arms_msgs
 )
 

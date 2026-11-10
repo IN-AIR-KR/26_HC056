@@ -8,6 +8,7 @@
       - /arms/perception/status
       - /arms/control/diagnostics
       - /arms/control/pn_debug
+      - /arms/control/yang_debug
       - /arms/control/debug
       - /arms/io/crsf/tx
       - /arms/io/crsf/rx

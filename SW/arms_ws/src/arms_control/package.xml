@@ -10,6 +10,8 @@
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>eigen</depend>
   <depend>arms_msgs</depend>
 
   <export>
