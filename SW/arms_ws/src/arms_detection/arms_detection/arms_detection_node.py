@@ -351,6 +351,7 @@ class ArmsDetectionNode(Node):
     # ------------------------------------------------------------------
 
     def _cb_image(self, msg: Image):
+        receipt_stamp = self.get_clock().now().to_msg()
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
         try:
@@ -358,9 +359,10 @@ class ArmsDetectionNode(Node):
         except Exception as e:
             self.get_logger().warn(f"image convert failed: {e}")
             return
-        self._process(bgr_full, msg.header)
+        self._process(bgr_full, msg.header, receipt_stamp)
 
     def _cb_compressed(self, msg):
+        receipt_stamp = self.get_clock().now().to_msg()
         # 압축(JPEG/PNG) 입력 → BGR 디코드. 컨테이너로 오는 UDP 데이터량을 크게 줄여
         # image_raw(~1MB) 대비 조각 드롭이 거의 사라진다.
         if not msg.data:
@@ -373,9 +375,9 @@ class ArmsDetectionNode(Node):
             return
         if bgr_full is None:
             return
-        self._process(bgr_full, msg.header)
+        self._process(bgr_full, msg.header, receipt_stamp)
 
-    def _process(self, bgr_full, header):
+    def _process(self, bgr_full, header, receipt_stamp):
         """raw/압축 공통 처리 경로. bgr_full(BGR ndarray)와 header 를 받는다."""
         frame_started = time.perf_counter()
         frame_interval_ms = (0.0 if self._last_frame_started is None else
@@ -415,6 +417,7 @@ class ArmsDetectionNode(Node):
         #   비행 로그(rosbag)에 raw 가 통째로 비는 문제가 생긴다(detections 와 동일하게 상시 발행).
         raw = DetectionArray()
         raw.header = header
+        raw.source_receipt_stamp = receipt_stamp
         if det is not None:
             raw.detections.append(det)
         self.pub_det_raw.publish(raw)
@@ -431,6 +434,7 @@ class ArmsDetectionNode(Node):
 
         out = DetectionArray()
         out.header = header
+        out.source_receipt_stamp = receipt_stamp
         if target is not None:
             out.detections.append(target)
         self.pub_det.publish(out)

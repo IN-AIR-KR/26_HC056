@@ -534,9 +534,11 @@ class ArmsControlNode : public rclcpp::Node {
                                           best->width, best->height, attitude,
                                           gt_los_rate, gt_closing_speed);
           } else if (guidance_mode_ == 2) {
-            // DKF correction is deliberately aligned to the camera capture stamp,
-            // not the delayed detection callback arrival time (paper Eq. 32--36).
-            rclcpp::Time image_stamp(msg->header.stamp);
+            // Correction uses the source-image receipt stamp recorded at the
+            // detector boundary. Gazebo's camera header is simulation time while
+            // PX4 MAVLink/IMU uses wall time in this stack, so header.stamp is
+            // retained for log sync but must not be mixed into this history.
+            rclcpp::Time image_stamp(msg->source_receipt_stamp);
             if (image_stamp.nanoseconds() == 0) image_stamp = sample;
             double image_x = 0.0, image_y = 0.0;
             error_to_tan(best->x_center - 0.5, best->y_center - 0.5, image_x, image_y);
