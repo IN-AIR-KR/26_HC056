@@ -12,6 +12,7 @@
       - /arms/io/crsf/tx
       - /arms/io/crsf/rx
       - /arms/vehicle/attitude
+      - /arms/vehicle/imu_raw
       - /arms/vehicle/battery
       - /arms/vehicle/gps
       - /arms/mission/state

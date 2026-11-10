@@ -12,6 +12,7 @@ setup(
     zip_safe=True,
     entry_points={"console_scripts": [
         "arms_crsf_io_node = arms_flight_io.crsf_io_node:main",
+        "arms_msp_imu_node = arms_flight_io.msp_imu_node:main",
         "sitl_bridge_node = arms_flight_io.sitl_bridge_node:main",
     ]},
 )

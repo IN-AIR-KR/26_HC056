@@ -16,6 +16,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 
 from arms_msgs.msg import AttitudeTelemetry, FlightCommand, GpsTelemetry, IoStatus
+from sensor_msgs.msg import Imu
 
 try:
     from pymavlink import mavutil
@@ -42,6 +43,10 @@ GPS_RAW_INT_MESSAGE_ID = 24
 GPS_STREAM_INTERVAL_US = 200_000  # 5 Hz: UI 표시에는 충분하고 MAVLink 부하는 작다.
 ATTITUDE_MESSAGE_ID = 30
 ATTITUDE_STREAM_INTERVAL_US = 33_333  # 30 Hz: 3D 자세 표현과 rosbag 분석용.
+HIGHRES_IMU_MESSAGE_ID = 105
+# DKF/controller base rate is 50 Hz. HIGHRES_IMU uses SI units and PX4 body
+# FRD axes, so it is the normalized SITL counterpart of the MSP IMU source.
+HIGHRES_IMU_STREAM_INTERVAL_US = 20_000
 
 
 class ArmsSITLCommNode(Node):
@@ -84,9 +89,11 @@ class ArmsSITLCommNode(Node):
         self._last_hb   = 0.0          # 마지막 heartbeat 시각 (monotonic)
         self._reiniting = False        # _initial_setup 재실행 중복 방지
         self._attitude_seen = False    # PX4 ATTITUDE 첫 수신 로그(스트림 진단용)
+        self._imu_seen = False
         # Track A preserves the established telemetry/logging API.
         self._gps_pub = self.create_publisher(GpsTelemetry, "vehicle/gps", 10)
         self._attitude_pub = self.create_publisher(AttitudeTelemetry, "vehicle/attitude", 10)
+        self._imu_pub = self.create_publisher(Imu, "vehicle/imu_raw", 50)
         self._status_pub = self.create_publisher(IoStatus, "io/status", 10)
         self.create_subscription(FlightCommand, "control/flight_command", self._on_command, 10)
 
@@ -142,6 +149,7 @@ class ArmsSITLCommNode(Node):
         self._send_set_mode(PX4_CUSTOM_MAIN_MODE_ACRO)
         self._request_gps_stream()
         self._request_attitude_stream()
+        self._request_imu_stream()
         time.sleep(0.5)
 
         self._connected = True
@@ -170,13 +178,13 @@ class ArmsSITLCommNode(Node):
     # MAVLink RX (armed-state tracking + SITL GPS/attitude telemetry)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """HEARTBEAT·GPS_RAW_INT·ATTITUDE를 수신하고 PX4 재기동을 감지한다."""
+        """HEARTBEAT·GPS·ATTITUDE·HIGHRES_IMU를 수신하고 PX4 재기동을 감지한다."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type=['HEARTBEAT', 'GPS_RAW_INT', 'ATTITUDE'],
+                msg = self._mav.recv_match(type=['HEARTBEAT', 'GPS_RAW_INT', 'ATTITUDE', 'HIGHRES_IMU'],
                                            blocking=True, timeout=1.0)
                 now = time.monotonic()
                 if msg is None:
@@ -203,6 +211,8 @@ class ArmsSITLCommNode(Node):
                     self._publish_gps(msg)
                 elif t == 'ATTITUDE':
                     self._publish_attitude(msg)
+                elif t == 'HIGHRES_IMU':
+                    self._publish_imu(msg)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
@@ -244,6 +254,28 @@ class ArmsSITLCommNode(Node):
             self.get_logger().info(
                 "PX4 ATTITUDE stream active → vehicle/attitude "
                 f"(roll={att.roll_deg:.1f}, pitch={att.pitch_deg:.1f}, yaw={att.yaw_deg:.1f} deg)")
+
+    def _publish_imu(self, msg):
+        """PX4 HIGHRES_IMU를 vehicle/imu_raw(sensor_msgs/Imu)로 정규화한다.
+
+        MAVLink HIGHRES_IMU is already expressed in SI units. PX4 uses body
+        FRD, which is also the controller contract; no hidden axis/sign
+        conversion is performed at this boundary.
+        """
+        imu = Imu()
+        imu.header.stamp = self.get_clock().now().to_msg()
+        imu.header.frame_id = "base_frd"
+        imu.orientation_covariance[0] = -1.0  # raw IMU, not attitude
+        imu.angular_velocity.x = float(getattr(msg, 'xgyro', 0.0))
+        imu.angular_velocity.y = float(getattr(msg, 'ygyro', 0.0))
+        imu.angular_velocity.z = float(getattr(msg, 'zgyro', 0.0))
+        imu.linear_acceleration.x = float(getattr(msg, 'xacc', 0.0))
+        imu.linear_acceleration.y = float(getattr(msg, 'yacc', 0.0))
+        imu.linear_acceleration.z = float(getattr(msg, 'zacc', 0.0))
+        self._imu_pub.publish(imu)
+        if not self._imu_seen:
+            self._imu_seen = True
+            self.get_logger().info("PX4 HIGHRES_IMU stream active → vehicle/imu_raw (FRD, SI)")
 
     def _publish_status(self):
         age = time.monotonic() - self._last_hb if self._last_hb else float('inf')
@@ -452,6 +484,23 @@ class ArmsSITLCommNode(Node):
         except Exception as e:
             self.get_logger().warn(
                 f"ATTITUDE EXTRA1 stream request failed: {e}", throttle_duration_sec=5.0)
+
+    def _request_imu_stream(self):
+        """Request PX4 HIGHRES_IMU at the 50 Hz DKF/controller base rate."""
+        if self._mav is None:
+            return
+        try:
+            self._mav.mav.command_long_send(
+                self._mav.target_system, self._mav.target_component,
+                mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+                0,
+                float(HIGHRES_IMU_MESSAGE_ID),
+                float(HIGHRES_IMU_STREAM_INTERVAL_US),
+                0, 0, 0, 0, 0,
+            )
+        except Exception as e:
+            self.get_logger().warn(
+                f"HIGHRES_IMU stream request failed: {e}", throttle_duration_sec=5.0)
 
 
 def main(args=None):

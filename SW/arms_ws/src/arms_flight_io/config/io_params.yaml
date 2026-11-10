@@ -12,3 +12,16 @@
     battery:
       cell_full_v: 4.2
       cell_empty_v: 3.5
+
+# Betaflight MSP is deliberately separate from CRSF: one process owns each
+# UART. Enable only after the RPi5↔SpeedyBee wiring and the MSP UART are set.
+/arms/arms_msp_imu_node:
+  ros__parameters:
+    enabled: false
+    port: "/dev/serial0"
+    baud: 115200
+    request_rate_hz: 200.0
+    # MSP_RAW_IMU gyro fields are already deg/s in current Betaflight.
+    # MSP acceleration fields are ADC counts; verify this with the FC target's
+    # ACC_1G value before enabling guidance_mode=2.
+    accel_1g_lsb: 512.0

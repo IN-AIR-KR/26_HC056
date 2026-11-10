@@ -127,6 +127,13 @@ def generate_launch_description():
             namespace="arms", name="arms_crsf_io_node", output="screen",
             parameters=[str(io_config), {"port": LaunchConfiguration("crsf_port")}],
         ),
+        # Separate MSP UART → raw IMU. Disabled in io_params.yaml until the
+        # RPi5↔SpeedyBee wiring and the Betaflight MSP port are configured.
+        Node(
+            package="arms_flight_io", executable="arms_msp_imu_node",
+            namespace="arms", name="arms_msp_imu_node", output="screen",
+            parameters=[str(io_config)],
+        ),
         # OpenCV UI. fullscreen/debug 는 런치 인자로 제어(실기체 기본: 전체화면·메인만).
         #   ui.debug=false → hsv_debug_image 미구독 → detection 발행 부하 최소.
         Node(

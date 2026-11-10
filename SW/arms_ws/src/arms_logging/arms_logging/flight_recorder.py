@@ -50,7 +50,7 @@ class FlightRecorder(Node):
         #   diagnostics=PID 제어 오차·lead·스케줄링·명령·추력 스냅샷,
         #   pn_debug=PN 추정/입력/명령, sim/guidance_ground_truth=Gazebo 기준값이다.
         #   crsf_tx=송신 채널, crsf_rx=수신 통합 텔레메트리, attitude=기체 자세,
-        #   battery=배터리 전용 토픽이다.
+        #   imu_raw=DKF 입력용 raw gyro/accelerometer, battery=배터리 전용 토픽이다.
         #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.
         self.require_parameter("record_topics", Parameter.Type.STRING_ARRAY)
         self.require_parameter("save_dir", Parameter.Type.STRING)
