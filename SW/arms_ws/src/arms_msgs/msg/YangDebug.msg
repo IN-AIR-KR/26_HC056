@@ -18,3 +18,24 @@ float32 gyro_bias_z_radps
 float32 accel_bias_x_mps2
 float32 accel_bias_y_mps2
 float32 accel_bias_z_mps2
+
+# Yang et al. §III physical guidance output. These are logged only in the
+# current stage; no FlightCommand conversion or actuator command is applied.
+bool guidance_valid
+float32 z1
+float32 z2_x
+float32 z2_y
+float32 z2_z
+float32 desired_accel_north_mps2
+float32 desired_accel_east_mps2
+float32 desired_accel_down_mps2
+float32 omega1_body_x_radps
+float32 omega1_body_y_radps
+float32 omega1_body_z_radps
+float32 omega2_body_x_radps
+float32 omega2_body_y_radps
+float32 omega2_body_z_radps
+float32 omega_body_x_radps
+float32 omega_body_y_radps
+float32 omega_body_z_radps
+float32 desired_thrust_n

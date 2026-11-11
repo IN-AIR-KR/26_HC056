@@ -15,6 +15,7 @@
 #include "arms_control/pn_guidance.hpp"
 #include "arms_control/state_machine.hpp"
 #include "arms_control/yang_dkf.hpp"
+#include "arms_control/yang_guidance.hpp"
 #include "arms_msgs/msg/attitude_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/flight_command.hpp"
@@ -98,6 +99,15 @@ class ArmsControlNode : public rclcpp::Node {
     declare_required_parameter("control.yang.image_noise", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.yang.history_sec", rclcpp::ParameterType::PARAMETER_DOUBLE);
     declare_required_parameter("control.yang.camera.r_cb", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    declare_required_parameter("control.yang.guidance.mass_kg", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.guidance.drag_coeff_body", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    declare_required_parameter("control.yang.guidance.thrust_axis_body", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    declare_required_parameter("control.yang.guidance.target_accel_ned", rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY);
+    declare_required_parameter("control.yang.guidance.k1", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.guidance.k2", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.guidance.barrier_kb", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.guidance.max_rate_radps", rclcpp::ParameterType::PARAMETER_DOUBLE);
+    declare_required_parameter("control.yang.guidance.max_thrust_n", rclcpp::ParameterType::PARAMETER_DOUBLE);
 
     declare_required_parameter("mission.sitl_auto_launch", rclcpp::ParameterType::PARAMETER_BOOL);
     // 종말 RTL 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
@@ -330,6 +340,29 @@ class ArmsControlNode : public rclcpp::Node {
     }
     for (int i = 0; i < 9; ++i) yang_params_.r_cb(i / 3, i % 3) = yang_r_cb[i];
     yang_dkf_.set_parameters(yang_params_);
+    const auto load_yang_vec3 = [this](const std::string &name) {
+      const auto values = get_parameter(name).as_double_array();
+      if (values.size() != 3) {
+        throw std::runtime_error(name + " must contain exactly 3 values");
+      }
+      return Eigen::Vector3d{values[0], values[1], values[2]};
+    };
+    yang_guidance_params_.mass_kg = get_parameter("control.yang.guidance.mass_kg").as_double();
+    yang_guidance_params_.drag_coeff_body =
+        load_yang_vec3("control.yang.guidance.drag_coeff_body");
+    yang_guidance_params_.thrust_axis_body =
+        load_yang_vec3("control.yang.guidance.thrust_axis_body");
+    yang_guidance_params_.target_accel_ned =
+        load_yang_vec3("control.yang.guidance.target_accel_ned");
+    yang_guidance_params_.k1 = get_parameter("control.yang.guidance.k1").as_double();
+    yang_guidance_params_.k2 = get_parameter("control.yang.guidance.k2").as_double();
+    yang_guidance_params_.barrier_kb =
+        get_parameter("control.yang.guidance.barrier_kb").as_double();
+    yang_guidance_params_.max_rate_radps =
+        get_parameter("control.yang.guidance.max_rate_radps").as_double();
+    yang_guidance_params_.max_thrust_n =
+        get_parameter("control.yang.guidance.max_thrust_n").as_double();
+    yang_guidance_.set_parameters(yang_guidance_params_);
     near_size_start_ = get_parameter("control.near_size_start").as_double();
     near_size_full_ = get_parameter("control.near_size_full").as_double();
     min_gain_scale_ = get_parameter("control.min_gain_scale").as_double();
@@ -615,6 +648,25 @@ class ArmsControlNode : public rclcpp::Node {
           debug.accel_bias_x_mps2 = out.state.bias_acc.x();
           debug.accel_bias_y_mps2 = out.state.bias_acc.y();
           debug.accel_bias_z_mps2 = out.state.bias_acc.z();
+          const auto guidance = yang_guidance_.compute(out.state);
+          debug.guidance_valid = guidance.valid;
+          debug.z1 = guidance.z1;
+          debug.z2_x = guidance.z2.x();
+          debug.z2_y = guidance.z2.y();
+          debug.z2_z = guidance.z2.z();
+          debug.desired_accel_north_mps2 = guidance.desired_accel_ned.x();
+          debug.desired_accel_east_mps2 = guidance.desired_accel_ned.y();
+          debug.desired_accel_down_mps2 = guidance.desired_accel_ned.z();
+          debug.omega1_body_x_radps = guidance.omega1_body_radps.x();
+          debug.omega1_body_y_radps = guidance.omega1_body_radps.y();
+          debug.omega1_body_z_radps = guidance.omega1_body_radps.z();
+          debug.omega2_body_x_radps = guidance.omega2_body_radps.x();
+          debug.omega2_body_y_radps = guidance.omega2_body_radps.y();
+          debug.omega2_body_z_radps = guidance.omega2_body_radps.z();
+          debug.omega_body_x_radps = guidance.omega_body_radps.x();
+          debug.omega_body_y_radps = guidance.omega_body_radps.y();
+          debug.omega_body_z_radps = guidance.omega_body_radps.z();
+          debug.desired_thrust_n = guidance.desired_thrust_n;
           pub_yang_debug_->publish(debug);
         });
 
@@ -1131,9 +1183,9 @@ class ArmsControlNode : public rclcpp::Node {
         }
       }
 
-      // guidance_mode=2 currently exercises only the delayed EKF. It must
-      // never fall through to the tuned PID output while no Yang controller
-      // command has been connected yet.
+      // guidance_mode=2 calculates Yang/DKF physical guidance for logging,
+      // but must not fall through to PID output before stages 4--5 connect
+      // force/rate conversion and the FC command path.
       if (guidance_mode_ == 2) {
         roll_rate_cmd = 0.0;
         pitch_rate_cmd = 0.0;
@@ -1141,10 +1193,12 @@ class ArmsControlNode : public rclcpp::Node {
       }
 
       if (++dbg_count_ % 6 == 0) {
+        const char *guidance_name = guidance_mode_ == 1 ? "PN" :
+            (guidance_mode_ == 2 ? "YANG-LOG" : "PID");
         RCLCPP_INFO(get_logger(),
                     "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f "
                     "tau=%.2fs ease=%.2f thr=%.2f cmd=(%.0f,%.0f)%s",
-                    guidance_mode_ == 1 ? "PN" : "PID",
+                    guidance_name,
                     filt_err_x_, filt_err_y_,
                     err_dot_x_, err_dot_y_,
                     loom_s_ema_,
@@ -1506,6 +1560,8 @@ class ArmsControlNode : public rclcpp::Node {
   pn::Guidance pn_guidance_{};
   yang::Parameters yang_params_{};
   yang::DelayedKalmanFilter yang_dkf_{};
+  yang::GuidanceParameters yang_guidance_params_{};
+  yang::Guidance yang_guidance_{};
   pn::AttitudeBuffer pn_attitudes_{};
   arms_msgs::msg::GuidanceGroundTruth latest_gt_{};
   rclcpp::Time gt_receipt_time_{};

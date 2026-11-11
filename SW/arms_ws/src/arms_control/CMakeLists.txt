@@ -22,6 +22,7 @@ add_library(arms_control_lib
   src/pn_guidance.cpp
   src/state_machine.cpp
   src/yang_dkf.cpp
+  src/yang_guidance.cpp
 )
 
 target_include_directories(arms_control_lib PUBLIC
@@ -56,6 +57,10 @@ if(BUILD_TESTING)
   add_executable(pn_guidance_smoke test/pn_guidance_smoke.cpp)
   target_link_libraries(pn_guidance_smoke arms_control_lib)
   add_test(NAME pn_guidance_smoke COMMAND pn_guidance_smoke)
+
+  add_executable(yang_guidance_smoke test/yang_guidance_smoke.cpp)
+  target_link_libraries(yang_guidance_smoke arms_control_lib)
+  add_test(NAME yang_guidance_smoke COMMAND yang_guidance_smoke)
 endif()
 
 # -----------------------------------------------------------------------

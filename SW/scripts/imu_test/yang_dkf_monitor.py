@@ -48,7 +48,8 @@ class YangDkfMonitor(Node):
 
     def healthy(self) -> bool:
         now = time.monotonic()
-        if self._last is None or not self._last.valid or now - self._last_receive > 1.0:
+        if (self._last is None or not self._last.valid or not self._last.guidance_valid
+                or now - self._last_receive > 1.0):
             return False
         values = (
             self._last.relative_position_north_m,
@@ -82,7 +83,12 @@ class YangDkfMonitor(Node):
                 f"  v_r NED [m/s]  {msg.relative_velocity_north_mps:+8.2f}"
                 f"  {msg.relative_velocity_east_mps:+8.2f}"
                 f"  {msg.relative_velocity_down_mps:+8.2f}\n"
-                f"  image tan      x={msg.image_x:+.4f} y={msg.image_y:+.4f}"
+                f"  image tan      x={msg.image_x:+.4f} y={msg.image_y:+.4f}\n"
+                f"  Yang guidance  {'OK' if msg.guidance_valid else 'CHECK'}"
+                f"  f_d={msg.desired_thrust_n:.2f} N"
+                f"  omega_d=[{math.degrees(msg.omega_body_x_radps):+.1f},"
+                f" {math.degrees(msg.omega_body_y_radps):+.1f},"
+                f" {math.degrees(msg.omega_body_z_radps):+.1f}] deg/s"
             )
         if sys.stdout.isatty():
             print("\x1b[H\x1b[J" + line, flush=True)

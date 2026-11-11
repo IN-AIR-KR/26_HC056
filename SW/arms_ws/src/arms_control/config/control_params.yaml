@@ -94,8 +94,8 @@
       gain_shaping: false
 
       # ── PN 관성 LOS-rate 유도 ──────────────────────────────────────────
-      # guidance_mode: 0=기존 PID/ACRO, 1=PN/Stabilized, 2=Yang DKF 관측 전용.
-      # 2는 다음 단계의 논문식 f_d/omega_d 명령 연결 전까지 추력을 0으로 유지한다.
+      # guidance_mode: 0=기존 PID/ACRO, 1=PN/Stabilized, 2=Yang/DKF guidance.
+      # 현재 2는 논문식 물리 명령을 계산·기록만 하며, 추력과 ACRO 명령은 0으로 유지한다.
       # PN은 perception track bbox와 vehicle/attitude를 합성한다. raw IMU/gyro는
       # 직접 쓰지 않고 FC가 추정해 발행한 attitude를 사용한다.
       guidance_mode: 2
@@ -133,6 +133,26 @@
         camera:
           # camera → body FRD. Existing camera r_bc와 같은 회전이다.
           r_cb: [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0]
+
+        # ── Yang et al. §III physical guidance (현재 기록 전용) ──────────
+        # 식 (13), (19), (26), (28)의 입력. 모든 값은 명시적으로 설정하며,
+        # f_d[N] → normalized throttle 변환은 다음 단계에서 별도로 연결한다.
+        guidance:
+          # SITL arms_drone: base 1.008 kg + rotor 4 × 0.008 kg.
+          mass_kg: 1.04
+          # Eq. (1)의 body-frame 선형 drag 계수 D. 정지 풍선 SITL은 명시적으로 0.
+          drag_coeff_body: [0.0, 0.0, 0.0]
+          # body FRD에서 프로펠러 총 추력 방향(위쪽 = -Z).
+          thrust_axis_body: [0.0, 0.0, -1.0]
+          # Eq. (19)의 target acceleration a_t. 정지 풍선은 [0,0,0].
+          target_accel_ned: [0.0, 0.0, 0.0]
+          k1: 1.0
+          k2: 1.0
+          barrier_kb: 0.9
+          # Eq. (28)의 ||omega_d|| 상한: 현재 ACRO full stick 400 deg/s.
+          max_rate_radps: 6.981317
+          # SITL 4 × 14.715 N = 58.86 N. Eq. (23)/(28) f_d saturation.
+          max_thrust_n: 58.86
 
       # ── 근접도 기반 출력 스케줄링 ──────────────────────────────────────
       # bbox가 커질수록(가까워질수록) 회전 게인과 최대 추력을 함께 낮춘다.
